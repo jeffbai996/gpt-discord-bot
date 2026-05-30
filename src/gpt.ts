@@ -242,6 +242,10 @@ async function handleUserMessage(
     }
   }
 
+  // Tool-trace accumulator — diff-style lines, posted before the reply
+  // when flags.trace is on (parity with the Claude bots' tool trace).
+  const traceLines: string[] = []
+
   // Throttle Discord edits during streaming.
   let lastEditAt = 0
   let lastEditedText = ''
@@ -249,9 +253,14 @@ async function handleUserMessage(
 
   const onEvent = (event: LifecycleEvent) => {
     if (event.type === 'thinking_start') { void applyLifecycle(message, 'thinking'); return }
-    if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
-    if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
-    if (event.type === 'tool_start') { void applyLifecycle(message, 'tooling'); return }
+    if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); traceLines.push('+ ● 🧠 reasoning'); return }
+    if (event.type === 'searching') { void applyLifecycle(message, 'searching'); traceLines.push('+ ● web_search'); return }
+    if (event.type === 'tool_start') {
+      void applyLifecycle(message, 'tooling')
+      const a = (event as { args?: string }).args
+      traceLines.push(`+ ● ${event.name}(${a ?? ''})`)
+      return
+    }
     if (event.type === 'partial' && workMessage) {
       const now = Date.now()
       if (now - lastEditAt < EDIT_INTERVAL_MS) return
@@ -334,6 +343,13 @@ async function handleUserMessage(
         try { await workMessage.delete() } catch {}
       }
       return
+    }
+
+    // Tool-trace card — posted before the reply when enabled and any
+    // tool/reasoning step ran this turn. Diff fences render red/green.
+    if (flags.trace && traceLines.length > 0 && message.channel.isSendable()) {
+      const card = '🔧 **Tool trace**\n```diff\n' + traceLines.join('\n') + '\n```'
+      try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
     }
 
     const parts = chunk(body)

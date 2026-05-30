@@ -11,6 +11,7 @@ export interface ChannelConfig {
   reasoning?: ReasoningEffort  // for o-series; ignored by gpt-5.x
   showCode?: boolean         // default true — render tool calls + structured outputs
   verbose?: boolean          // default true — surface usage/finish_reason footer
+  trace?: boolean            // default false — post a diff-style tool-trace card
 }
 
 export interface ChannelFlags {
@@ -18,6 +19,7 @@ export interface ChannelFlags {
   reasoning: ReasoningEffort
   showCode: boolean
   verbose: boolean
+  trace: boolean
   // requireMention isn't a "rendering" flag like the others — it sits at the
   // top of ChannelConfig — but exposing it through ChannelFlags lets the
   // /gpt set unified setter touch it without a separate command path.
@@ -42,6 +44,7 @@ const DEFAULT_FLAGS = {
   reasoning: 'medium' as ReasoningEffort,
   showCode: true,
   verbose: true,
+  trace: false,
 }
 
 export class AccessManager {
@@ -128,6 +131,7 @@ export class AccessManager {
       reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
       showCode: flags?.showCode ?? existing?.showCode ?? DEFAULT_FLAGS.showCode,
       verbose: flags?.verbose ?? existing?.verbose ?? DEFAULT_FLAGS.verbose,
+      trace: flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace,
     }
     await this.save()
   }
@@ -150,6 +154,7 @@ export class AccessManager {
       ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
       ...(patch.showCode !== undefined ? { showCode: patch.showCode } : {}),
       ...(patch.verbose !== undefined ? { verbose: patch.verbose } : {}),
+      ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }
     await this.save()
@@ -163,6 +168,7 @@ export class AccessManager {
       reasoning: channel?.reasoning ?? DEFAULT_FLAGS.reasoning,
       showCode: channel?.showCode ?? DEFAULT_FLAGS.showCode,
       verbose: channel?.verbose ?? DEFAULT_FLAGS.verbose,
+      trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       requireMention: channel?.requireMention,
     }
   }

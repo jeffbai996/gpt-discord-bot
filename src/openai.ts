@@ -11,7 +11,7 @@ export type LifecycleEvent =
   | { type: 'reasoning_start' }   // first reasoning_summary token (o-series)
   | { type: 'first_token' }       // first content token observed
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
-  | { type: 'tool_start', name: string }
+  | { type: 'tool_start', name: string, args?: string }
   | { type: 'tool_end', name: string }
   | { type: 'searching' }         // web_search in flight (special-cased)
   | { type: 'done' }
@@ -293,9 +293,17 @@ export class OpenAIClient {
         for (const tc of toolCalls) {
           if (!toolRegistry) break
           const isSearch = tc.name === 'web_search'
-          onEvent?.({ type: isSearch ? 'searching' : 'tool_start', name: tc.name } as LifecycleEvent)
           let parsedArgs: Record<string, unknown> = {}
           try { parsedArgs = JSON.parse(tc.args || '{}') } catch { /* empty args */ }
+          // Compact one-line arg preview for the tool-trace card.
+          const argPreview = Object.entries(parsedArgs)
+            .map(([k, v]) => {
+              const sv = typeof v === 'string' ? v : JSON.stringify(v)
+              const short = sv.length > 40 ? sv.slice(0, 40) + '…' : sv
+              return `${k}: ${short}`
+            })
+            .join(', ')
+          onEvent?.({ type: isSearch ? 'searching' : 'tool_start', name: tc.name, args: argPreview } as LifecycleEvent)
           const result = await toolRegistry.dispatch(tc.name, parsedArgs, { channelId, userId })
           onEvent?.({ type: 'tool_end', name: tc.name })
           messages.push({
