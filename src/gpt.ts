@@ -326,7 +326,7 @@ async function handleUserMessage(
       // token counts. Only rendered when there was a cache hit.
       const cacheLine =
         u.cachedInputTokens > 0
-          ? `\n\n-# \`cached ${u.cachedInputTokens.toLocaleString('en-US')} input tokens\``
+          ? `\n\n-# \`cached ↑ ${u.cachedInputTokens.toLocaleString('en-US')}\``
           : ''
       // Leading blank line so the footer sits a line below the reply body
       // (not crammed against the last line of text). The non-verbose path
