@@ -312,21 +312,26 @@ async function handleUserMessage(
     const verbose = (() => {
       if (!flags.verbose || !result.usage) return ''
       const u = result.usage
+      // Main telemetry line: tokens in/out, reasoning shard, elapsed.
       const parts = [
         `↑ ${u.inputTokens.toLocaleString('en-US')}`,
-        ...(u.cachedInputTokens > 0
-          ? [`(cached ${u.cachedInputTokens.toLocaleString('en-US')})`]
-          : []),
         `↓ ${u.outputTokens.toLocaleString('en-US')}`,
         ...(u.reasoningTokens > 0
           ? [`(reasoning ${u.reasoningTokens.toLocaleString('en-US')})`]
           : []),
         `» ${(result.durationMs / 1000).toFixed(1)}s`,
       ]
+      // Cache info gets its own subtle code block beneath the main line so the
+      // prompt-cache hit is legible at a glance without cluttering the headline
+      // token counts. Only rendered when there was a cache hit.
+      const cacheLine =
+        u.cachedInputTokens > 0
+          ? `\n\n-# \`cached ${u.cachedInputTokens.toLocaleString('en-US')} input tokens\``
+          : ''
       // Leading blank line so the footer sits a line below the reply body
       // (not crammed against the last line of text). The non-verbose path
       // returns '' so a quiet reply gets no trailing whitespace.
-      return `\n\n-# \`${parts.join(' · ')}\``
+      return `\n\n-# \`${parts.join(' · ')}\`${cacheLine}`
     })()
 
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
