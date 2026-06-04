@@ -22,6 +22,10 @@ interface SquadSearchResponse {
   count: number
   total: number
   entries: SquadEntry[]
+  // Per-id relevance percentage when the mode used the vector index. Lets the
+  // caller see how strong each match actually is instead of treating rank-1 as
+  // necessarily relevant.
+  semantic_scores?: Record<string, number>
 }
 
 // Cap how many entries we surface and how much body text each one contributes,
@@ -112,9 +116,12 @@ export function makeSquadMemoryTool(): Tool {
           : MAX_ENTRIES
 
       const base = squadBase()
-      // mode=literal: substring match, no vecgrep dependency — keeps the tool
-      // deterministic and avoids vecgrep flakiness.
-      const url = `${base}/api/search?q=${encodeURIComponent(query)}&mode=literal`
+      // mode=hybrid: vector embeddings (semantic) fused with BM25 (keyword).
+      // Strictly better recall than literal substring — it finds records by
+      // meaning, so "Jeff's wife" surfaces the 蛋 profile even though the word
+      // "wife" never appears in it. shared-memory falls back to literal on its
+      // own when the vector index is unavailable.
+      const url = `${base}/api/search?q=${encodeURIComponent(query)}&mode=hybrid`
 
       // Abort the request if shared-memory hangs, so a stalled tool call cannot
       // wedge the whole tool-dispatch loop.
@@ -143,13 +150,19 @@ export function makeSquadMemoryTool(): Tool {
 
       const shown = entries.slice(0, limit)
       const total = typeof data.total === 'number' ? data.total : entries.length
+      const scores = data.semantic_scores ?? {}
       const lines = shown.map(m => {
         const tags = Array.isArray(m.tags) && m.tags.length ? ` [${m.tags.join(', ')}]` : ''
+        // Relevance % when the vector index ranked this hit. Low scores flag a
+        // weak match the model should not over-trust.
+        const pct = scores[String(m.id)]
+        const rel = typeof pct === 'number' ? ` ~${pct}% match` : ''
         const raw = typeof m.text === 'string' ? m.text : ''
         const text = raw.length > MAX_TEXT_CHARS ? raw.slice(0, MAX_TEXT_CHARS) + '…' : raw
-        return `#${m.id} (${m.type}) ${m.name}${tags}\n${text}`
+        return `#${m.id} (${m.type}) ${m.name}${tags}${rel}\n${text}`
       })
-      return `shared-memory: ${shown.length} of ${total} match(es) for "${query}"\n\n${lines.join('\n\n')}`
+      const modeNote = data.mode && data.mode !== 'hybrid' ? ` (${data.mode} mode)` : ''
+      return `shared-memory: ${shown.length} of ${total} match(es) for "${query}"${modeNote}. Ranked by relevance; lower-ranked / low-% hits may be off-topic.\n\n${lines.join('\n\n')}`
     }
   }
 }
