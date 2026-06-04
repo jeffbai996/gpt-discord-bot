@@ -28,7 +28,48 @@ interface SquadSearchResponse {
 // so a broad query cannot flood the model context window.
 const MAX_ENTRIES = 8
 const MAX_TEXT_CHARS = 600
+// A single by-id fetch is one record the user explicitly asked for, so allow a
+// much larger slice — truncating a profile mid-record is what makes the model
+// confabulate the missing half.
+const MAX_TEXT_CHARS_BY_ID = 4000
 const FETCH_TIMEOUT_MS = 8000
+
+function squadBase(): string {
+  // Default to the local Flask bind; SQUAD_STORE_URL overrides. The bare /api
+  // paths are what the local bind serves — the /squad/... prefix only exists on
+  // the external funnel, so we deliberately do not add it here.
+  return (process.env.SQUAD_STORE_URL ?? 'http://127.0.0.1:5005').replace(/\/+$/, '')
+}
+
+// Deterministic single-record fetch via GET /api/memory/<id>. Returns the full
+// record verbatim so the model reports exactly what is stored, not a guess.
+async function fetchById(id: number): Promise<string> {
+  const url = `${squadBase()}/api/memory/${id}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: controller.signal
+    })
+    if (res.status === 404) return `No squad memory has id #${id}.`
+    if (!res.ok) return `Squad memory fetch failed: HTTP ${res.status}.`
+    const body = (await res.json()) as { memory?: SquadEntry }
+    const m = body?.memory
+    if (!m || typeof m.id !== 'number') return `No squad memory has id #${id}.`
+    const tags = Array.isArray(m.tags) && m.tags.length ? ` [${m.tags.join(', ')}]` : ''
+    const raw = typeof m.text === 'string' ? m.text : ''
+    const text = raw.length > MAX_TEXT_CHARS_BY_ID ? raw.slice(0, MAX_TEXT_CHARS_BY_ID) + '…' : raw
+    return `shared-memory memory #${m.id} (${m.type}) ${m.name}${tags}\n\n${text}`
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      return `Squad memory fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s.`
+    }
+    return `Squad memory fetch error: ${e?.message ?? String(e)}`
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 // Read-only tool: searches the shared shared-memory memory over HTTP. Unlike
 // makeSearchMemoryTool it needs no OpenAI client or local store — just native
@@ -37,30 +78,40 @@ export function makeSquadMemoryTool(): Tool {
   return {
     name: 'search_squad_memory',
     description:
-      'Search the shared shared-memory memory (durable facts about the user, their projects, portfolio, and the bot squad) for relevant context. Read-only. Use when you need background the current conversation does not provide. Returns matching memories with id, name, type, tags, and text.',
+      'Read the shared shared-memory memory (durable facts about the user, their projects, portfolio, and the bot squad). Read-only.\n' +
+      '- When the user references a memory by NUMBER ("memory 84", "read #84", "what does 84 say"), pass that number as "id" to fetch that EXACT record. Do not keyword-search for the number — that returns the wrong record.\n' +
+      '- Otherwise pass "query" to keyword-search by substring.\n' +
+      'CRITICAL: only state what the returned record(s) actually say. Different memories can mention different people with similar names (e.g. several distinct "Dan"s). Do not merge or infer across records, and do not claim a record is "memory N" unless you fetched it by id=N. If unsure, say what you actually retrieved.',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Keywords to search for in squad memory.' },
+        id: { type: 'number', description: 'Fetch one exact memory by its numeric id. Use this whenever the user names a memory by number.' },
+        query: { type: 'string', description: 'Keywords to substring-search squad memory. Used only when "id" is not given.' },
         limit: { type: 'number', description: 'Max number of results to return. Default 8, max 8.' }
       },
-      required: ['query']
+      required: []
     },
     async execute(args, _ctx) {
+      // By-id path: deterministic single-record fetch. Takes priority over query
+      // so "read memory 84" resolves to record #84 instead of a fuzzy match.
+      const id =
+        typeof args.id === 'number' && Number.isInteger(args.id) && args.id > 0
+          ? args.id
+          : null
+      if (id !== null) {
+        return await fetchById(id)
+      }
+
       const query = typeof args.query === 'string' ? args.query.trim() : ''
       if (!query) {
-        return 'search_squad_memory requires a non-empty "query" string argument.'
+        return 'search_squad_memory requires either a numeric "id" or a non-empty "query" string argument.'
       }
       const limit =
         typeof args.limit === 'number'
           ? Math.max(1, Math.min(MAX_ENTRIES, Math.floor(args.limit)))
           : MAX_ENTRIES
 
-      // Default to the local Flask bind; SQUAD_STORE_URL overrides (matches the
-      // env var the rest of the squad tooling uses). The bare /api/search path
-      // is what the local bind serves — the /squad/... prefix only exists on
-      // the external funnel, so we deliberately do not add it here.
-      const base = (process.env.SQUAD_STORE_URL ?? 'http://127.0.0.1:5005').replace(/\/+$/, '')
+      const base = squadBase()
       // mode=literal: substring match, no vecgrep dependency — keeps the tool
       // deterministic and avoids vecgrep flakiness.
       const url = `${base}/api/search?q=${encodeURIComponent(query)}&mode=literal`
