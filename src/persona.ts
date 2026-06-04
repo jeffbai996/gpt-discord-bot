@@ -6,6 +6,20 @@ import type { SummaryStore } from './summarization/store.ts'
 
 const DEFAULT_PERSONA = `You are gpt, a Discord bot backed by an OpenAI model. Be helpful, concise, and match the channel's tone. You can respond with text, an emoji reaction, or both.`
 
+// Always-present tool-use rules. Lives separate from the (per-guild-overridable)
+// persona so it survives every persona swap. Fixes the failure where the model
+// answered "no hits / I don't have that" about people/facts WITHOUT actually
+// calling its search tools — i.e. confabulating a negative instead of looking.
+const TOOL_USE_DIRECTIVE = `## Tools — use them, don't guess
+
+You have real tools. USE them before answering — never fabricate an answer or a "no results" when a tool could check:
+
+- **search_squad_memory** — shared durable facts about people, projects, preferences. Before answering ANY question about a person, a fact, a project, "who is X", "what's my Y", or anything that could be a stored fact, you MUST call search_squad_memory FIRST. Try a couple of query variations (English + Chinese, full name + nickname) before concluding nothing is there.
+- **search_squad_files** — shared documents/specs/notes. Use when asked about a file, doc, or longer reference.
+- **fetch_url / web search** — for URLs and current info.
+
+Hard rule: NEVER say "no hits", "I don't have that", "I couldn't find it", or invent a profile/fact from thin air WITHOUT having actually called the relevant tool this turn. If a search returns nothing, say you searched and found nothing — but only after really searching. Confabulating a negative (or a made-up fact) is the worst failure mode; an honest tool call is always better than a confident guess.`
+
 function stateDir(): string {
   return process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 }
@@ -73,7 +87,7 @@ export class PersonaLoader {
     // (matches the squad's cc-inject-time hook format on the Claude bots).
     const now = new Date()
     const wallClock = `Current time: ${now.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`
-    const sections: string[] = [persona, wallClock]
+    const sections: string[] = [persona, TOOL_USE_DIRECTIVE, wallClock]
     if (summary) {
       sections.push(`## Conversation summary (older context)\n\n${summary}`)
     }
