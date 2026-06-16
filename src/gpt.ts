@@ -6,8 +6,9 @@ import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
-import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
+import { OpenAIProvider, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent } from './openai.ts'
+import type { Provider } from './core/provider.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
@@ -53,7 +54,7 @@ const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
 const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md'))
 persona.setPinnedFactsStore(pinnedFacts)
-const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
+const openai: Provider = new OpenAIProvider(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for non-chat endpoints (audio.transcriptions, embeddings,
 // web-search side-call). Sharing the same key/instance avoids spinning up two
 // HTTP pools.
