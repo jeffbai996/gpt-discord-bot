@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Provider } from '../../src/core/provider.ts'
+import type { Provider, CoreMessage, RespondInput } from '../../src/core/provider.ts'
 import { OpenAIProvider } from '../../src/openai.ts'
 import { FakeProvider } from '../../src/providers/fake-provider.ts'
 
@@ -27,6 +27,18 @@ test('OpenAIProvider conforms to Provider with correct capabilities', () => {
   assert.equal(p.capabilities.nativeWebSearch, false)
   assert.equal(typeof p.respond, 'function')
   assert.equal(typeof p.embed, 'function')
+})
+
+test('RespondInput.history accepts neutral CoreMessage[], not OpenAI params', () => {
+  // HistoryMessage shape (src/history.ts): { id, authorId, authorName, content, attachments }.
+  // There is NO `role` field — the provider derives role from authorId === selfId.
+  const history: CoreMessage[] = [
+    { id: '1', authorId: 'u1', authorName: 'alice', content: 'hi', attachments: [] }
+  ]
+  const input: RespondInput = {
+    systemPrompt: '', history, userMessage: 'yo', userName: 'alice', model: 'm'
+  }
+  assert.equal(input.history[0].content, 'hi')
 })
 
 test('FakeProvider returns a scripted reply + deterministic embedding', async () => {

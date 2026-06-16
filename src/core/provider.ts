@@ -1,5 +1,11 @@
 import type OpenAI from 'openai'
+import type { HistoryMessage } from '../history.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
+
+// The neutral, provider-agnostic message shape. It is exactly what fetchHistory
+// produces; each provider maps CoreMessage[] to its own wire format inside
+// respond(). (Phase 1a — replaces the OpenAI-typed history.)
+export type CoreMessage = HistoryMessage
 
 export interface ParsedResponse {
   react: string | null
@@ -18,12 +24,16 @@ export type LifecycleEvent =
 
 export interface RespondInput {
   systemPrompt: string
-  // NOTE (Phase 0): history is still the OpenAI message-param shape. Phase 1
-  // introduces a neutral CoreMessage type when GeminiProvider needs it.
-  history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
+  // Provider-neutral message history. Each provider maps CoreMessage[] to its
+  // own wire format inside respond() (e.g. OpenAIProvider calls
+  // formatHistoryForOpenAI internally). (Phase 1a — was OpenAI-typed in Phase 0.)
+  history: CoreMessage[]
   userMessage: string
   userName: string
   model: string
+  // The bot's own Discord user id — lets the provider tag its own past
+  // messages as assistant/model when formatting history.
+  selfId?: string
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'
   imageParts?: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
   extraText?: string
