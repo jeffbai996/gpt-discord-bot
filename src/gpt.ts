@@ -212,7 +212,7 @@ async function handleUserMessage(
   await applyLifecycle(message, 'received')
 
   const attachments = [...message.attachments.values()]
-  let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []
+  let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []  // CoreImagePart[]
   let extraText = ''
   if (attachments.length > 0) {
     await applyLifecycle(message, 'ingesting')

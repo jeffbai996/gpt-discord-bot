@@ -40,8 +40,8 @@ test('processAttachments: image becomes image_url part', async () => {
   })
   const out = await processAttachments([att], openaiStub)
   assert.equal(out.imageParts.length, 1)
-  assert.equal(out.imageParts[0].type, 'image_url')
-  assert.equal(out.imageParts[0].image_url.url, 'https://cdn.example/cat.png')
+  assert.equal(out.imageParts[0].mimeType, 'image/png')
+  assert.equal(out.imageParts[0].url, 'https://cdn.example/cat.png')
   assert.equal(out.skipped.length, 0)
 })
 

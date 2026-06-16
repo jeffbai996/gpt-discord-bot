@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Provider, CoreMessage, RespondInput } from '../../src/core/provider.ts'
+import type { Provider, CoreMessage, RespondInput, CoreImagePart } from '../../src/core/provider.ts'
 import { OpenAIProvider } from '../../src/openai.ts'
 import { FakeProvider } from '../../src/providers/fake-provider.ts'
 
@@ -52,4 +52,12 @@ test('FakeProvider returns a scripted reply + deterministic embedding', async ()
   const e2 = await p.embed('x')
   assert.deepEqual(e1, e2)               // deterministic
   assert.equal(e1.length, 1536)
+})
+
+test('RespondInput.imageParts is the neutral CoreImagePart[]', () => {
+  const imageParts: CoreImagePart[] = [{ mimeType: 'image/png', dataBase64: 'AAAA' }]
+  const input: RespondInput = {
+    systemPrompt: '', history: [], userMessage: 'x', userName: 'u', model: 'm', imageParts
+  }
+  assert.equal(input.imageParts?.[0].mimeType, 'image/png')
 })

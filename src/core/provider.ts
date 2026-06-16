@@ -1,4 +1,3 @@
-import type OpenAI from 'openai'
 import type { HistoryMessage } from '../history.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 
@@ -6,6 +5,14 @@ import type { ToolRegistry } from '../tools/registry.ts'
 // produces; each provider maps CoreMessage[] to its own wire format inside
 // respond(). (Phase 1a — replaces the OpenAI-typed history.)
 export type CoreMessage = HistoryMessage
+
+// A provider-neutral inline image. Each provider maps it to its own wire form
+// (OpenAI image_url part / Gemini inlineData or fileData part).
+export interface CoreImagePart {
+  mimeType: string
+  dataBase64?: string   // inline base64 (small images)
+  url?: string          // remote/file URL (large images / fileData path)
+}
 
 export interface ParsedResponse {
   react: string | null
@@ -35,7 +42,7 @@ export interface RespondInput {
   // messages as assistant/model when formatting history.
   selfId?: string
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'
-  imageParts?: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
+  imageParts?: CoreImagePart[]
   extraText?: string
   toolRegistry?: ToolRegistry
   channelId?: string

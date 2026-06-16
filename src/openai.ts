@@ -71,9 +71,16 @@ export class OpenAIClient implements Provider {
       ? `${userName}: ${userMessage}\n\n${extraText}`
       : `${userName}: ${userMessage}`
 
+    // Map neutral CoreImagePart[] → OpenAI image_url content parts.
+    // Prefer url for remote images; fall back to inline data: URI.
+    const oaiImageParts = (imageParts ?? []).map(p => ({
+      type: 'image_url' as const,
+      image_url: { url: p.url ?? `data:${p.mimeType};base64,${p.dataBase64 ?? ''}` }
+    }))
+
     const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam['content'] =
-      (imageParts && imageParts.length > 0)
-        ? [{ type: 'text', text: userText }, ...imageParts]
+      (oaiImageParts.length > 0)
+        ? [{ type: 'text', text: userText }, ...oaiImageParts]
         : userText
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [

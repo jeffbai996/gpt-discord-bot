@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import type { Attachment as DiscordAttachment } from 'discord.js'
+import type { CoreImagePart } from './core/provider.ts'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
 // on guild boost tier; the smaller cap protects against "user dropped a 4-hour
@@ -46,7 +47,7 @@ export interface ProcessedAttachments {
   // (transcripts, file extracts, skipped notes) end up in `text`; image parts
   // go in `parts` for the vision-capable models.
   text: string
-  imageParts: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
+  imageParts: CoreImagePart[]
   skipped: SkippedAttachment[]
 }
 
@@ -72,13 +73,9 @@ export async function processAttachments(
     }
 
     if (IMAGE_MIMES.has(mime)) {
-      // gpt-5.x and gpt-4o accept `image_url` parts pointing to a publicly
-      // fetchable URL; Discord CDN URLs are public. Skips the round-trip of
-      // download → base64 → upload.
-      result.imageParts.push({
-        type: 'image_url',
-        image_url: { url: att.url }
-      })
+      // Use neutral CoreImagePart (url field) — each provider converts to its
+      // own wire form in respond(). Discord CDN URLs are public, so no download needed.
+      result.imageParts.push({ mimeType: mime, url: att.url })
       continue
     }
 
