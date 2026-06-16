@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import type { Provider, RespondInput, RespondResult, LifecycleEvent, ParsedResponse } from './core/provider.ts'
+import { formatHistoryForOpenAI } from './history.ts'
 import { embed } from './memory.ts'
 
 // Re-export the shared types so existing callers that import from './openai.ts'
@@ -59,8 +60,12 @@ export class OpenAIClient implements Provider {
   }
 
   async respond(input: RespondInput): Promise<RespondResult> {
-    const { systemPrompt, history, userMessage, userName, model, reasoningEffort, imageParts, extraText, toolRegistry, channelId, userId, onEvent } = input
+    const { systemPrompt, history, selfId, userMessage, userName, model, reasoningEffort, imageParts, extraText, toolRegistry, channelId, userId, onEvent } = input
     const start = Date.now()
+
+    // Format neutral CoreMessage[] → OpenAI message params internally.
+    // selfId lets the formatter tag the bot's own past messages as `assistant`.
+    const oaiHistory = await formatHistoryForOpenAI(history, selfId ?? '')
 
     const userText = extraText
       ? `${userName}: ${userMessage}\n\n${extraText}`
@@ -73,7 +78,7 @@ export class OpenAIClient implements Provider {
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: `${systemPrompt}\n\n---\n\n${STRUCTURED_OUTPUT_INSTRUCTION}` },
-      ...history,
+      ...oaiHistory,
       { role: 'user', content: userContent }
     ]
 
