@@ -142,10 +142,9 @@ message
   Gemini bot FROM the harness in parallel (separate state dir / test channel) to
   verify parity against the live sibling.
 - **Phase 3** — Cut the Gemini bot's service over to the harness. Retire the
-  sibling repo. **Rename this repo** to a provider-neutral name
-  (`bot-harness` / `agent-harness` — final name TBD with Jeff) and update the
-  service unit names accordingly. The harness is now the single home for all
-  bots.
+  sibling repo. **Rename this repo to `bot-harness`** (approved 2026-06-16) and
+  update the service unit names accordingly. The harness is now the single home
+  for all bots.
 
 Each phase is independently shippable and gated on a green test suite. Two live
 bots keep serving throughout.
