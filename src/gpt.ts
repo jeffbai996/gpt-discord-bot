@@ -9,7 +9,7 @@ import { gptCommand, executeGptCommand } from './commands.ts'
 import { OpenAIProvider, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent } from './openai.ts'
 import type { Provider } from './core/provider.ts'
-import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
+import { fetchHistory } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
@@ -194,7 +194,7 @@ async function handleUserMessage(
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
   const selfId = client.user?.id ?? ''
 
-  let history: Awaited<ReturnType<typeof formatHistoryForOpenAI>> = []
+  let history: Awaited<ReturnType<typeof fetchHistory>> = []
   try {
     if (
       message.channel.type === 0 /* GuildText */ ||
@@ -203,8 +203,7 @@ async function handleUserMessage(
       message.channel.type === 12 /* PrivateThread */ ||
       message.channel.type === 5 /* GuildAnnouncement */
     ) {
-      const raw = await fetchHistory(message.channel as TextChannel | DMChannel | ThreadChannel, message.id)
-      history = await formatHistoryForOpenAI(raw, selfId)
+      history = await fetchHistory(message.channel as TextChannel | DMChannel | ThreadChannel, message.id)
     }
   } catch (e) {
     console.error('history fetch failed:', e)
@@ -279,6 +278,7 @@ async function handleUserMessage(
     const result = await openai.respond({
       systemPrompt,
       history,
+      selfId,
       userMessage: message.content,
       userName: message.author.username,
       model,
