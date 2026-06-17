@@ -6,10 +6,9 @@ import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
-import { OpenAIProvider, OpenAIRequestRejected } from './openai.ts'
+import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent } from './openai.ts'
-import type { Provider } from './core/provider.ts'
-import { fetchHistory } from './history.ts'
+import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
@@ -54,7 +53,7 @@ const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
 const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md'))
 persona.setPinnedFactsStore(pinnedFacts)
-const openai: Provider = new OpenAIProvider(OPENAI_KEY, DEFAULT_MODEL)
+const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for non-chat endpoints (audio.transcriptions, embeddings,
 // web-search side-call). Sharing the same key/instance avoids spinning up two
 // HTTP pools.
@@ -194,7 +193,7 @@ async function handleUserMessage(
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
   const selfId = client.user?.id ?? ''
 
-  let history: Awaited<ReturnType<typeof fetchHistory>> = []
+  let history: Awaited<ReturnType<typeof formatHistoryForOpenAI>> = []
   try {
     if (
       message.channel.type === 0 /* GuildText */ ||
@@ -203,7 +202,8 @@ async function handleUserMessage(
       message.channel.type === 12 /* PrivateThread */ ||
       message.channel.type === 5 /* GuildAnnouncement */
     ) {
-      history = await fetchHistory(message.channel as TextChannel | DMChannel | ThreadChannel, message.id)
+      const raw = await fetchHistory(message.channel as TextChannel | DMChannel | ThreadChannel, message.id)
+      history = await formatHistoryForOpenAI(raw, selfId)
     }
   } catch (e) {
     console.error('history fetch failed:', e)
@@ -212,7 +212,7 @@ async function handleUserMessage(
   await applyLifecycle(message, 'received')
 
   const attachments = [...message.attachments.values()]
-  let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []  // CoreImagePart[]
+  let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []
   let extraText = ''
   if (attachments.length > 0) {
     await applyLifecycle(message, 'ingesting')
@@ -278,7 +278,6 @@ async function handleUserMessage(
     const result = await openai.respond({
       systemPrompt,
       history,
-      selfId,
       userMessage: message.content,
       userName: message.author.username,
       model,

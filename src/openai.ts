@@ -1,11 +1,63 @@
 import OpenAI from 'openai'
-import type { Provider, RespondInput, RespondResult, LifecycleEvent, ParsedResponse } from './core/provider.ts'
-import { formatHistoryForOpenAI } from './history.ts'
-import { embed } from './memory.ts'
+import type { ToolRegistry } from './tools/registry.ts'
 
-// Re-export the shared types so existing callers that import from './openai.ts'
-// continue to work without changes.
-export type { LifecycleEvent, RespondInput, RespondResult, ParsedResponse }
+export interface ParsedResponse {
+  react: string | null   // optional emoji to add to the user's message
+  reply: string          // text to post (may be empty if react-only)
+}
+
+export type LifecycleEvent =
+  | { type: 'thinking_start' }
+  | { type: 'reasoning_start' }   // first reasoning_summary token (o-series)
+  | { type: 'first_token' }       // first content token observed
+  | { type: 'partial', reply: string }  // incremental reply (best-effort)
+  | { type: 'tool_start', name: string, args?: string }
+  | { type: 'tool_end', name: string }
+  | { type: 'searching' }         // web_search in flight (special-cased)
+  | { type: 'done' }
+
+export interface RespondInput {
+  systemPrompt: string
+  history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
+  userMessage: string
+  userName: string
+  model: string
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'
+  // Multimodal content parts. `imageParts` get spliced into the user message
+  // alongside the text; `extraText` is appended below userMessage (e.g. audio
+  // transcripts, file extracts, "skipped" notices).
+  imageParts?: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
+  extraText?: string
+  // When set, the model is offered the registry's tools and the loop runs
+  // multi-turn until it emits a final assistant message. Each tool dispatch
+  // emits tool_start/tool_end lifecycle events.
+  toolRegistry?: ToolRegistry
+  channelId?: string
+  userId?: string
+  onEvent?: (event: LifecycleEvent) => void
+}
+
+export interface RespondResult extends ParsedResponse {
+  usage: {
+    inputTokens: number
+    outputTokens: number
+    totalTokens: number
+    // OpenAI's automatic prompt-prefix caching credits hits as
+    // prompt_tokens_details.cached_tokens in the response usage block.
+    // gpt-4o, gpt-5, and the o-series all support it; cached input tokens
+    // bill at ~50% of the normal rate. Surface here so callers can log
+    // cache health without re-parsing the upstream payload.
+    cachedInputTokens: number
+    // reasoning_tokens are billed separately on o-series + gpt-5 (internal
+    // chain-of-thought). Already counted toward outputTokens but worth
+    // surfacing for telemetry (lets you see how much the model spent
+    // reasoning vs replying).
+    reasoningTokens: number
+  } | null
+  finishReason: string | null
+  durationMs: number
+  modelUsed: string
+}
 
 export class OpenAIRequestRejected extends Error {
   constructor(public reason: string, public details?: unknown) {
@@ -41,51 +93,31 @@ function isGpt5Family(model: string): boolean {
   return model.startsWith('gpt-5')
 }
 
-export class OpenAIClient implements Provider {
+export class OpenAIClient {
   private client: OpenAI
   public readonly defaultModel: string
-  public readonly id = 'openai' as const
-  public readonly capabilities = { voice: false, managedCache: false, nativeWebSearch: false } as const
 
   constructor(apiKey: string, defaultModel: string) {
     this.client = new OpenAI({ apiKey })
     this.defaultModel = defaultModel
   }
 
-  async embed(text: string): Promise<number[]> {
-    // Wrap the free embed helper from memory.ts; Provider contract requires
-    // non-null, so fall back to empty array on failure (memory.ts returns null
-    // only for empty strings or transient API errors).
-    return (await embed(this.client, text)) ?? []
-  }
-
   async respond(input: RespondInput): Promise<RespondResult> {
-    const { systemPrompt, history, selfId, userMessage, userName, model, reasoningEffort, imageParts, extraText, toolRegistry, channelId, userId, onEvent } = input
+    const { systemPrompt, history, userMessage, userName, model, reasoningEffort, imageParts, extraText, toolRegistry, channelId, userId, onEvent } = input
     const start = Date.now()
-
-    // Format neutral CoreMessage[] → OpenAI message params internally.
-    // selfId lets the formatter tag the bot's own past messages as `assistant`.
-    const oaiHistory = await formatHistoryForOpenAI(history, selfId ?? '')
 
     const userText = extraText
       ? `${userName}: ${userMessage}\n\n${extraText}`
       : `${userName}: ${userMessage}`
 
-    // Map neutral CoreImagePart[] → OpenAI image_url content parts.
-    // Prefer url for remote images; fall back to inline data: URI.
-    const oaiImageParts = (imageParts ?? []).map(p => ({
-      type: 'image_url' as const,
-      image_url: { url: p.url ?? `data:${p.mimeType};base64,${p.dataBase64 ?? ''}` }
-    }))
-
     const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam['content'] =
-      (oaiImageParts.length > 0)
-        ? [{ type: 'text', text: userText }, ...oaiImageParts]
+      (imageParts && imageParts.length > 0)
+        ? [{ type: 'text', text: userText }, ...imageParts]
         : userText
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: `${systemPrompt}\n\n---\n\n${STRUCTURED_OUTPUT_INSTRUCTION}` },
-      ...oaiHistory,
+      ...history,
       { role: 'user', content: userContent }
     ]
 
@@ -305,9 +337,6 @@ export class OpenAIClient implements Provider {
     }
   }
 }
-
-// Provider-named alias — the harness refers to providers by their role, not SDK.
-export { OpenAIClient as OpenAIProvider }
 
 // During streaming, find the value of the `"reply"` key in a partial JSON
 // object. Doesn't fully parse JSON (the doc is incomplete mid-stream); just

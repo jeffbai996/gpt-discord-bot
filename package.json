@@ -9,7 +9,6 @@
     "test": "node --test --import tsx 'tests/**/*.test.ts'"
   },
   "dependencies": {
-    "@google/genai": "^1.52.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@mozilla/readability": "^0.6.0",
     "@types/better-sqlite3": "^7.6.13",
