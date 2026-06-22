@@ -6,6 +6,7 @@ import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
+import { voiceCommand, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent } from './openai.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
@@ -58,6 +59,19 @@ const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // web-search side-call). Sharing the same key/instance avoids spinning up two
 // HTTP pools.
 const openaiRaw = new OpenAI({ apiKey: OPENAI_KEY })
+
+// Realtime voice-to-voice (/voice). Owner-gated; empty admin id = nobody, which
+// safely disables it. Spoken-mode instructions keep replies short + markdown-free
+// since they're read aloud. (Wiring the full text persona into voice is a follow-up.)
+const voiceManager = new VoiceManager({
+  apiKey: OPENAI_KEY,
+  adminUserId: ADMIN_USER_ID ?? '',
+  instructions:
+    'You are speaking aloud in a Discord voice channel. Be brief and ' +
+    'conversational — short sentences, no markdown, no lists, no emoji. ' +
+    'Respond naturally as if on a phone call.',
+  log: (m) => console.error(`[voice] ${m}`),
+})
 
 // Memory store may be null if the native sqlite-vss / better-sqlite3 modules
 // fail to load on this Node version. The bot still runs; search_memory just
@@ -144,7 +158,8 @@ const client = new Client({
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.DirectMessageReactions,
     GatewayIntentBits.DirectMessageTyping,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates   // /voice — join VCs for realtime audio
   ],
   partials: [Partials.Channel, Partials.Message, Partials.User, Partials.Reaction]
 })
@@ -158,7 +173,7 @@ client.once('ready', async () => {
 
   try {
     const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN)
-    await rest.put(Routes.applicationCommands(APP_ID), { body: [gptCommand.toJSON()] })
+    await rest.put(Routes.applicationCommands(APP_ID), { body: [gptCommand.toJSON(), voiceCommand.toJSON()] })
     console.error('slash commands registered')
   } catch (e) {
     console.error('slash command registration failed:', e)
@@ -167,6 +182,10 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return
+  if (interaction.commandName === 'voice') {
+    await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '')
+    return
+  }
   if (interaction.commandName !== 'gpt') return
   await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer })
 })
