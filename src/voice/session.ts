@@ -20,10 +20,16 @@ import {
 } from '@discordjs/voice'
 import prism from 'prism-media'
 import { PassThrough } from 'node:stream'
+import OpenAI from 'openai'
 import type { VoiceBasedChannel } from 'discord.js'
 
 import { RealtimeSession, type RealtimeTool, type ToolCall } from './realtime.ts'
 import { discordToOpenAI, openAIToDiscord } from './audio-bridge.ts'
+
+const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
+// TTS voice is independent of the realtime voice (the classic TTS voice set
+// differs from the realtime set), so it has its own knob with a safe default.
+const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy'
 
 export interface VoiceSessionOptions {
   apiKey: string
@@ -132,6 +138,25 @@ export class VoiceSession {
     } catch (e) {
       this.realtime?.sendToolResponse(call.callId, { error: (e as Error).message })
     }
+  }
+
+  /**
+   * Speak a SPECIFIC text verbatim (text -> voice-back), via OpenAI TTS rather
+   * than the realtime model (which would paraphrase). Requires an active
+   * session — it plays through the same AudioPlayer. `response_format: 'pcm'`
+   * gives 24k mono PCM16, which the bridge already knows how to play.
+   */
+  async speakText(text: string): Promise<void> {
+    if (!this.player) throw new Error('not in a voice channel — join first')
+    const client = new OpenAI({ apiKey: this.opts.apiKey })
+    const resp = await client.audio.speech.create({
+      model: TTS_MODEL,
+      voice: TTS_VOICE as any,
+      input: text,
+      response_format: 'pcm',
+    })
+    const pcm24Mono = Buffer.from(await resp.arrayBuffer())
+    this.playOut(pcm24Mono)
   }
 
   leave(): void {
