@@ -99,6 +99,7 @@ export function parseServerEvent(raw: string | Buffer):
   | { kind: 'transcript'; text: string }
   | { kind: 'toolCall'; call: ToolCall }
   | { kind: 'responseDone' }
+  | { kind: 'speechStopped' }
   | { kind: 'error'; error: Error }
   | null {
   let msg: any
@@ -113,6 +114,9 @@ export function parseServerEvent(raw: string | Buffer):
       return { kind: 'audio', audio: Buffer.from(msg.delta ?? '', 'base64') }
     case 'input_audio_buffer.speech_started':
       return { kind: 'speechStarted' }
+    case 'input_audio_buffer.speech_stopped':
+      // User finished — the model is now "thinking" until its first audio chunk.
+      return { kind: 'speechStopped' }
     case 'response.audio_transcript.delta':
     case 'response.output_audio_transcript.delta':
       return { kind: 'transcript', text: msg.delta ?? '' }
@@ -177,6 +181,7 @@ export class RealtimeSession extends EventEmitter {
     switch (ev.kind) {
       case 'audio': this.emit('audio', ev.audio); break
       case 'speechStarted': this.emit('speechStarted'); break
+      case 'speechStopped': this.emit('speechStopped'); break
       case 'transcript': this.emit('transcript', ev.text); break
       case 'toolCall': this.emit('toolCall', ev.call); break
       case 'responseDone': this.emit('responseDone'); break

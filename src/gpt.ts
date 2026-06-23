@@ -69,7 +69,10 @@ const voiceManager = new VoiceManager({
   instructions:
     'You are speaking aloud in a Discord voice channel. Be brief and ' +
     'conversational — short sentences, no markdown, no lists, no emoji. ' +
-    'Respond naturally as if on a phone call.',
+    'Respond naturally as if on a phone call. You have NO live tools — you ' +
+    'cannot browse the web, search, or fetch real-time data (weather, news, ' +
+    'prices). If asked for something live, say you do not have live access ' +
+    'rather than promising to look it up.',
   log: (m) => console.error(`[voice] ${m}`),
 })
 // Attach `/gpt voice join|leave|speak` onto the existing /gpt command builder.

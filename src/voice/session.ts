@@ -31,6 +31,28 @@ const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
 // differs from the realtime set), so it has its own knob with a safe default.
 const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy'
 
+// Thinking cue (parity with gem-voice's _synth_thinking_blip): a soft
+// Hann-windowed sine played on a cadence while the model is composing its reply,
+// so the gap between the user finishing and the model speaking isn't dead air.
+const THINK_HZ = Number(process.env.VOICE_THINK_HZ || '420')
+const THINK_GAIN = Number(process.env.VOICE_THINK_GAIN || '0.06')
+const THINK_MS = Number(process.env.VOICE_THINK_MS || '170')
+const THINK_EVERY_MS = Number(process.env.VOICE_THINK_EVERY_MS || '1100')
+
+/** One soft thinking blip as 48k stereo PCM16LE (the AudioPlayer Raw format). */
+function synthThinkingBlip(): Buffer {
+  const rate = 48000, n = Math.floor((rate * THINK_MS) / 1000)
+  const buf = Buffer.allocUnsafe(n * 4)   // stereo, 2 bytes/sample
+  for (let i = 0; i < n; i++) {
+    const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)))  // fade in/out
+    const s = Math.sin((2 * Math.PI * THINK_HZ * i) / rate) * hann * THINK_GAIN
+    const v = (Math.max(-1, Math.min(1, s)) * 32767) | 0
+    buf.writeInt16LE(v, i * 4)
+    buf.writeInt16LE(v, i * 4 + 2)
+  }
+  return buf
+}
+
 export interface VoiceSessionOptions {
   apiKey: string
   instructions?: string
@@ -48,6 +70,9 @@ export class VoiceSession {
   private playback?: PassThrough
   private readonly subscribed = new Set<string>()
   private readonly log: (msg: string) => void
+  private thinking = false
+  private thinkingTimer?: ReturnType<typeof setInterval>
+  private readonly blip = synthThinkingBlip()
 
   constructor(private readonly opts: VoiceSessionOptions) {
     this.log = opts.log ?? (() => {})
@@ -84,11 +109,14 @@ export class VoiceSession {
     })
     this.realtime.on('audio', (pcm24: Buffer) => this.playOut(pcm24))
     this.realtime.on('speechStarted', () => this.onBargeIn())
+    this.realtime.on('speechStopped', () => this.startThinking())  // model composing
+    this.realtime.on('responseDone', () => this.stopThinking())
     this.realtime.on('error', (e: Error) => this.log(`realtime error: ${e.message}`))
     this.realtime.on('close', () => this.log('realtime socket closed'))
-    if (this.opts.onToolCall) {
-      this.realtime.on('toolCall', (c: ToolCall) => this.handleToolCall(c))
-    }
+    // ALWAYS handle tool calls — even with no handler wired. An unanswered tool
+    // call hangs the turn forever (the model waits for a result it never gets:
+    // "went to search and never came back"). handleToolCall replies either way.
+    this.realtime.on('toolCall', (c: ToolCall) => this.handleToolCall(c))
     await this.realtime.connect()
     this.log('voice session ready')
 
@@ -120,6 +148,7 @@ export class VoiceSession {
   /** Feed a model audio delta (24k mono) to the player as 48k stereo Raw. */
   private playOut(pcm24Mono: Buffer): void {
     if (!this.player) return
+    this.stopThinking()            // real audio arrived — drop the thinking cue
     if (!this.playback) {
       this.playback = new PassThrough()
       const resource = createAudioResource(this.playback, { inputType: StreamType.Raw })
@@ -128,8 +157,30 @@ export class VoiceSession {
     this.playback.write(openAIToDiscord(pcm24Mono))
   }
 
+  /** Start the soft "thinking" cue. Also resets the prior turn's playback so the
+   *  next response's audio starts on a fresh stream (fixes turn-2-silent). */
+  private startThinking(): void {
+    if (!this.player) return
+    if (this.playback) { this.playback.end(); this.playback = undefined }
+    if (this.thinking) return
+    this.thinking = true
+    this.playBlip()
+    this.thinkingTimer = setInterval(() => { if (this.thinking) this.playBlip() }, THINK_EVERY_MS)
+  }
+
+  private stopThinking(): void {
+    this.thinking = false
+    if (this.thinkingTimer) { clearInterval(this.thinkingTimer); this.thinkingTimer = undefined }
+  }
+
+  private playBlip(): void {
+    if (!this.player) return
+    this.player.play(createAudioResource(Readable.from(this.blip), { inputType: StreamType.Raw }))
+  }
+
   /** User interrupted while the bot was talking — stop playback now. */
   private onBargeIn(): void {
+    this.stopThinking()
     this.realtime?.cancelResponse()
     if (this.playback) {
       this.playback.end()
@@ -139,8 +190,16 @@ export class VoiceSession {
   }
 
   private async handleToolCall(call: ToolCall): Promise<void> {
+    if (!this.opts.onToolCall) {
+      // No tool wired — answer the call anyway so the turn doesn't hang waiting
+      // for a result. The model then continues from its own knowledge.
+      this.log(`tool call '${call.name}' but no handler — replying unavailable`)
+      this.realtime?.sendToolResponse(call.callId,
+        { error: 'no live tools available; answer from your own knowledge' })
+      return
+    }
     try {
-      const result = await this.opts.onToolCall!(call)
+      const result = await this.opts.onToolCall(call)
       this.realtime?.sendToolResponse(call.callId, result)
     } catch (e) {
       this.realtime?.sendToolResponse(call.callId, { error: (e as Error).message })
@@ -172,6 +231,7 @@ export class VoiceSession {
   }
 
   leave(): void {
+    this.stopThinking()
     try { this.playback?.end() } catch { /* */ }
     try { this.player?.stop(true) } catch { /* */ }
     try { this.realtime?.close() } catch { /* */ }

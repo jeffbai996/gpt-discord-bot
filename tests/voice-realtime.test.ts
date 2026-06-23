@@ -50,6 +50,10 @@ test('parseServerEvent: audio delta decodes base64', () => {
   assert.deepEqual((ev as any).audio, pcm)
 })
 
+test('parseServerEvent: speech_stopped -> speechStopped (drives the thinking cue)', () => {
+  assert.equal(parseServerEvent('{"type":"input_audio_buffer.speech_stopped"}')?.kind, 'speechStopped')
+})
+
 test('parseServerEvent: speech_started, transcript, response.done', () => {
   assert.equal(parseServerEvent('{"type":"input_audio_buffer.speech_started"}')?.kind, 'speechStarted')
   const t = parseServerEvent('{"type":"response.audio_transcript.delta","delta":"hi"}')
