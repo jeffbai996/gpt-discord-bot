@@ -23,10 +23,13 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 |-----|---------|-------|
 | `OPENAI_API_KEY` | (required) | already used by the bot |
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime` | the realtime model |
-| `OPENAI_REALTIME_VOICE` | `marin` | any OpenAI Realtime voice |
+| `OPENAI_REALTIME_VOICE` | `marin` | any OpenAI Realtime voice (`cedar`/`marin` = newest, most natural; `ballad` = British; `alloy`/`ash`/`verse`/`coral`/`sage` also valid. `arbor` is ChatGPT-app-only, NOT API.) |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | model for `/gpt voice speak` (verbatim TTS) |
 | `OPENAI_TTS_VOICE` | `alloy` | TTS voice (separate set from the realtime voices) |
 | `DISCORD_ADMIN_USER_ID` | — | only this user may run `/gpt voice` (billed per minute) |
+| `VOICE_THINK_FILE` | — | path to an audio clip (any ffmpeg-readable format) played as the "thinking" cue while the model composes. The only way to exactly match ChatGPT's sound — synthesis can't. Unset = soft synth fallback. |
+| `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used to decode `VOICE_THINK_FILE`. Pin to an absolute path under systemd (minimal PATH). |
+| `VOICE_THINK_HZ` / `_GAIN` / `_MS` / `_EVERY_MS` | `330` / `0.05` / `220` / `1100` | synth-fallback tone tuning (freq, amplitude, blip length, cadence). Ignored when `VOICE_THINK_FILE` is set. |
 
 ## Commands (`/gpt voice …`)
 - `/gpt voice join` — join your VC, start realtime voice-to-voice

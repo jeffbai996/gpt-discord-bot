@@ -20,6 +20,7 @@ import {
 } from '@discordjs/voice'
 import prism from 'prism-media'
 import { PassThrough, Readable } from 'node:stream'
+import { execFileSync } from 'node:child_process'
 import OpenAI from 'openai'
 import type { VoiceBasedChannel } from 'discord.js'
 
@@ -31,26 +32,50 @@ const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
 // differs from the realtime set), so it has its own knob with a safe default.
 const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy'
 
-// Thinking cue (parity with gem-voice's _synth_thinking_blip): a soft
-// Hann-windowed sine played on a cadence while the model is composing its reply,
-// so the gap between the user finishing and the model speaking isn't dead air.
-const THINK_HZ = Number(process.env.VOICE_THINK_HZ || '420')
-const THINK_GAIN = Number(process.env.VOICE_THINK_GAIN || '0.06')
-const THINK_MS = Number(process.env.VOICE_THINK_MS || '170')
+// Thinking cue played on a cadence while the model composes, so the gap between
+// the user finishing and the model speaking isn't dead air.
+//
+// EXACT MATCH: ChatGPT's actual thinking sound is a proprietary audio asset that
+// can't be reproduced by tone synthesis. Set VOICE_THINK_FILE to a path (any
+// format ffmpeg can read) and that clip is decoded once and played as the cue —
+// the only way to truly match ChatGPT. Without it, a soft synth fallback runs.
+const THINK_FILE = process.env.VOICE_THINK_FILE
+const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
+const THINK_HZ = Number(process.env.VOICE_THINK_HZ || '330')
+const THINK_GAIN = Number(process.env.VOICE_THINK_GAIN || '0.05')
+const THINK_MS = Number(process.env.VOICE_THINK_MS || '220')
 const THINK_EVERY_MS = Number(process.env.VOICE_THINK_EVERY_MS || '1100')
 
-/** One soft thinking blip as 48k stereo PCM16LE (the AudioPlayer Raw format). */
+/** Soft synth fallback: two stacked sines (fundamental + octave) under a Hann
+ *  window — warmer and less "beep" than a single tone. 48k stereo PCM16LE. */
 function synthThinkingBlip(): Buffer {
   const rate = 48000, n = Math.floor((rate * THINK_MS) / 1000)
-  const buf = Buffer.allocUnsafe(n * 4)   // stereo, 2 bytes/sample
+  const buf = Buffer.allocUnsafe(n * 4)
   for (let i = 0; i < n; i++) {
-    const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)))  // fade in/out
-    const s = Math.sin((2 * Math.PI * THINK_HZ * i) / rate) * hann * THINK_GAIN
-    const v = (Math.max(-1, Math.min(1, s)) * 32767) | 0
+    const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)))
+    const tone = 0.7 * Math.sin((2 * Math.PI * THINK_HZ * i) / rate)
+               + 0.3 * Math.sin((2 * Math.PI * THINK_HZ * 2 * i) / rate)
+    const v = (Math.max(-1, Math.min(1, tone * hann * THINK_GAIN)) * 32767) | 0
     buf.writeInt16LE(v, i * 4)
     buf.writeInt16LE(v, i * 4 + 2)
   }
   return buf
+}
+
+/** The cue buffer: the provided file (decoded to 48k stereo PCM16 via ffmpeg)
+ *  if VOICE_THINK_FILE is set + readable, else the synth fallback. */
+function loadThinkingCue(log: (m: string) => void): Buffer {
+  if (THINK_FILE) {
+    try {
+      const pcm = execFileSync(FFMPEG,
+        ['-v', 'quiet', '-i', THINK_FILE, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
+        { maxBuffer: 64 * 1024 * 1024 })
+      if (pcm.length > 0) { log(`thinking cue: using file ${THINK_FILE}`); return pcm }
+    } catch (e) {
+      log(`thinking cue: file decode failed (${(e as Error).message}); using synth`)
+    }
+  }
+  return synthThinkingBlip()
 }
 
 export interface VoiceSessionOptions {
@@ -72,10 +97,11 @@ export class VoiceSession {
   private readonly log: (msg: string) => void
   private thinking = false
   private thinkingTimer?: ReturnType<typeof setInterval>
-  private readonly blip = synthThinkingBlip()
+  private readonly blip: Buffer
 
   constructor(private readonly opts: VoiceSessionOptions) {
     this.log = opts.log ?? (() => {})
+    this.blip = loadThinkingCue(this.log)   // file cue if VOICE_THINK_FILE set, else synth
   }
 
   async join(channel: VoiceBasedChannel): Promise<void> {
