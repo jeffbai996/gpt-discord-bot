@@ -5,13 +5,15 @@ import {
   RealtimeSession,
 } from '../src/voice/realtime.ts'
 
-test('buildSessionUpdate sets pcm16 formats + server VAD + voice', () => {
+test('buildSessionUpdate uses the GA shape: audio.{input,output} + VAD + voice', () => {
   const s = buildSessionUpdate({ voice: 'marin', instructions: 'be brief' }) as any
   assert.equal(s.type, 'session.update')
-  assert.equal(s.session.input_audio_format, 'pcm16')
-  assert.equal(s.session.output_audio_format, 'pcm16')
-  assert.equal(s.session.turn_detection.type, 'server_vad')
-  assert.equal(s.session.voice, 'marin')
+  assert.equal(s.session.type, 'realtime')
+  assert.deepEqual(s.session.output_modalities, ['audio'])
+  assert.equal(s.session.audio.input.format.type, 'audio/pcm')
+  assert.equal(s.session.audio.output.format.type, 'audio/pcm')
+  assert.equal(s.session.audio.input.turn_detection.type, 'server_vad')
+  assert.equal(s.session.audio.output.voice, 'marin')
   assert.equal(s.session.instructions, 'be brief')
   assert.equal(s.session.tools, undefined) // no tools key when none given
 })

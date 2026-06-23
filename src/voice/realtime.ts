@@ -42,21 +42,31 @@ export interface ToolCall {
   argsJson: string
 }
 
-/** Build the session.update payload that configures audio formats + VAD. */
+/** Build the session.update payload — GA Realtime shape (the beta shape, with
+ *  flat input_audio_format / modalities, is no longer supported). Probe-verified
+ *  2026-06-22: this returns `session.updated` against /v1/realtime. */
 export function buildSessionUpdate(o: {
   voice: string; instructions?: string; tools?: RealtimeTool[]
 }): Record<string, unknown> {
   return {
     type: 'session.update',
     session: {
-      modalities: ['audio', 'text'],
-      voice: o.voice,
+      type: 'realtime',
+      output_modalities: ['audio'],
       instructions: o.instructions ?? '',
-      input_audio_format: 'pcm16',   // 24k mono, matches the audio-bridge output
-      output_audio_format: 'pcm16',  // 24k mono, fed back through the bridge
-      // Server VAD: OpenAI detects speech start/stop and drives turn-taking +
-      // barge-in (speech_started while the model talks = the user interrupted).
-      turn_detection: { type: 'server_vad', create_response: true },
+      audio: {
+        // 24k mono PCM both ways — matches the audio-bridge output/input.
+        input: {
+          format: { type: 'audio/pcm', rate: 24000 },
+          // Server VAD: OpenAI detects speech start/stop, drives turn-taking +
+          // barge-in (speech_started while the model talks = user interrupted).
+          turn_detection: { type: 'server_vad', create_response: true },
+        },
+        output: {
+          format: { type: 'audio/pcm', rate: 24000 },
+          voice: o.voice,
+        },
+      },
       ...(o.tools && o.tools.length
         ? { tools: o.tools, tool_choice: 'auto' }
         : {}),
@@ -138,11 +148,11 @@ export class RealtimeSession extends EventEmitter {
 
   async connect(): Promise<void> {
     const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(this.opts.model)}`
+    // GA Realtime: just the bearer token. The old `OpenAI-Beta: realtime=v1`
+    // header opts into the beta API, which now hard-errors ("Beta API is no
+    // longer supported. Please use /v1/realtime for the GA API").
     const ws = new WebSocket(url, {
-      headers: {
-        Authorization: `Bearer ${this.opts.apiKey}`,
-        'OpenAI-Beta': 'realtime=v1',
-      },
+      headers: { Authorization: `Bearer ${this.opts.apiKey}` },
     })
     this.ws = ws
     await new Promise<void>((resolve, reject) => {

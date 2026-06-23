@@ -19,7 +19,7 @@ import {
   type VoiceConnection, type AudioPlayer,
 } from '@discordjs/voice'
 import prism from 'prism-media'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import OpenAI from 'openai'
 import type { VoiceBasedChannel } from 'discord.js'
 
@@ -65,6 +65,13 @@ export class VoiceSession {
 
     this.player = createAudioPlayer({
       behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+    })
+    // Diagnostics: surface playback failures (a bad resource / missing opus
+    // encoder fails silently otherwise) and state flips, so a "no audio" report
+    // is debuggable from the log instead of a guess.
+    this.player.on('error', (e) => this.log(`player error: ${e.message}`))
+    this.player.on('stateChange', (o, n) => {
+      if (o.status !== n.status) this.log(`player ${o.status} -> ${n.status}`)
     })
     this.connection.subscribe(this.player)
 
@@ -153,10 +160,15 @@ export class VoiceSession {
       model: TTS_MODEL,
       voice: TTS_VOICE as any,
       input: text,
-      response_format: 'pcm',
+      response_format: 'pcm',   // 24k mono PCM16
     })
-    const pcm24Mono = Buffer.from(await resp.arrayBuffer())
-    this.playOut(pcm24Mono)
+    const pcm48Stereo = openAIToDiscord(Buffer.from(await resp.arrayBuffer()))
+    // One-shot: a finite Readable (not the streaming PassThrough) so the player
+    // plays the clip start-to-finish then goes idle. Decoupled from realtime
+    // playback state so /gpt voice speak works whether or not a turn is live.
+    if (this.playback) { this.playback.end(); this.playback = undefined }
+    const resource = createAudioResource(Readable.from(pcm48Stereo), { inputType: StreamType.Raw })
+    this.player.play(resource)
   }
 
   leave(): void {
