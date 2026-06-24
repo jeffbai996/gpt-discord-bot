@@ -299,6 +299,21 @@ async function handleUserMessage(
     }
   }
 
+  // Animate the placeholder ellipsis (. .. …) every 1.5s while we wait. Matters
+  // most for codex turns, which don't stream partials, so the placeholder would
+  // otherwise sit frozen. Cleared on the first streamed partial and before the
+  // final render (stopThinkingAnim).
+  let thinkingAnim: ReturnType<typeof setInterval> | null = null
+  const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
+  if (workMessage && !targetMessage) {
+    const frames = ['💭 thinking.', '💭 thinking..', '💭 thinking…']
+    let fi = 0
+    thinkingAnim = setInterval(() => {
+      if (!workMessage) return
+      workMessage.edit(frames[fi++ % frames.length]).catch(() => {})
+    }, 1500)
+  }
+
   // Throttle Discord edits during streaming.
   let lastEditAt = 0
   let lastEditedText = ''
@@ -316,6 +331,7 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'partial' && workMessage) {
+      stopThinkingAnim()
       const now = Date.now()
       if (now - lastEditAt < EDIT_INTERVAL_MS) return
       const display = event.reply.trim()
@@ -369,6 +385,7 @@ async function handleUserMessage(
     }
 
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
+    stopThinkingAnim()
     recordCacheTurn(channelId, result)
 
     if (result.react) {
@@ -492,6 +509,7 @@ async function handleUserMessage(
       await applyLifecycle(message, 'errored')
     }
     const errMsg = isRejected ? `⚠️ ${e.reason}` : `❌ error: ${e?.message ?? String(e)}`
+    stopThinkingAnim()
     console.error('respond failed:', e)
     try {
       if (workMessage) await workMessage.edit(errMsg)
