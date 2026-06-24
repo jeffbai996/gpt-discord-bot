@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
 import { rm, readFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
@@ -209,6 +210,31 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
 // RespondResult shaped exactly like openai.respond(), so gpt.ts can use it
 // interchangeably. THROWS on any failure (timeout, empty answer, exec error)
 // so the caller can fall back to the API — this never silently returns junk.
+const clip2 = (x: unknown, n: number) => String(x ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
+
+// Strip codex's `/bin/bash -lc '<inner>'` wrapper + basename the leading path.
+function cleanCmd(raw: string): string {
+  const m = raw.match(/-l?c\s+'([\s\S]*)'\s*$/)
+  const cmd = (m ? m[1] : raw).trim()
+  return cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
+}
+
+// One-line live label for the placeholder as codex works (from item.started events).
+function liveLabel(ev: any): string | null {
+  if (ev?.type !== 'item.started' || !ev.item) return null
+  const it = ev.item
+  switch (it.type) {
+    case 'command_execution': return `🔧 ${clip2(cleanCmd(String(it.command ?? '')), 70)}`
+    case 'web_search':        return `🌐 searching: ${clip2(it.query, 60)}`
+    case 'file_change': {
+      const paths = Array.isArray(it.changes) ? it.changes.map((c: any) => c.path).join(', ') : ''
+      return `✎ editing ${clip2(paths, 70)}`
+    }
+    case 'reasoning':         return '🧠 thinking…'
+    default:                  return null
+  }
+}
+
 export async function respondViaCodex(input: CodexChatInput): Promise<RespondResult> {
   const t0 = Date.now()
   input.onEvent?.({ type: 'thinking_start' })
@@ -229,26 +255,42 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     `-s workspace-write -c sandbox_workspace_write.network_access=true -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
     `</dev/null 2>/dev/null`
 
-  let stdout = ''
+  // Stream codex's JSONL events line-by-line so we can surface what it's doing
+  // LIVE (running cmd / searching / editing) to the placeholder via onEvent, while
+  // still collecting every line for the post-turn trace/usage parse.
+  const child = spawn('bash', ['-lc', script], {
+    env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
+  })
+  const lines: string[] = []
+  const rl = createInterface({ input: child.stdout! })
+  rl.on('line', (line) => {
+    if (!line.trim()) return
+    lines.push(line)
+    try {
+      const label = liveLabel(JSON.parse(line))
+      if (label) input.onEvent?.({ type: 'partial', reply: label })
+    } catch { /* non-JSON line */ }
+  })
   let replyFromFile = ''
+  let timedOut = false
   try {
-    const res = await execFileAsync('bash', ['-lc', script], {
-      timeout: TIMEOUT_MS + 8_000,
-      maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); resolve() }, TIMEOUT_MS + 8_000)
+      child.on('error', (e) => { clearTimeout(timer); reject(e) })
+      child.on('close', () => { clearTimeout(timer); resolve() })
     })
-    stdout = res.stdout || ''
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
   } finally {
+    rl.close()
     await rm(outfile, { force: true }).catch(() => {})
   }
 
-  const parsed = parseCodexEvents(stdout)
+  const parsed = parseCodexEvents(lines.join('\n'))
   // Prefer the -o file (the clean final message); fall back to the last
   // agent_message in the event stream if the file came back empty.
   const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()
   if (!reply) {
-    throw new Error(`codex chat produced no answer (events=${stdout.length}b)`)
+    throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
   }
 
   input.onEvent?.({ type: 'done' })
