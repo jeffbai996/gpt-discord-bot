@@ -224,7 +224,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // Neutral cwd (/tmp) + workspace-write: codex auto-runs within the sandbox
   // (writes confined to the /tmp workspace; reads allowed). Jeff opted into write 2026-06-24.
   const script =
-    `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check --add-dir /home/user/repos ` +
+    `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check --add-dir /home/user ` +
     `-s workspace-write -c sandbox_workspace_write.network_access=true -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
     `</dev/null 2>/dev/null`
 

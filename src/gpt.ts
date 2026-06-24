@@ -523,8 +523,8 @@ async function handleUserMessage(
         lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`)
         if (call.resultPreview) {
           let rp = call.resultPreview.replace(/\n/g, ' ')
-          if (rp.length > 86) rp = rp.slice(0, 86) + '…'
-          lines.push(`  ⎿ ${rp}`)
+          if (rp.length > 60) rp = rp.slice(0, 60) + '…'
+          lines.push(`    ⎿ ${rp}`)
         }
       }
       const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n') + '\n```'

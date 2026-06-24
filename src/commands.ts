@@ -40,18 +40,6 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
-    .setName('model')
-    .setDescription('Swap the default model (writes OPENAI_MODEL in .env, restarts the bot in ~1.5s).')
-    .addStringOption(o => o
-      .setName('value')
-      .setDescription('API-fallback model (gpt-5.5 — codex chat is the default engine)')
-      .setRequired(true)
-      .addChoices(
-        { name: 'gpt-5.5 — flagship (API fallback path)', value: 'gpt-5.5' },
-      )
-    )
-  )
-  .addSubcommand(s => s
     .setName('cache')
     .setDescription('Show recent prompt-cache hit telemetry for this channel (rolling window of last 50 turns).')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -110,7 +98,6 @@ export const gptCommand = new SlashCommandBuilder()
       .setDescription('Which flag to set')
       .setRequired(true)
       .addChoices(
-        { name: 'model — gpt-5.5 | gpt-5.4-mini | o3 (or "default" to clear)', value: 'model' },
         { name: 'show_code — render tool-call artifacts', value: 'show_code' },
         { name: 'trace — diff-style tool-trace card', value: 'trace' },
         { name: 'thinking — post the model reasoning summary', value: 'thinking' },
