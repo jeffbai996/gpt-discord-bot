@@ -67,3 +67,40 @@ test('ToolRegistry: empty registry yields empty tools array and size 0', () => {
   assert.equal(r.size(), 0)
   assert.deepEqual(r.toOpenAITools(), [])
 })
+
+test('ToolRegistry: toRealtimeTools is flat shape, no strict, order preserved', () => {
+  const r = new ToolRegistry()
+  r.register(makeTool('alpha'))
+  r.register(makeTool('beta'))
+  const rt = r.toRealtimeTools()
+  assert.deepEqual(rt.map(t => t.name), ['alpha', 'beta'])
+  const t0 = rt[0] as Record<string, unknown>
+  assert.equal(t0.type, 'function')
+  assert.equal(t0.name, 'alpha')
+  assert.equal(t0.description, 'desc for alpha')
+  assert.deepEqual(t0.parameters, { type: 'object', properties: {} })
+  // Realtime shape must NOT carry `strict` (that's the Responses shape).
+  assert.ok(!('strict' in t0))
+})
+
+test('voice tool dispatch: argsJson round-trips through dispatch (incl. malformed)', async () => {
+  // Mirrors the onToolCall closure in command.ts: JSON.parse(argsJson||'{}')
+  // then registry.dispatch. Verifies a good payload and a malformed one (→ {}).
+  const r = new ToolRegistry()
+  let seen: Record<string, unknown> | null = null
+  r.register({
+    name: 'echo',
+    description: 'echo',
+    parameters: { type: 'object' as const, properties: {} },
+    execute: async (args) => { seen = args; return `got ${JSON.stringify(args)}` },
+  })
+  const run = async (argsJson: string) => {
+    let args: Record<string, unknown> = {}
+    try { args = JSON.parse(argsJson || '{}') } catch { /* malformed → {} */ }
+    return r.dispatch('echo', args, { channelId: 'c', userId: 'u' })
+  }
+  assert.equal(await run('{"q":"hi"}'), 'got {"q":"hi"}')
+  assert.deepEqual(seen, { q: 'hi' })
+  assert.equal(await run('not json'), 'got {}')   // malformed → empty args, no throw
+  assert.deepEqual(seen, {})
+})

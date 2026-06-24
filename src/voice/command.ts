@@ -15,6 +15,31 @@ import type {
 
 import { VoiceSession } from './session.ts'
 import type { RealtimeTool, ToolCall } from './realtime.ts'
+import type { PersonaLoader } from '../persona.ts'
+import type { ToolRegistry } from '../tools/registry.ts'
+
+// Appended to the bot's real persona for a live call. Mirrors gemma's voice
+// override: the text persona's "stay silent / opt out" etiquette is a bug on a
+// call (the first smoke test made the model conclude silence was polite → mute
+// bot), so suspend it and demand short, spoken, tool-aware replies.
+const VOICE_OVERRIDE = `
+IMPORTANT — you are on a LIVE VOICE CALL right now. Any rules above about staying \
+silent, opting out of replies, or skipping acknowledgments apply ONLY to text \
+channels and are suspended for this call. On a call, silence is a malfunction: \
+ALWAYS respond out loud to anything the speaker says, including greetings, mic \
+tests, and small talk. Keep replies short, natural, and conversational — you are \
+speaking, not writing. No markdown, no lists, no emoji. You can use tools, but \
+keep the conversation flowing: don't announce that you're searching, just answer \
+once you have the result; if a tool is slow, give a brief natural answer and \
+offer to follow up.`.trim()
+
+// Tools too slow for a live call (multi-second = dead air that feels broken).
+// Excluded from what the voice model is OFFERED — still dispatchable if somehow
+// named. Comma-separated override via GPT_VOICE_TOOL_DENY (default: codex).
+const VOICE_TOOL_DENY = new Set(
+  (process.env.GPT_VOICE_TOOL_DENY ?? 'codex')
+    .split(',').map(s => s.trim()).filter(Boolean),
+)
 
 /** Attach the `voice` subcommand group to the existing /gpt command builder. */
 export function addVoiceGroup(cmd: SlashCommandSubcommandsOnlyBuilder): void {
@@ -45,14 +70,21 @@ export class VoiceManager {
     return this.sessions.has(guildId)
   }
 
-  async join(guildId: string, channel: Parameters<VoiceSession['join']>[0]): Promise<void> {
+  async join(
+    guildId: string,
+    channel: Parameters<VoiceSession['join']>[0],
+    // Per-join overrides — the live persona + tools + dispatch are built at
+    // join time (they depend on the channel/guild), overriding any constructor
+    // defaults. Falls back to the constructor opts when not supplied.
+    overrides?: Pick<VoiceManagerOptions, 'instructions' | 'tools' | 'onToolCall'>,
+  ): Promise<void> {
     if (this.sessions.has(guildId)) this.leave(guildId)
     const session = new VoiceSession({
       apiKey: this.opts.apiKey,
-      instructions: this.opts.instructions,
+      instructions: overrides?.instructions ?? this.opts.instructions,
       voice: this.opts.voice,
-      tools: this.opts.tools,
-      onToolCall: this.opts.onToolCall,
+      tools: overrides?.tools ?? this.opts.tools,
+      onToolCall: overrides?.onToolCall ?? this.opts.onToolCall,
       log: this.opts.log,
     })
     this.sessions.set(guildId, session)
@@ -89,6 +121,8 @@ export async function executeVoiceCommand(
   interaction: ChatInputCommandInteraction,
   manager: VoiceManager,
   adminUserId: string,
+  persona: PersonaLoader,
+  toolRegistry: ToolRegistry,
 ): Promise<void> {
   if (interaction.user.id !== adminUserId) {
     await interaction.reply({ content: 'Voice is owner-only (billed per minute).', ephemeral: true })
@@ -127,8 +161,21 @@ export async function executeVoiceCommand(
     return
   }
   await interaction.reply({ content: `🎙️ Joining **${channel.name}**…`, ephemeral: true })
+  // Build the live session's brain at join time: the bot's real persona for this
+  // channel/guild + the voice override, the real tool registry (minus slow tools),
+  // and a dispatch closure that runs tool calls through the same registry the text
+  // bot uses. This is what makes voice-gpt speak as gpt and use gpt's tools.
+  const instructions =
+    `${persona.buildSystemPrompt(interaction.channelId, interaction.guildId)}\n\n---\n\n${VOICE_OVERRIDE}`
+  const tools = toolRegistry.toRealtimeTools().filter(t => !VOICE_TOOL_DENY.has(t.name))
+  const ctx = { channelId: interaction.channelId, userId: interaction.user.id }
+  const onToolCall = async (call: ToolCall): Promise<unknown> => {
+    let args: Record<string, unknown> = {}
+    try { args = JSON.parse(call.argsJson || '{}') } catch { /* malformed args → {} */ }
+    return await toolRegistry.dispatch(call.name, args, ctx)
+  }
   try {
-    await manager.join(interaction.guildId, channel)
+    await manager.join(interaction.guildId, channel, { instructions, tools, onToolCall })
     await interaction.editReply(`🎙️ In **${channel.name}** — talk to me. \`/gpt voice leave\` to stop.`)
   } catch (e) {
     manager.leave(interaction.guildId)

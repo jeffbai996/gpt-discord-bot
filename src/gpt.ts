@@ -97,18 +97,13 @@ const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 const openaiRaw = new OpenAI({ apiKey: OPENAI_KEY })
 
 // Realtime voice-to-voice, under `/gpt voice …`. Owner-gated; empty admin id =
-// nobody, which safely disables it. Spoken-mode instructions keep replies short +
-// markdown-free since they're read aloud. (Wiring the full text persona is a follow-up.)
+// nobody, which safely disables it. The real persona + tool registry are built
+// PER JOIN (they depend on the channel/guild) and passed into executeVoiceCommand,
+// so the session speaks as gpt and can call gpt's tools — see command.ts. The
+// constructor only carries the bits that don't change per call.
 const voiceManager = new VoiceManager({
   apiKey: OPENAI_KEY,
   adminUserId: ADMIN_USER_ID ?? '',
-  instructions:
-    'You are speaking aloud in a Discord voice channel. Be brief and ' +
-    'conversational — short sentences, no markdown, no lists, no emoji. ' +
-    'Respond naturally as if on a phone call. You have NO live tools — you ' +
-    'cannot browse the web, search, or fetch real-time data (weather, news, ' +
-    'prices). If asked for something live, say you do not have live access ' +
-    'rather than promising to look it up.',
   log: (m) => console.error(`[voice] ${m}`),
 })
 // Attach `/gpt voice join|leave|speak` onto the existing /gpt command builder.
@@ -226,7 +221,7 @@ client.on('interactionCreate', async interaction => {
   if (interaction.commandName !== 'gpt') return
   // /gpt voice … is a subcommand group; route it to the voice handler.
   if (interaction.options.getSubcommandGroup(false) === 'voice') {
-    await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '')
+    await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '', persona, toolRegistry)
     return
   }
   await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer })

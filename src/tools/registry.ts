@@ -1,4 +1,5 @@
 import type OpenAI from 'openai'
+import type { RealtimeTool } from '../voice/realtime.ts'
 
 export interface ToolContext {
   channelId?: string
@@ -66,6 +67,20 @@ export class ToolRegistry {
         description: t.description,
         parameters: t.parameters as Record<string, unknown>,
         strict: false,
+      }
+    })
+  }
+
+  // OpenAI Realtime (voice) tool shape — flat, like toResponsesTools but without
+  // `strict`. Lets the live voice session call the same tools the text bot uses.
+  toRealtimeTools(): RealtimeTool[] {
+    return this.order.map(n => {
+      const t = this.tools.get(n)!
+      return {
+        type: 'function',
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters as Record<string, unknown>,
       }
     })
   }
