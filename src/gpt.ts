@@ -571,6 +571,24 @@ async function handleUserMessage(
       }
     }
 
+    // "Thought for Ns" footer — a light summary line posted after the reply, like
+    // the Claude bots. Persistence (Jeff 2026-06-24): if BOTH tool-trace AND
+    // reasoning are on, keep it (you're in deep-inspect mode, the context matters);
+    // otherwise it's transient — auto-delete after a short linger so it doesn't
+    // clutter the channel. N is the total turn time (the same number as the » in
+    // the verbose footer; codex carries no per-item timing so total is the honest one).
+    if (message.channel.isSendable()) {
+      const secs = (result.durationMs / 1000).toFixed(1)
+      const persist = flags.trace && flags.thinking
+      try {
+        const thoughtMsg = await message.channel.send(`-# 💭 Thought for ${secs}s`)
+        if (!persist) {
+          const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 12_000
+          setTimeout(() => { thoughtMsg.delete().catch(() => {}) }, lingerMs)
+        }
+      } catch { /* fire-and-forget */ }
+    }
+
     if (result.finishReason === 'length') {
       await applyLifecycle(message, 'truncated')
     } else {
