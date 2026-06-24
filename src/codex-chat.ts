@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { rm } from 'node:fs/promises'
+import { rm, readFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import type OpenAI from 'openai'
-import type { RespondResult, LifecycleEvent } from './openai.ts'
+import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -83,6 +83,92 @@ function buildPrompt(input: CodexChatInput): string {
     .join('\n')
 }
 
+interface ParsedEvents {
+  toolCalls: ToolCall[]
+  reasoning: string
+  usage: RespondResult['usage']
+  lastAgentMessage: string
+}
+
+// Parse codex's `--json` JSONL event stream so the codex path can populate the
+// SAME RespondResult fields the API path does — keeping the per-channel `trace`,
+// `thinking`, and `verbose` flags working on codex turns. Event shapes (codex
+// 0.x): item.completed{item:{type:'command_execution'|'reasoning'|'agent_message'
+// |'web_search'|'mcp_tool_call', …}} and turn.completed{usage:{input_tokens,
+// cached_input_tokens, output_tokens, reasoning_output_tokens}}.
+function parseCodexEvents(jsonl: string): ParsedEvents {
+  const toolCalls: ToolCall[] = []
+  const reasoningParts: string[] = []
+  let usage: RespondResult['usage'] = null
+  let lastAgentMessage = ''
+
+  const clip = (s: unknown, n: number) =>
+    String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
+
+  for (const line of jsonl.split('\n')) {
+    const s = line.trim()
+    if (!s) continue
+    let ev: any
+    try { ev = JSON.parse(s) } catch { continue }
+
+    if (ev.type === 'turn.completed' && ev.usage) {
+      const u = ev.usage
+      const input = u.input_tokens ?? 0
+      const output = u.output_tokens ?? 0
+      usage = {
+        inputTokens: input,
+        outputTokens: output,
+        totalTokens: input + output,
+        cachedInputTokens: u.cached_input_tokens ?? 0,
+        reasoningTokens: u.reasoning_output_tokens ?? 0,
+      }
+      continue
+    }
+
+    if (ev.type !== 'item.completed' || !ev.item) continue
+    const it = ev.item
+    switch (it.type) {
+      case 'agent_message':
+        if (it.text) lastAgentMessage = String(it.text)
+        break
+      case 'reasoning':
+        if (it.text) reasoningParts.push(String(it.text))
+        break
+      case 'command_execution':
+        toolCalls.push({
+          name: 'shell',
+          args: { cmd: clip(it.command, 140) },
+          durationMs: 0, // codex JSONL carries no per-item timing
+          resultPreview: clip(it.aggregated_output, 200),
+          failed: typeof it.exit_code === 'number' ? it.exit_code !== 0 : false,
+        })
+        break
+      case 'web_search':
+        toolCalls.push({
+          name: 'web_search',
+          args: { query: clip(it.query, 140) },
+          durationMs: 0,
+          resultPreview: clip(it.result ?? it.aggregated_output, 200),
+          failed: false,
+        })
+        break
+      case 'mcp_tool_call':
+        toolCalls.push({
+          name: clip(it.tool ?? it.name ?? 'mcp', 40) || 'mcp',
+          args: typeof it.arguments === 'object' && it.arguments ? it.arguments : {},
+          durationMs: 0,
+          resultPreview: clip(it.result, 200),
+          failed: it.status ? it.status !== 'completed' : false,
+        })
+        break
+      default:
+        break
+    }
+  }
+
+  return { toolCalls, reasoning: reasoningParts.join('\n\n'), usage, lastAgentMessage }
+}
+
 // Run a chat turn through the Codex CLI instead of the OpenAI API. Returns a
 // RespondResult shaped exactly like openai.respond(), so gpt.ts can use it
 // interchangeably. THROWS on any failure (timeout, empty answer, exec error)
@@ -94,45 +180,50 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const prompt = buildPrompt(input)
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
-  const logfile = `/tmp/gpt_codexchat_log.txt`
   const secs = Math.floor(TIMEOUT_MS / 1000)
 
-  // Prompt goes via env (CODEX_PROMPT) so arbitrary user text can't break out
-  // of the shell command — same injection-safe pattern as the codex tool.
+  // --json → JSONL events on stdout (parsed for tool calls / reasoning / token
+  // usage so trace+thinking+verbose work on codex turns). -o → the clean final
+  // reply text to a file (kept separate from the event stream). Prompt goes via
+  // env (CODEX_PROMPT) so user text can't break out of the shell command.
   // Neutral cwd (/tmp) + read-only: this is chat, not a repo operation.
   const script =
     `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check ` +
-    `-s read-only -c model_reasoning_effort=${effort} -o "${outfile}" "$CODEX_PROMPT" ` +
-    `</dev/null >"${logfile}" 2>&1; ` +
-    `if [ -s "${outfile}" ]; then cat "${outfile}"; else echo "__CODEX_EMPTY__"; tail -5 "${logfile}"; fi`
+    `-s read-only -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
+    `</dev/null 2>/dev/null`
 
   let stdout = ''
+  let replyFromFile = ''
   try {
     const res = await execFileAsync('bash', ['-lc', script], {
       timeout: TIMEOUT_MS + 8_000,
-      maxBuffer: 8 * 1024 * 1024,
+      maxBuffer: 16 * 1024 * 1024,
       env: { ...process.env, CODEX_PROMPT: prompt },
     })
     stdout = res.stdout || ''
+    replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
   } finally {
     await rm(outfile, { force: true }).catch(() => {})
   }
 
-  const out = stdout.trim()
-  if (!out || out.startsWith('__CODEX_EMPTY__')) {
-    throw new Error(`codex chat produced no answer: ${out.slice(0, 200)}`)
+  const parsed = parseCodexEvents(stdout)
+  // Prefer the -o file (the clean final message); fall back to the last
+  // agent_message in the event stream if the file came back empty.
+  const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()
+  if (!reply) {
+    throw new Error(`codex chat produced no answer (events=${stdout.length}b)`)
   }
 
   input.onEvent?.({ type: 'done' })
 
   return {
     react: null,
-    reply: out,
-    usage: null,
+    reply,
+    usage: parsed.usage,
     finishReason: 'stop',
     durationMs: Date.now() - t0,
     modelUsed: 'codex',
-    reasoning: '',
-    toolCalls: [],
+    reasoning: parsed.reasoning,
+    toolCalls: parsed.toolCalls,
   }
 }
