@@ -20,6 +20,7 @@ import { buildDefaultRegistry } from './tools/index.ts'
 import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
 import { PinnedFactsStore } from './pinned-facts.ts'
+import { PendingPlaceholders } from './pending-placeholders.ts'
 import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
@@ -106,6 +107,7 @@ const access = new AccessManager()
 const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
 const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md'))
+const pendingPlaceholders = new PendingPlaceholders(path.join(STATE_DIR, 'pending-placeholders.json'))
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for non-chat endpoints (audio.transcriptions, embeddings,
@@ -231,6 +233,13 @@ client.once('ready', async () => {
   } catch (e) {
     console.error('slash command registration failed:', e)
   }
+
+  try {
+    const n = await pendingPlaceholders.sweep(client)
+    if (n) console.error(`swept ${n} interrupted placeholder(s) from a prior run`)
+  } catch (e) {
+    console.error('placeholder sweep failed:', e)
+  }
 })
 
 client.on('interactionCreate', async interaction => {
@@ -330,9 +339,12 @@ async function handleUserMessage(
   const effortLabel = flags.reasoning && flags.reasoning !== 'none'
     ? `thinking with ${flags.reasoning} effort` : 'thinking'
   let workMessage: Message | null = targetMessage
+  let placeholderId: string | null = null
   if (!workMessage) {
     try {
       workMessage = await message.reply(`💭 **${effortLabel}…**`)
+      placeholderId = workMessage.id
+      pendingPlaceholders.track(message.channel.id, workMessage.id)
     } catch (e) {
       console.error('placeholder reply failed:', e)
     }
@@ -646,6 +658,8 @@ async function handleUserMessage(
       if (workMessage) await workMessage.edit(errMsg)
       else await message.reply(errMsg)
     } catch {}
+  } finally {
+    if (placeholderId) pendingPlaceholders.untrack(placeholderId)
   }
 }
 
