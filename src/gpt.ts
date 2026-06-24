@@ -1,6 +1,8 @@
 import { Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
 import path from 'path'
 import os from 'os'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
@@ -92,7 +94,7 @@ const OPENAI_KEY: string = process.env.OPENAI_API_KEY
 // Default to the cheap model. gpt-5.5 is $5/$30 per 1M tokens — 6x the cost
 // of gpt-5.4-mini ($0.75/$4.50). Channels can still override via
 // /gpt set model gpt-5.5 (see commands.ts ALLOWED_MODELS).
-const DEFAULT_MODEL: string = process.env.GPT_MODEL || 'gpt-5.4-mini'
+const DEFAULT_MODEL: string = process.env.GPT_MODEL || 'gpt-5.5'
 const ADMIN_USER_ID: string | undefined = process.env.DISCORD_ADMIN_USER_ID
 
 const access = new AccessManager()
@@ -247,6 +249,39 @@ client.on('interactionCreate', async interaction => {
 //
 // targetMessage non-null → edit that bot message instead of posting fresh.
 // expansion=true → prepend an "expand on your prior reply" instruction.
+const OWNER_ID = process.env.GPT_OWNER_ID || ''
+const bangExec = promisify(execFile)
+
+// Owner-only `!cmd` passthrough: raw host-side shell, no LLM, no tokens (mirrors the
+// Claude bots' cc-discord-passthrough). Unsandboxed bash as this bot's user.
+async function runBangCommand(message: Message): Promise<void> {
+  const cmd = message.content.slice(1).trim()
+  if (!cmd) return
+  let out = ''
+  try {
+    const res = await bangExec('bash', ['-lc', cmd], { timeout: 60_000, maxBuffer: 4 * 1024 * 1024, cwd: os.homedir() })
+    out = (res.stdout || '') + (res.stderr ? `\n[stderr] ${res.stderr}` : '')
+  } catch (e: any) {
+    out = `${e?.stdout || ''}${e?.stderr || ''}\n[exit ${e?.code ?? '?'}] ${e?.message ?? String(e)}`
+  }
+  out = out.trim() || '(no output)'
+  const MAX = 1850
+  if (out.length > MAX) out = out.slice(0, MAX) + '\n…(truncated)'
+  try { await message.reply('```\n' + out.replace(/```/g, "'''") + '\n```') } catch (e) { console.error('bang reply failed:', e) }
+}
+
+// API-fallback status: flip the bot presence when codex unexpectedly falls back to
+// the metered API (e.g. sub rate-limit), and back when codex recovers.
+let lastDegraded = false
+function setEnginePresence(degraded: boolean): void {
+  if (degraded === lastDegraded) return
+  lastDegraded = degraded
+  const act = degraded
+    ? { name: '⚠️ on API (codex fell back)', type: ActivityType.Custom, state: '⚠️ on API — sub limit?' }
+    : { name: '📎 actually, on reflection—', type: ActivityType.Custom, state: '📎 actually, on reflection—' }
+  try { client.user?.setPresence({ activities: [act] }) } catch {}
+}
+
 async function handleUserMessage(
   message: Message,
   targetMessage: Message | null,
@@ -386,9 +421,11 @@ async function handleUserMessage(
           channelId,
           onEvent,
         })
+        setEnginePresence(false)
       } catch (e) {
         console.error('codex chat failed, falling back to API:', e)
         result = await apiRespond()
+        setEnginePresence(true)
       }
     } else {
       result = await apiRespond()
@@ -542,6 +579,11 @@ client.on('messageCreate', async (message: Message) => {
     // counted toward the threshold. Single-flight per channel; no-op if a
     // run is already in progress.
     summarizer?.scheduleIfNeeded(channelId)
+  }
+
+  if (OWNER_ID && userId === OWNER_ID && message.content.startsWith('!') && access.isAllowedAndEnabled(userId, channelId)) {
+    await runBangCommand(message)
+    return
   }
 
   if (!access.canHandle({ channelId, userId, isMention })) return

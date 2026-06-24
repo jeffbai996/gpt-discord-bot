@@ -6,7 +6,7 @@ import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot } from './cache-stats.ts'
 import { rewriteEnvVar, scheduleSelfRestart } from './restart.ts'
 
-const ALLOWED_MODELS = ['gpt-5.5', 'gpt-5.4-mini', 'o3'] as const
+const ALLOWED_MODELS = ['gpt-5.5'] as const
 
 export const gptCommand = new SlashCommandBuilder()
   .setName('gpt')
@@ -44,12 +44,10 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Swap the default model (writes OPENAI_MODEL in .env, restarts the bot in ~1.5s).')
     .addStringOption(o => o
       .setName('value')
-      .setDescription('Model name (gpt-5.5 | gpt-5.4-mini | o3)')
+      .setDescription('API-fallback model (gpt-5.5 — codex chat is the default engine)')
       .setRequired(true)
       .addChoices(
-        { name: 'gpt-5.5 — flagship', value: 'gpt-5.5' },
-        { name: 'gpt-5.4-mini — cheaper, low-latency', value: 'gpt-5.4-mini' },
-        { name: 'o3 — strongest reasoning', value: 'o3' },
+        { name: 'gpt-5.5 — flagship (API fallback path)', value: 'gpt-5.5' },
       )
     )
   )
