@@ -6,10 +6,19 @@ export interface ParsedResponse {
   reply: string          // text to post (may be empty if react-only)
 }
 
+// A single dispatched tool call, captured for the post-hoc trace card.
+export interface ToolCall {
+  name: string
+  args: Record<string, unknown>
+  durationMs: number
+  resultPreview: string
+  failed: boolean
+}
+
 export type LifecycleEvent =
   | { type: 'thinking_start' }
-  | { type: 'reasoning_start' }   // first reasoning_summary token (o-series)
-  | { type: 'first_token' }       // first content token observed
+  | { type: 'reasoning_start' }   // first reasoning_summary token (o-series / gpt-5 reasoning)
+  | { type: 'first_token' }       // first reply content token observed
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
   | { type: 'tool_start', name: string, args?: string }
   | { type: 'tool_end', name: string }
@@ -18,6 +27,8 @@ export type LifecycleEvent =
 
 export interface RespondInput {
   systemPrompt: string
+  // Kept as the Chat Completions message shape for backward compatibility with
+  // history.ts / gpt.ts — converted to Responses API input items internally.
   history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
   userMessage: string
   userName: string
@@ -25,7 +36,10 @@ export interface RespondInput {
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'
   // Multimodal content parts. `imageParts` get spliced into the user message
   // alongside the text; `extraText` is appended below userMessage (e.g. audio
-  // transcripts, file extracts, "skipped" notices).
+  // transcripts, file extracts, "skipped" notices). Kept as the Chat
+  // Completions image-part shape (`{ type: 'image_url', image_url: { url } }`)
+  // for backward compat with attachments.ts; converted to Responses
+  // `input_image` parts internally.
   imageParts?: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
   extraText?: string
   // When set, the model is offered the registry's tools and the loop runs
@@ -43,20 +57,25 @@ export interface RespondResult extends ParsedResponse {
     outputTokens: number
     totalTokens: number
     // OpenAI's automatic prompt-prefix caching credits hits as
-    // prompt_tokens_details.cached_tokens in the response usage block.
+    // usage.input_tokens_details.cached_tokens in the Responses usage block.
     // gpt-4o, gpt-5, and the o-series all support it; cached input tokens
     // bill at ~50% of the normal rate. Surface here so callers can log
     // cache health without re-parsing the upstream payload.
     cachedInputTokens: number
     // reasoning_tokens are billed separately on o-series + gpt-5 (internal
-    // chain-of-thought). Already counted toward outputTokens but worth
-    // surfacing for telemetry (lets you see how much the model spent
-    // reasoning vs replying).
+    // chain-of-thought), reported via output_tokens_details.reasoning_tokens.
+    // Already counted toward outputTokens but worth surfacing for telemetry
+    // (lets you see how much the model spent reasoning vs replying).
     reasoningTokens: number
   } | null
   finishReason: string | null
   durationMs: number
   modelUsed: string
+  // The captured reasoning-summary text ('' when the model produced none /
+  // isn't a reasoning model). Rendered by gpt.ts when the `thinking` flag is on.
+  reasoning: string
+  // Per-call tool dispatches, for the post-hoc trace card in gpt.ts.
+  toolCalls: ToolCall[]
 }
 
 export class OpenAIRequestRejected extends Error {
@@ -79,18 +98,95 @@ The "reply" field is the message body posted to the channel; it may use Markdown
 If you have nothing to say (no reply and no react), return {"react": null, "reply": ""}.
 `.trim()
 
-// o-series models accept `reasoning_effort` and reject `temperature`.
+// Native json_schema enforcement for the final-answer turn (Responses
+// `text.format`). Applied only on no-tools turns — keeping schema enforcement
+// off the tool-bound turns avoids any tool/structured-output interaction we
+// can't verify against the model, and the loop unbinds tools on the final turn
+// anyway (when the model stops emitting function_call items). The
+// system-prompt instruction + parseStructuredReply fallback cover tool turns.
+const REPLY_JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    react: { type: ['string', 'null'], description: 'single Unicode emoji or null' },
+    reply: { type: 'string', description: 'message body, may be empty' },
+  },
+  required: ['react', 'reply'],
+  additionalProperties: false,
+} as const
+
+// o-series models accept `reasoning` and reject `temperature`.
 function isReasoningModel(model: string): boolean {
   return model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')
 }
 
-// gpt-5.x rejects custom `temperature` (only default 1.0 is supported) and
-// rejects `max_tokens` in favor of `max_completion_tokens`. The o-series has
-// the same `max_completion_tokens` requirement. Only legacy gpt-4.x models
-// still accept the old `max_tokens` + custom temperature shape — and we don't
-// expose those in the channel flag, so just key off model prefix.
+// gpt-5.x rejects custom `temperature` (only the default is supported). On the
+// Responses API the o-series and gpt-5 reasoning families take the `reasoning`
+// block; legacy gpt-4.x still accepts `temperature`. We don't expose 4.x in the
+// channel flag, so keying off the model prefix is sufficient.
 function isGpt5Family(model: string): boolean {
   return model.startsWith('gpt-5')
+}
+
+// gpt-5.x are reasoning models too — they accept the Responses `reasoning`
+// block (effort + summary). The o-series obviously do. gpt-4.x do not.
+function supportsReasoning(model: string): boolean {
+  return isReasoningModel(model) || isGpt5Family(model)
+}
+
+// Compact, capped preview of a tool result string for the trace card. Mirrors
+// gem-bot's previewToolResult: collapse whitespace, cap at ~120 chars. The
+// registry's dispatch() already returns a string, so the typeof branch is
+// belt-and-suspenders for any future non-string result.
+export function previewToolResult(result: unknown): string {
+  let s: string
+  if (typeof result === 'string') {
+    s = result
+  } else {
+    try { s = JSON.stringify(result) } catch { s = String(result) }
+  }
+  s = s.replace(/\s+/g, ' ').trim()
+  return s.length > 120 ? s.slice(0, 117) + '...' : s
+}
+
+// Compact one-line arg preview for the `tool_start` lifecycle event (the live
+// reaction path). The richer trace card in gpt.ts uses its own argDigest over
+// the captured ToolCall.args; this is just the inline "name(preview)" string.
+function argPreview(args: Record<string, unknown>): string {
+  return Object.entries(args)
+    .map(([k, v]) => {
+      const sv = typeof v === 'string' ? v : JSON.stringify(v)
+      const short = sv.length > 40 ? sv.slice(0, 40) + '…' : sv
+      return `${k}: ${short}`
+    })
+    .join(', ')
+}
+
+// Convert a Chat Completions image-part (`{ type:'image_url', image_url:{url} }`)
+// into a Responses `input_image` content part. attachments.ts builds the former
+// shape; the Responses API wants `{ type:'input_image', image_url: <url> }`.
+function toResponsesImagePart(
+  p: OpenAI.Chat.Completions.ChatCompletionContentPartImage
+): OpenAI.Responses.ResponseInputImage {
+  const url = typeof p.image_url === 'string' ? p.image_url : p.image_url.url
+  const detail = (typeof p.image_url === 'object' && p.image_url.detail) || 'auto'
+  return { type: 'input_image', image_url: url, detail }
+}
+
+// Convert the Chat-shaped history into Responses API input message items.
+// History entries are simple `{ role, content: string }` (see
+// history.ts/formatHistoryForOpenAI), so a 1:1 map to EasyInputMessage works.
+// Roles other than user/assistant are coerced to user (none are produced
+// today, but keeps the conversion total).
+function historyToInputItems(
+  history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
+): OpenAI.Responses.ResponseInputItem[] {
+  const items: OpenAI.Responses.ResponseInputItem[] = []
+  for (const m of history) {
+    if (typeof m.content !== 'string') continue  // history is string-content only
+    const role = m.role === 'assistant' ? 'assistant' : 'user'
+    items.push({ role, content: m.content })
+  }
+  return items
 }
 
 export class OpenAIClient {
@@ -110,106 +206,101 @@ export class OpenAIClient {
       ? `${userName}: ${userMessage}\n\n${extraText}`
       : `${userName}: ${userMessage}`
 
-    const userContent: OpenAI.Chat.Completions.ChatCompletionUserMessageParam['content'] =
+    // Build the user turn. Text-only → a plain string content; with images →
+    // a content-part list (input_text + input_image parts).
+    const userItem: OpenAI.Responses.ResponseInputItem =
       (imageParts && imageParts.length > 0)
-        ? [{ type: 'text', text: userText }, ...imageParts]
-        : userText
+        ? {
+            role: 'user',
+            content: [
+              { type: 'input_text', text: userText },
+              ...imageParts.map(toResponsesImagePart),
+            ],
+          }
+        : { role: 'user', content: userText }
 
-    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-      { role: 'system', content: `${systemPrompt}\n\n---\n\n${STRUCTURED_OUTPUT_INSTRUCTION}` },
-      ...history,
-      { role: 'user', content: userContent }
+    // The running input list. Each tool round-trip appends the model's
+    // function_call items + our function_call_output items, then re-sends.
+    const inputItems: OpenAI.Responses.ResponseInputItem[] = [
+      ...historyToInputItems(history),
+      userItem,
     ]
 
-    const reasoning = isReasoningModel(model)
-    const gpt5 = isGpt5Family(model)
+    const reasoningCapable = supportsReasoning(model)
+    // Map the channel-flag effort onto the Responses `reasoning.effort` enum
+    // (low | medium | high — 'minimal' folds to 'low').
     const sdkEffort: 'low' | 'medium' | 'high' =
       reasoningEffort === 'minimal' ? 'low'
         : reasoningEffort === 'high' ? 'high'
         : reasoningEffort === 'low' ? 'low'
         : 'medium'
-    const familyParams = reasoning
-      ? { reasoning_effort: sdkEffort, max_completion_tokens: 4096 }
-      : gpt5
-        ? { max_completion_tokens: 4096 }
-        : { temperature: 0.7, max_tokens: 4096 }
 
-    const tools = toolRegistry && toolRegistry.size() > 0 ? toolRegistry.toOpenAITools() : undefined
+    // System prompt rides the `instructions` param. We still append the
+    // structured-output instruction because tool-bound turns don't carry the
+    // native json_schema (see REPLY_JSON_SCHEMA note) and the parser leans on it.
+    const instructions = `${systemPrompt}\n\n---\n\n${STRUCTURED_OUTPUT_INSTRUCTION}`
+
+    const tools = toolRegistry && toolRegistry.size() > 0
+      ? toolRegistry.toResponsesTools()
+      : undefined
 
     onEvent?.({ type: 'thinking_start' })
 
     let totalUsage: RespondResult['usage'] = null
     let modelUsed = model
     let lastFinish: string | null = null
+    let reasoningAcc = ''
+    const toolCalls: ToolCall[] = []
     // Tool-loop cap. 3 rounds covers realistic tool chains (e.g. fetch then
-    // summarize) without giving a misbehaving model room to spin 5 expensive
-    // round-trips before giving up. Override with GPT_MAX_TOOL_LOOPS=<n>.
-    // Was 5 — sister bot gem-discord-bot caps at 3, matching that here.
+    // summarize) without giving a misbehaving model room to spin expensive
+    // round-trips. Override with GPT_MAX_TOOL_LOOPS=<n>.
     const MAX_LOOPS = parseInt(process.env.GPT_MAX_TOOL_LOOPS ?? '3', 10)
 
     try {
       for (let iter = 0; iter < MAX_LOOPS; iter++) {
-        // Stream one round-trip. JSON-mode is incompatible with tool-calls in
-        // many models; only enforce it on the FINAL turn (when the assistant
-        // emits content rather than tool_calls). We approximate this by only
-        // requesting `response_format` when no tools are bound — the loop
-        // unbinds tools on the final turn after dispatching whatever the
-        // model asked for.
-        //
-        // But that's fragile. Simpler: when tools are bound, we ask for
-        // tool-call OR free text (no json_object), and only impose JSON
-        // output via the system-prompt instruction. The parser handles
-        // free-text → "all reply" fallback already.
-        const reqBody: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming = {
+        // Stream one round-trip. Native json_schema enforcement only when NO
+        // tools are bound this turn (see REPLY_JSON_SCHEMA). When tools are
+        // bound we rely on the system-prompt instruction + parseStructuredReply.
+        const reqBody: OpenAI.Responses.ResponseCreateParamsStreaming = {
           model,
-          messages,
+          instructions,
+          input: inputItems,
           stream: true,
-          stream_options: { include_usage: true },
-          ...familyParams,
-          ...(tools ? { tools, tool_choice: 'auto' } : { response_format: { type: 'json_object' } })
+          max_output_tokens: 4096,
+          ...(reasoningCapable
+            ? { reasoning: { effort: sdkEffort, summary: 'auto' } }
+            : { temperature: 0.7 }),
+          ...(tools
+            ? { tools, tool_choice: 'auto' }
+            : {
+                text: {
+                  format: {
+                    type: 'json_schema',
+                    name: 'discord_reply',
+                    schema: REPLY_JSON_SCHEMA as unknown as Record<string, unknown>,
+                    strict: true,
+                  },
+                },
+              }),
         }
 
-        const stream = await this.client.chat.completions.create(reqBody)
+        const stream = await this.client.responses.create(reqBody)
 
         let contentAcc = ''
-        let toolCallAcc: Map<number, { id: string; name: string; args: string }> = new Map()
+        // call_id -> accumulating function_call (args stream in deltas).
+        const fnCallAcc = new Map<string, { call_id: string; name: string; args: string }>()
+        // item_id -> call_id, so argument-delta events (keyed by item_id) route
+        // to the right accumulator.
+        const itemIdToCallId = new Map<string, string>()
         let firstTokenSeen = false
         let lastPartialEmit = ''
-        let finishReason: string | null = null
-
         let reasoningStartEmitted = false
-        for await (const chunk of stream) {
-          if (chunk.model) modelUsed = chunk.model
-          const choice = chunk.choices?.[0]
-          if (choice) {
-            const delta = choice.delta as {
-              content?: string | null
-              // o-series and gpt-5 reasoning models surface chain-of-thought
-              // summary deltas as `reasoning_content` (legacy o1 SDK shape)
-              // or via `reasoning.summary[*].delta` (newer responses). Cover
-              // both shapes; first nonempty token of either triggers the 🧠
-              // lifecycle reaction once per turn.
-              reasoning_content?: string | null
-              reasoning?: {
-                summary?: Array<{ delta?: string; text?: string }>
-              }
-              tool_calls?: Array<{
-                index: number
-                id?: string
-                function?: { name?: string; arguments?: string }
-              }>
-            }
-            if (!reasoningStartEmitted) {
-              const hasReasoning =
-                (typeof delta?.reasoning_content === 'string' && delta.reasoning_content.length > 0) ||
-                (delta?.reasoning?.summary?.some(s => (s.delta?.length ?? s.text?.length ?? 0) > 0) ?? false)
-              if (hasReasoning) {
-                reasoningStartEmitted = true
-                onEvent?.({ type: 'reasoning_start' })
-              }
-            }
-            if (delta?.content) {
-              contentAcc += delta.content
+        let searchEmitted = false
+
+        for await (const event of stream) {
+          switch (event.type) {
+            case 'response.output_text.delta': {
+              contentAcc += event.delta
               if (!firstTokenSeen) {
                 firstTokenSeen = true
                 onEvent?.({ type: 'first_token' })
@@ -219,52 +310,140 @@ export class OpenAIClient {
                 lastPartialEmit = partial
                 onEvent?.({ type: 'partial', reply: partial })
               }
+              break
             }
-            if (delta?.tool_calls) {
-              for (const tc of delta.tool_calls) {
-                const idx = tc.index
-                const existing = toolCallAcc.get(idx) ?? { id: '', name: '', args: '' }
-                if (tc.id) existing.id = tc.id
-                if (tc.function?.name) existing.name = tc.function.name
-                if (tc.function?.arguments) existing.args += tc.function.arguments
-                toolCallAcc.set(idx, existing)
-              }
-            }
-            if (choice.finish_reason) finishReason = choice.finish_reason
-          }
-          if (chunk.usage) {
-            // OpenAI's usage block has optional nested details:
-            //   prompt_tokens_details.cached_tokens — auto prompt caching hits
-            //   completion_tokens_details.reasoning_tokens — o-series CoT cost
-            // Both default to 0 when unset (older models / non-reasoning paths).
-            const usage = chunk.usage as typeof chunk.usage & {
-              prompt_tokens_details?: { cached_tokens?: number }
-              completion_tokens_details?: { reasoning_tokens?: number }
-            }
-            const u = {
-              inputTokens: usage.prompt_tokens ?? 0,
-              outputTokens: usage.completion_tokens ?? 0,
-              totalTokens: usage.total_tokens ?? 0,
-              cachedInputTokens: usage.prompt_tokens_details?.cached_tokens ?? 0,
-              reasoningTokens: usage.completion_tokens_details?.reasoning_tokens ?? 0,
-            }
-            // Accumulate across iterations; later turns add to earlier ones.
-            totalUsage = totalUsage
-              ? {
-                  inputTokens: totalUsage.inputTokens + u.inputTokens,
-                  outputTokens: totalUsage.outputTokens + u.outputTokens,
-                  totalTokens: totalUsage.totalTokens + u.totalTokens,
-                  cachedInputTokens: totalUsage.cachedInputTokens + u.cachedInputTokens,
-                  reasoningTokens: totalUsage.reasoningTokens + u.reasoningTokens,
+            case 'response.reasoning_summary_text.delta': {
+              if (event.delta) {
+                reasoningAcc += event.delta
+                if (!reasoningStartEmitted) {
+                  reasoningStartEmitted = true
+                  onEvent?.({ type: 'reasoning_start' })
                 }
-              : u
+              }
+              break
+            }
+            case 'response.output_item.added': {
+              // A new output item begins. For function_call items, register the
+              // call_id<->item_id mapping and seed the accumulator with the name
+              // (the name arrives here; the arguments stream as deltas).
+              const item = event.item
+              if (item.type === 'function_call') {
+                itemIdToCallId.set(item.id ?? item.call_id, item.call_id)
+                const existing = fnCallAcc.get(item.call_id) ?? { call_id: item.call_id, name: '', args: '' }
+                if (item.name) existing.name = item.name
+                if (item.arguments) existing.args = item.arguments
+                fnCallAcc.set(item.call_id, existing)
+              }
+              break
+            }
+            case 'response.function_call_arguments.delta': {
+              const callId = itemIdToCallId.get(event.item_id)
+              if (callId) {
+                const existing = fnCallAcc.get(callId)
+                if (existing) existing.args += event.delta
+              }
+              break
+            }
+            case 'response.function_call_arguments.done': {
+              const callId = itemIdToCallId.get(event.item_id)
+              if (callId) {
+                const existing = fnCallAcc.get(callId)
+                // Prefer the finalized arguments string when present.
+                if (existing && event.arguments) existing.args = event.arguments
+              }
+              break
+            }
+            case 'response.output_item.done': {
+              // Final view of an item — captures the function_call's name/args/
+              // call_id authoritatively (covers cases where the added/delta
+              // events were missed or the item was emitted whole).
+              const item = event.item
+              if (item.type === 'function_call') {
+                const existing = fnCallAcc.get(item.call_id) ?? { call_id: item.call_id, name: '', args: '' }
+                if (item.name) existing.name = item.name
+                if (item.arguments) existing.args = item.arguments
+                fnCallAcc.set(item.call_id, existing)
+              }
+              break
+            }
+            case 'response.web_search_call.searching':
+            case 'response.web_search_call.in_progress': {
+              if (!searchEmitted) {
+                searchEmitted = true
+                onEvent?.({ type: 'searching' })
+              }
+              break
+            }
+            case 'response.completed': {
+              const resp = event.response
+              lastFinish = resp.status ?? lastFinish
+              if (resp.model) modelUsed = resp.model
+              const u = resp.usage
+              if (u) {
+                const mapped = {
+                  inputTokens: u.input_tokens ?? 0,
+                  outputTokens: u.output_tokens ?? 0,
+                  totalTokens: u.total_tokens ?? 0,
+                  cachedInputTokens: u.input_tokens_details?.cached_tokens ?? 0,
+                  reasoningTokens: u.output_tokens_details?.reasoning_tokens ?? 0,
+                }
+                totalUsage = totalUsage
+                  ? {
+                      inputTokens: totalUsage.inputTokens + mapped.inputTokens,
+                      outputTokens: totalUsage.outputTokens + mapped.outputTokens,
+                      totalTokens: totalUsage.totalTokens + mapped.totalTokens,
+                      cachedInputTokens: totalUsage.cachedInputTokens + mapped.cachedInputTokens,
+                      reasoningTokens: totalUsage.reasoningTokens + mapped.reasoningTokens,
+                    }
+                  : mapped
+              }
+              break
+            }
+            case 'response.failed':
+            case 'response.incomplete': {
+              const resp = event.response
+              lastFinish = resp.status ?? lastFinish
+              // An incomplete response (e.g. max_output_tokens) still carries
+              // whatever text streamed; surface 'length' so gpt.ts marks it.
+              if (resp.incomplete_details?.reason === 'max_output_tokens') {
+                lastFinish = 'length'
+              }
+              const u = resp.usage
+              if (u) {
+                const mapped = {
+                  inputTokens: u.input_tokens ?? 0,
+                  outputTokens: u.output_tokens ?? 0,
+                  totalTokens: u.total_tokens ?? 0,
+                  cachedInputTokens: u.input_tokens_details?.cached_tokens ?? 0,
+                  reasoningTokens: u.output_tokens_details?.reasoning_tokens ?? 0,
+                }
+                totalUsage = totalUsage
+                  ? {
+                      inputTokens: totalUsage.inputTokens + mapped.inputTokens,
+                      outputTokens: totalUsage.outputTokens + mapped.outputTokens,
+                      totalTokens: totalUsage.totalTokens + mapped.totalTokens,
+                      cachedInputTokens: totalUsage.cachedInputTokens + mapped.cachedInputTokens,
+                      reasoningTokens: totalUsage.reasoningTokens + mapped.reasoningTokens,
+                    }
+                  : mapped
+              }
+              break
+            }
+            case 'error': {
+              // Stream-level error event (type: 'error'). Throw so the catch
+              // block maps it to the right OpenAIRequestRejected reason where
+              // applicable. code/message sit directly on the event.
+              throw Object.assign(new Error(event.message ?? 'response error'), { code: event.code ?? undefined })
+            }
+            default:
+              break
           }
         }
 
-        lastFinish = finishReason
+        const fnCalls = [...fnCallAcc.values()].filter(c => c.name)
 
         // No tool calls → final answer.
-        if (toolCallAcc.size === 0 || finishReason !== 'tool_calls') {
+        if (fnCalls.length === 0) {
           onEvent?.({ type: 'done' })
           const parsed = parseStructuredReply(contentAcc)
           return {
@@ -273,43 +452,58 @@ export class OpenAIClient {
             usage: totalUsage,
             finishReason: lastFinish,
             durationMs: Date.now() - start,
-            modelUsed
+            modelUsed,
+            reasoning: reasoningAcc.trim(),
+            toolCalls,
           }
         }
 
-        // Tool calls present. Append the assistant's tool-call message to
-        // history, dispatch each tool, append results, then loop.
-        const toolCalls = [...toolCallAcc.entries()].sort((a, b) => a[0] - b[0]).map(([_, v]) => v)
-        messages.push({
-          role: 'assistant',
-          content: contentAcc || null,
-          tool_calls: toolCalls.map(tc => ({
-            id: tc.id || `call_${Math.random().toString(36).slice(2, 10)}`,
-            type: 'function' as const,
-            function: { name: tc.name, arguments: tc.args || '{}' }
-          }))
-        })
+        // Tool calls present. Append the model's function_call items to the
+        // input, then dispatch each and append a matching function_call_output
+        // (correlated by call_id), then loop. Per the Responses function-calling
+        // contract: both the function_call item and the function_call_output
+        // item must be present in the next request's input.
+        for (const c of fnCalls) {
+          inputItems.push({
+            type: 'function_call',
+            call_id: c.call_id,
+            name: c.name,
+            arguments: c.args || '{}',
+          })
+        }
 
-        for (const tc of toolCalls) {
+        for (const c of fnCalls) {
           if (!toolRegistry) break
-          const isSearch = tc.name === 'web_search'
+          const isSearch = c.name === 'web_search'
           let parsedArgs: Record<string, unknown> = {}
-          try { parsedArgs = JSON.parse(tc.args || '{}') } catch { /* empty args */ }
-          // Compact one-line arg preview for the tool-trace card.
-          const argPreview = Object.entries(parsedArgs)
-            .map(([k, v]) => {
-              const sv = typeof v === 'string' ? v : JSON.stringify(v)
-              const short = sv.length > 40 ? sv.slice(0, 40) + '…' : sv
-              return `${k}: ${short}`
-            })
-            .join(', ')
-          onEvent?.({ type: isSearch ? 'searching' : 'tool_start', name: tc.name, args: argPreview } as LifecycleEvent)
-          const result = await toolRegistry.dispatch(tc.name, parsedArgs, { channelId, userId })
-          onEvent?.({ type: 'tool_end', name: tc.name })
-          messages.push({
-            role: 'tool',
-            tool_call_id: tc.id || `call_${Math.random().toString(36).slice(2, 10)}`,
-            content: result
+          try { parsedArgs = JSON.parse(c.args || '{}') } catch { /* empty / malformed args */ }
+          onEvent?.(
+            isSearch
+              ? { type: 'searching' }
+              : { type: 'tool_start', name: c.name, args: argPreview(parsedArgs) }
+          )
+          const t0 = Date.now()
+          let resultStr = ''
+          let failed = false
+          try {
+            resultStr = await toolRegistry.dispatch(c.name, parsedArgs, { channelId, userId })
+          } catch (e: any) {
+            failed = true
+            resultStr = `Error in ${c.name}: ${e?.message ?? String(e)}`
+          }
+          const durationMs = Date.now() - t0
+          onEvent?.({ type: 'tool_end', name: c.name })
+          toolCalls.push({
+            name: c.name,
+            args: parsedArgs,
+            durationMs,
+            resultPreview: previewToolResult(resultStr),
+            failed,
+          })
+          inputItems.push({
+            type: 'function_call_output',
+            call_id: c.call_id,
+            output: resultStr,
           })
         }
       }
@@ -322,7 +516,9 @@ export class OpenAIClient {
         usage: totalUsage,
         finishReason: lastFinish ?? 'tool_loop_exhausted',
         durationMs: Date.now() - start,
-        modelUsed
+        modelUsed,
+        reasoning: reasoningAcc.trim(),
+        toolCalls,
       }
     } catch (e: any) {
       const status = e?.status ?? e?.response?.status
@@ -330,7 +526,7 @@ export class OpenAIClient {
       if (status === 429 || code === 'rate_limit_exceeded' || code === 'insufficient_quota') {
         throw new OpenAIRequestRejected(`rate_limited (${code ?? status})`, e)
       }
-      if (status === 400 && /content.*polic|safety/i.test(e?.message ?? '')) {
+      if ((status === 400 && /content.*polic|safety/i.test(e?.message ?? '')) || code === 'content_policy_violation') {
         throw new OpenAIRequestRejected('content_policy', e)
       }
       throw e

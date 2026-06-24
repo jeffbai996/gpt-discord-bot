@@ -27,6 +27,42 @@ import OpenAI from 'openai'
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 dotenv.config({ path: path.join(STATE_DIR, '.env') })
 
+// --- Tool-trace card helpers (ported from gem-bot/src/gemma.ts) -------------
+// Tool calls render inside a ```diff``` fence as `+ ● ToolName(digest) [Nms]`
+// — the `+` makes Discord's diff highlighter color the line GREEN; a failed
+// call uses `- ● ... FAILED` (RED). The `●` dot marks "this is a tool call".
+const ARG_DIGEST_PREFERENCE = [
+  'file_path', 'notebook_path', 'pattern', 'command', 'url',
+  'symbols', 'symbol', 'ticker', 'query',
+]
+
+// Single-line, ID-shaped arg digest, <= maxLen chars.
+function argDigest(args: Record<string, unknown>, maxLen = 80): string {
+  if (!args || typeof args !== 'object') return ''
+  for (const key of ARG_DIGEST_PREFERENCE) {
+    const v = (args as Record<string, unknown>)[key]
+    if (typeof v === 'string') {
+      let s = v.trim().replace(/\n/g, ' ')
+      if (s.length > maxLen) s = s.slice(0, maxLen - 1) + '…'
+      return s
+    }
+  }
+  let s: string
+  try { s = JSON.stringify(args) } catch { s = String(args) }
+  s = s.replace(/\n/g, ' ')
+  if (s.length > maxLen) s = s.slice(0, maxLen - 1) + '…'
+  return s
+}
+
+// mcp__server__ns__tool -> tool (last segment).
+function shortToolName(name: string): string {
+  if (name.startsWith('mcp__')) {
+    const parts = name.split('__')
+    if (parts.length >= 3) return parts[parts.length - 1]
+  }
+  return name
+}
+
 if (!process.env.DISCORD_BOT_TOKEN) {
   console.error(`FATAL: DISCORD_BOT_TOKEN missing. Set in ${path.join(STATE_DIR, '.env')}`)
   process.exit(1)
@@ -267,23 +303,20 @@ async function handleUserMessage(
     }
   }
 
-  // Tool-trace accumulator — diff-style lines, posted before the reply
-  // when flags.trace is on (parity with the Claude bots' tool trace).
-  const traceLines: string[] = []
-
   // Throttle Discord edits during streaming.
   let lastEditAt = 0
   let lastEditedText = ''
   const EDIT_INTERVAL_MS = 700
 
+  // Lifecycle reactions still fire live via onEvent; the tool trace itself is
+  // now built post-hoc from result.toolCalls (see the trace card below), so we
+  // no longer accumulate raw trace lines here.
   const onEvent = (event: LifecycleEvent) => {
     if (event.type === 'thinking_start') { void applyLifecycle(message, 'thinking'); return }
-    if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); traceLines.push('+ ● 🧠 reasoning'); return }
-    if (event.type === 'searching') { void applyLifecycle(message, 'searching'); traceLines.push('+ ● web_search'); return }
+    if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
+    if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
-      const a = (event as { args?: string }).args
-      traceLines.push(`+ ● ${event.name}(${a ?? ''})`)
       return
     }
     if (event.type === 'partial' && workMessage) {
@@ -375,10 +408,35 @@ async function handleUserMessage(
       return
     }
 
-    // Tool-trace card — posted before the reply when enabled and any
-    // tool/reasoning step ran this turn. Diff fences render red/green.
-    if (flags.trace && traceLines.length > 0 && message.channel.isSendable()) {
-      const card = '🔧 **Tool trace**\n```diff\n' + traceLines.join('\n') + '\n```'
+    // Thinking card — when enabled and the model produced a reasoning summary,
+    // post it as its OWN message (keeps it off the reply, mirrors the trace
+    // card). Blockquoted, chunked if long. Sparse on non-reasoning models is
+    // fine — we only render when there's actual reasoning text.
+    if (flags.thinking && result.reasoning?.trim() && message.channel.isSendable()) {
+      const quoted = result.reasoning.trim().split('\n').map(l => `> ${l}`).join('\n')
+      const thinkingCard = `💭 **Thinking:**\n${quoted}`
+      for (const piece of chunk(thinkingCard)) {
+        try { await message.channel.send(piece) } catch {}
+      }
+    }
+
+    // Tool-trace card — posted before the reply when enabled and any tool ran
+    // this turn. Built post-hoc from result.toolCalls in the gem-bot diff
+    // format: `+ ● shortName(argDigest) [Nms]` (green), `- ● ... FAILED [Nms]`
+    // (red) on failure, plus a grey `  ⎿ resultPreview` line.
+    if (flags.trace && result.toolCalls.length > 0 && message.channel.isSendable()) {
+      const lines: string[] = []
+      for (const call of result.toolCalls) {
+        const prefix = call.failed ? '- ● ' : '+ ● '
+        const tail = call.failed ? ' FAILED' : ''
+        lines.push(`${prefix}${shortToolName(call.name)}(${argDigest(call.args)})${tail} [${call.durationMs}ms]`)
+        if (call.resultPreview) {
+          let rp = call.resultPreview.replace(/\n/g, ' ')
+          if (rp.length > 86) rp = rp.slice(0, 86) + '…'
+          lines.push(`  ⎿ ${rp}`)
+        }
+      }
+      const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n') + '\n```'
       try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
     }
 

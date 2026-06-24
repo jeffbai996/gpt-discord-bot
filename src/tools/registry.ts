@@ -51,6 +51,25 @@ export class ToolRegistry {
     })
   }
 
+  // Responses API flattens the function-tool shape: name/description/parameters
+  // sit at the top level (no nested `function` wrapper) alongside
+  // `type: 'function'`. `strict: false` keeps the existing loose-schema tools
+  // working — strict mode would require every property be `required` plus
+  // `additionalProperties: false`, which our tool schemas don't all satisfy.
+  // The caller passes this as the `tools` request param.
+  toResponsesTools(): OpenAI.Responses.FunctionTool[] {
+    return this.order.map(n => {
+      const t = this.tools.get(n)!
+      return {
+        type: 'function',
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters as Record<string, unknown>,
+        strict: false,
+      }
+    })
+  }
+
   size(): number {
     return this.tools.size
   }

@@ -18,6 +18,8 @@ function makeResult(over: Partial<RespondResult['usage']> = {}, model = 'gpt-5.5
     finishReason: 'stop',
     durationMs: 100,
     modelUsed: model,
+    reasoning: '',
+    toolCalls: [],
   }
 }
 
@@ -89,6 +91,8 @@ test('cache-stats: ignores turns with no usage', () => {
     finishReason: 'stop',
     durationMs: 1,
     modelUsed: 'gpt-5.5',
+    reasoning: '',
+    toolCalls: [],
   })
   assert.equal(snapshot('ch1').turns, 0)
 })

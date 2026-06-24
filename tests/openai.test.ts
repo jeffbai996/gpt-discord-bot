@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseStructuredReply, extractPartialReply } from '../src/openai.ts'
+import { parseStructuredReply, extractPartialReply, previewToolResult } from '../src/openai.ts'
 
 test('parseStructuredReply: well-formed JSON', () => {
   const out = parseStructuredReply('{"react": "👍", "reply": "hello"}')
@@ -68,4 +68,28 @@ test('extractPartialReply: unescapes common sequences', () => {
 
 test('extractPartialReply: tolerates whitespace variations around colon', () => {
   assert.equal(extractPartialReply('{ "reply"   :   "x'), 'x')
+})
+
+test('previewToolResult: passes short strings through unchanged', () => {
+  assert.equal(previewToolResult('hello world'), 'hello world')
+})
+
+test('previewToolResult: collapses internal whitespace', () => {
+  assert.equal(previewToolResult('a\n\n  b\tc'), 'a b c')
+})
+
+test('previewToolResult: caps long strings at 120 chars with ellipsis', () => {
+  const long = 'x'.repeat(200)
+  const out = previewToolResult(long)
+  assert.equal(out.length, 120)
+  assert.ok(out.endsWith('...'))
+  assert.equal(out, 'x'.repeat(117) + '...')
+})
+
+test('previewToolResult: JSON-stringifies non-string results', () => {
+  assert.equal(previewToolResult({ a: 1, b: 'two' }), '{"a":1,"b":"two"}')
+})
+
+test('previewToolResult: empty string stays empty', () => {
+  assert.equal(previewToolResult(''), '')
 })
