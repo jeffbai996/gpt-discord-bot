@@ -20,7 +20,6 @@ import {
 } from '@discordjs/voice'
 import prism from 'prism-media'
 import { PassThrough, Readable } from 'node:stream'
-import { execFileSync } from 'node:child_process'
 import OpenAI from 'openai'
 import type { VoiceBasedChannel } from 'discord.js'
 
@@ -32,51 +31,10 @@ const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
 // differs from the realtime set), so it has its own knob with a safe default.
 const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy'
 
-// Thinking cue played on a cadence while the model composes, so the gap between
-// the user finishing and the model speaking isn't dead air.
-//
-// EXACT MATCH: ChatGPT's actual thinking sound is a proprietary audio asset that
-// can't be reproduced by tone synthesis. Set VOICE_THINK_FILE to a path (any
-// format ffmpeg can read) and that clip is decoded once and played as the cue —
-// the only way to truly match ChatGPT. Without it, a soft synth fallback runs.
-const THINK_FILE = process.env.VOICE_THINK_FILE
-const FFMPEG = process.env.FFMPEG_PATH || 'ffmpeg'
-const THINK_HZ = Number(process.env.VOICE_THINK_HZ || '330')
-const THINK_GAIN = Number(process.env.VOICE_THINK_GAIN || '0.05')
-const THINK_MS = Number(process.env.VOICE_THINK_MS || '220')
-const THINK_EVERY_MS = Number(process.env.VOICE_THINK_EVERY_MS || '1100')
-
-/** Soft synth fallback: two stacked sines (fundamental + octave) under a Hann
- *  window — warmer and less "beep" than a single tone. 48k stereo PCM16LE. */
-function synthThinkingBlip(): Buffer {
-  const rate = 48000, n = Math.floor((rate * THINK_MS) / 1000)
-  const buf = Buffer.allocUnsafe(n * 4)
-  for (let i = 0; i < n; i++) {
-    const hann = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (n - 1)))
-    const tone = 0.7 * Math.sin((2 * Math.PI * THINK_HZ * i) / rate)
-               + 0.3 * Math.sin((2 * Math.PI * THINK_HZ * 2 * i) / rate)
-    const v = (Math.max(-1, Math.min(1, tone * hann * THINK_GAIN)) * 32767) | 0
-    buf.writeInt16LE(v, i * 4)
-    buf.writeInt16LE(v, i * 4 + 2)
-  }
-  return buf
-}
-
-/** The cue buffer: the provided file (decoded to 48k stereo PCM16 via ffmpeg)
- *  if VOICE_THINK_FILE is set + readable, else the synth fallback. */
-function loadThinkingCue(log: (m: string) => void): Buffer {
-  if (THINK_FILE) {
-    try {
-      const pcm = execFileSync(FFMPEG,
-        ['-v', 'quiet', '-i', THINK_FILE, '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'],
-        { maxBuffer: 64 * 1024 * 1024 })
-      if (pcm.length > 0) { log(`thinking cue: using file ${THINK_FILE}`); return pcm }
-    } catch (e) {
-      log(`thinking cue: file decode failed (${(e as Error).message}); using synth`)
-    }
-  }
-  return synthThinkingBlip()
-}
+// NOTE: the audio "thinking" cue (a blip played while the model composed) was
+// removed 2026-06-23 (Jeff: "just get rid of the thinking sound, we'll figure it
+// out later"). The composing-phase handler now only resets playback for the next
+// turn — see onComposing(). gem-voice's tone was removed in the same pass.
 
 export interface VoiceSessionOptions {
   apiKey: string
@@ -95,13 +53,9 @@ export class VoiceSession {
   private playback?: PassThrough
   private readonly subscribed = new Set<string>()
   private readonly log: (msg: string) => void
-  private thinking = false
-  private thinkingTimer?: ReturnType<typeof setInterval>
-  private readonly blip: Buffer
 
   constructor(private readonly opts: VoiceSessionOptions) {
     this.log = opts.log ?? (() => {})
-    this.blip = loadThinkingCue(this.log)   // file cue if VOICE_THINK_FILE set, else synth
   }
 
   async join(channel: VoiceBasedChannel): Promise<void> {
@@ -135,8 +89,7 @@ export class VoiceSession {
     })
     this.realtime.on('audio', (pcm24: Buffer) => this.playOut(pcm24))
     this.realtime.on('speechStarted', () => this.onBargeIn())
-    this.realtime.on('speechStopped', () => this.startThinking())  // model composing
-    this.realtime.on('responseDone', () => this.stopThinking())
+    this.realtime.on('speechStopped', () => this.onComposing())  // model composing
     this.realtime.on('error', (e: Error) => this.log(`realtime error: ${e.message}`))
     this.realtime.on('close', () => this.log('realtime socket closed'))
     // ALWAYS handle tool calls — even with no handler wired. An unanswered tool
@@ -174,7 +127,6 @@ export class VoiceSession {
   /** Feed a model audio delta (24k mono) to the player as 48k stereo Raw. */
   private playOut(pcm24Mono: Buffer): void {
     if (!this.player) return
-    this.stopThinking()            // real audio arrived — drop the thinking cue
     if (!this.playback) {
       this.playback = new PassThrough()
       const resource = createAudioResource(this.playback, { inputType: StreamType.Raw })
@@ -183,30 +135,16 @@ export class VoiceSession {
     this.playback.write(openAIToDiscord(pcm24Mono))
   }
 
-  /** Start the soft "thinking" cue. Also resets the prior turn's playback so the
-   *  next response's audio starts on a fresh stream (fixes turn-2-silent). */
-  private startThinking(): void {
+  /** The user finished and the model is now composing. Reset the prior turn's
+   *  playback so the next response's audio starts on a fresh stream (fixes
+   *  turn-2-silent). The audio "thinking" cue that used to fire here was removed. */
+  private onComposing(): void {
     if (!this.player) return
     if (this.playback) { this.playback.end(); this.playback = undefined }
-    if (this.thinking) return
-    this.thinking = true
-    this.playBlip()
-    this.thinkingTimer = setInterval(() => { if (this.thinking) this.playBlip() }, THINK_EVERY_MS)
-  }
-
-  private stopThinking(): void {
-    this.thinking = false
-    if (this.thinkingTimer) { clearInterval(this.thinkingTimer); this.thinkingTimer = undefined }
-  }
-
-  private playBlip(): void {
-    if (!this.player) return
-    this.player.play(createAudioResource(Readable.from(this.blip), { inputType: StreamType.Raw }))
   }
 
   /** User interrupted while the bot was talking — stop playback now. */
   private onBargeIn(): void {
-    this.stopThinking()
     this.realtime?.cancelResponse()
     if (this.playback) {
       this.playback.end()
@@ -257,7 +195,6 @@ export class VoiceSession {
   }
 
   leave(): void {
-    this.stopThinking()
     try { this.playback?.end() } catch { /* */ }
     try { this.player?.stop(true) } catch { /* */ }
     try { this.realtime?.close() } catch { /* */ }
