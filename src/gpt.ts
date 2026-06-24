@@ -8,7 +8,8 @@ import { chunk } from './chunk.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
-import type { LifecycleEvent } from './openai.ts'
+import type { LifecycleEvent, RespondResult } from './openai.ts'
+import { respondViaCodex } from './codex-chat.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
@@ -328,7 +329,11 @@ async function handleUserMessage(
   }
 
   try {
-    const result = await openai.respond({
+    // Codex-as-default-chat: route text turns through the Codex CLI (flat-sub,
+    // self-web-searching) instead of the metered API. Falls back to the API on
+    // any codex error, and skips codex when there are images (the CLI can't take
+    // them). Kill switch: GPT_CODEX_CHAT=0.
+    const apiRespond = () => openai.respond({
       systemPrompt,
       history,
       userMessage: message.content,
@@ -342,6 +347,26 @@ async function handleUserMessage(
       userId,
       onEvent
     })
+
+    let result: RespondResult
+    if (process.env.GPT_CODEX_CHAT !== '0' && imageParts.length === 0) {
+      try {
+        result = await respondViaCodex({
+          systemPrompt,
+          history,
+          userMessage: message.content,
+          userName: message.author.username,
+          reasoningEffort: flags.reasoning,
+          extraText,
+          onEvent,
+        })
+      } catch (e) {
+        console.error('codex chat failed, falling back to API:', e)
+        result = await apiRespond()
+      }
+    } else {
+      result = await apiRespond()
+    }
 
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
