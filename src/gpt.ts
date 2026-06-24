@@ -8,7 +8,7 @@ import { chunk } from './chunk.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
-import type { LifecycleEvent, RespondResult } from './openai.ts'
+import type { LifecycleEvent, RespondResult, ToolCall } from './openai.ts'
 import { respondViaCodex } from './codex-chat.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
@@ -73,6 +73,45 @@ function argDigest(args: Record<string, unknown>, maxLen = 80): string {
 }
 
 // mcp__server__ns__tool -> tool (last segment).
+// Codex unified diff -> Claude-style: a [+adds, -dels] badge + the changed lines
+// (red '-' / green '+', context plain), minus the git '@@' / file-header noise.
+function formatDiff(unified: string): { badge: string; body: string[] } {
+  let adds = 0, dels = 0
+  const body: string[] = []
+  for (const l of unified.replace(/\n+$/, '').split('\n')) {
+    if (l.startsWith('@@') || l.startsWith('+++') || l.startsWith('---')) continue
+    if (l.startsWith('+')) adds++
+    else if (l.startsWith('-')) dels++
+    body.push(l)
+  }
+  return { badge: `[+${adds}, -${dels}]`, body }
+}
+
+// Canonical tool-trace lines from toolCalls, shared by the live + final renders.
+// File edits show the [+N, -M] badge and the diff body; other tools keep [Nms].
+function buildTraceLines(toolCalls: ToolCall[]): string[] {
+  const lines: string[] = []
+  for (const call of toolCalls) {
+    const prefix = call.failed ? '- ● ' : '+ ● '
+    const tail = call.failed ? ' FAILED' : ''
+    const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
+    if (call.diff) {
+      const { badge, body } = formatDiff(call.diff)
+      lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} ${badge}`)
+      for (const b of body.slice(0, 16)) lines.push(b)
+      if (body.length > 16) lines.push(`… (+${body.length - 16} more)`)
+    } else {
+      lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`)
+      if (call.resultPreview) {
+        let rp = call.resultPreview.replace(/\n/g, ' ')
+        if (rp.length > 60) rp = rp.slice(0, 60) + '…'
+        lines.push(`    ⎿ ${rp}`)
+      }
+    }
+  }
+  return lines
+}
+
 function shortToolName(name: string): string {
   if (name.startsWith('mcp__')) {
     const parts = name.split('__')
@@ -570,18 +609,7 @@ async function handleUserMessage(
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
     if (willTrace && !liveTraceMsg) {
-      const lines: string[] = []
-      for (const call of result.toolCalls) {
-        const prefix = call.failed ? '- ● ' : '+ ● '
-        const tail = call.failed ? ' FAILED' : ''
-        const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
-        lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`)
-        if (call.resultPreview) {
-          let rp = call.resultPreview.replace(/\n/g, ' ')
-          if (rp.length > 60) rp = rp.slice(0, 60) + '…'
-          lines.push(`    ⎿ ${rp}`)
-        }
-      }
+      const lines = buildTraceLines(result.toolCalls)
       const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n') + '\n```'
       try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
     }
@@ -590,12 +618,7 @@ async function handleUserMessage(
     // (full names + per-call timings from result.toolCalls).
     const ltm = liveTraceMsg as unknown as (Message | null)
     if (ltm && willTrace && result.toolCalls.length) {
-      const lines = result.toolCalls.map(call => {
-        const prefix = call.failed ? '- ● ' : '+ ● '
-        const tail = call.failed ? ' FAILED' : ''
-        const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
-        return `${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`
-      })
+      const lines = buildTraceLines(result.toolCalls)
       const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n').slice(0, 1850) + '\n```'
       try { await ltm.edit(card) } catch {}
     }

@@ -1,7 +1,9 @@
 import { execFile, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { promisify } from 'node:util'
-import { rm, readFile } from 'node:fs/promises'
+import { rm, readFile, readdir } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
@@ -252,6 +254,33 @@ function liveEvent(ev: any): { status: string; tool?: { name: string; args: stri
   }
 }
 
+// The --json exec stream omits file-edit hunk text; codex's session rollout keeps
+// it. Locate the rollout by thread_id (== the rollout filename suffix) and pull
+// each path's unified_diff from the patch_apply_end events. Best-effort.
+async function readRolloutDiffs(threadId: string): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const base = path.join(os.homedir(), '.codex', 'sessions')
+  let entries: string[] = []
+  try { entries = (await readdir(base, { recursive: true })) as string[] } catch { return out }
+  const rel = entries.find(e => e.endsWith(`${threadId}.jsonl`))
+  if (!rel) return out
+  let content = ''
+  try { content = await readFile(path.join(base, rel), 'utf8') } catch { return out }
+  for (const line of content.split('\n')) {
+    if (!line.includes('patch_apply_end')) continue
+    try {
+      const ev = JSON.parse(line)
+      const changes = ev?.payload?.changes
+      if (changes && typeof changes === 'object') {
+        for (const [p, info] of Object.entries(changes as Record<string, any>)) {
+          if (info?.unified_diff) out.set(p, String(info.unified_diff))
+        }
+      }
+    } catch { /* skip malformed line */ }
+  }
+  return out
+}
+
 export async function respondViaCodex(input: CodexChatInput): Promise<RespondResult> {
   const t0 = Date.now()
   input.onEvent?.({ type: 'thinking_start' })
@@ -279,12 +308,15 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
   })
   const lines: string[] = []
+  let threadId = ''
   const rl = createInterface({ input: child.stdout! })
   rl.on('line', (line) => {
     if (!line.trim()) return
     lines.push(line)
     try {
-      const ev = liveEvent(JSON.parse(line))
+      const obj = JSON.parse(line)
+      if (obj?.type === 'thread.started' && obj.thread_id) threadId = String(obj.thread_id)
+      const ev = liveEvent(obj)
       if (ev) {
         input.onEvent?.({ type: 'status', label: ev.status })
         if (ev.tool) input.onEvent?.({ type: 'tool_start', name: ev.tool.name, args: ev.tool.args })
@@ -306,6 +338,18 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
 
   const parsed = parseCodexEvents(lines.join('\n'))
+  // Enrich file edits with the real unified diff from codex's session rollout.
+  if (threadId && parsed.toolCalls.some(t => t.name === 'edit')) {
+    try {
+      const diffs = await readRolloutDiffs(threadId)
+      for (const tc of parsed.toolCalls) {
+        if (tc.name === 'edit') {
+          const d = diffs.get(String(tc.args.file_path ?? ''))
+          if (d) tc.diff = d
+        }
+      }
+    } catch { /* diff is best-effort enrichment */ }
+  }
   // Prefer the -o file (the clean final message); fall back to the last
   // agent_message in the event stream if the file came back empty.
   const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()

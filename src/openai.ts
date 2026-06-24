@@ -13,6 +13,7 @@ export interface ToolCall {
   durationMs: number
   resultPreview: string
   failed: boolean
+  diff?: string   // unified diff for file edits (from codex rollout), shown in the trace
 }
 
 export type LifecycleEvent =
