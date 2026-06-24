@@ -3,7 +3,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { AccessManager, type ReasoningEffort } from './access.ts'
 import { PersonaLoader } from './persona.ts'
-import { snapshot as cacheSnapshot } from './cache-stats.ts'
+import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
 import { rewriteEnvVar, scheduleSelfRestart } from './restart.ts'
 
 const ALLOWED_MODELS = ['gpt-5.5'] as const
@@ -38,6 +38,10 @@ export const gptCommand = new SlashCommandBuilder()
     .setName('compact')
     .setDescription('Force a context-summary rollup now, regardless of the message threshold')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('stats')
+    .setDescription('Token usage + $-equivalent (gpt-5.5 rates; flat sub = ~$0 actual) since boot.')
   )
   .addSubcommand(s => s
     .setName('cache')
@@ -210,6 +214,37 @@ export async function executeGptCommand(
       })
       scheduleSelfRestart('gpt', 1500)
       return
+    }
+
+    if (subcommand === 'stats') {
+      const g = globalSnapshot()
+      const n = (x: number) => x.toLocaleString('en-US')
+      const uncachedIn = Math.max(0, g.inputTokens - g.cachedInputTokens)
+      const dIn = uncachedIn * 5.00 / 1e6        // gpt-5.5 standard, per 1M
+      const dCached = g.cachedInputTokens * 0.50 / 1e6
+      const dOut = g.outputTokens * 30.00 / 1e6
+      const dTotal = dIn + dCached + dOut
+      const total = g.inputTokens + g.outputTokens
+      const cachePct = g.inputTokens > 0 ? Math.round((g.cachedInputTokens / g.inputTokens) * 100) : 0
+      const upMin = Math.floor((Date.now() - g.bootTs) / 60000)
+      const up = `${Math.floor(upMin / 60)}h ${upMin % 60}m`
+      const engines = Object.entries(g.byModel).map(([m, ct]) => `${m} ${ct}`).join(' · ') || '—'
+      const body = [
+        '\ud83d\udcca @gpt usage — since boot, all channels',
+        '```',
+        `turns:    ${n(g.turns)}`,
+        `input:    ${n(g.inputTokens)} tok  (${n(g.cachedInputTokens)} cached, ${cachePct}%)`,
+        `output:   ${n(g.outputTokens)} tok  (${n(g.reasoningTokens)} reasoning)`,
+        `total:    ${n(total)} tok`,
+        '',
+        `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.5 API rates; ~$0 actual on the flat sub)`,
+        `          in $${dIn.toFixed(2)} \u00b7 cached $${dCached.toFixed(2)} \u00b7 out $${dOut.toFixed(2)}`,
+        '',
+        `engines:  ${engines}`,
+        `uptime:   ${up}`,
+        '```',
+      ].join('\n')
+      return interaction.reply({ content: body, ephemeral: true })
     }
 
     if (subcommand === 'cache') {

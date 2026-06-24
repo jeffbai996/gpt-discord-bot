@@ -25,6 +25,17 @@ interface TurnRecord {
 
 const channelStats = new Map<string, TurnRecord[]>()
 
+// Cumulative totals across all channels since boot — for /gpt stats.
+interface GlobalTotals {
+  turns: number; inputTokens: number; outputTokens: number
+  cachedInputTokens: number; reasoningTokens: number
+  byModel: Record<string, number>; bootTs: number
+}
+const globalTotals: GlobalTotals = {
+  turns: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, byModel: {}, bootTs: Date.now(),
+}
+export function globalSnapshot(): GlobalTotals { return { ...globalTotals, byModel: { ...globalTotals.byModel } } }
+
 export function recordTurn(channelId: string, result: RespondResult): void {
   if (!result.usage) return
   const buf = channelStats.get(channelId) ?? []
@@ -38,6 +49,13 @@ export function recordTurn(channelId: string, result: RespondResult): void {
   })
   if (buf.length > WINDOW_SIZE) buf.splice(0, buf.length - WINDOW_SIZE)
   channelStats.set(channelId, buf)
+
+  globalTotals.turns++
+  globalTotals.inputTokens += result.usage.inputTokens
+  globalTotals.outputTokens += result.usage.outputTokens
+  globalTotals.cachedInputTokens += result.usage.cachedInputTokens
+  globalTotals.reasoningTokens += result.usage.reasoningTokens
+  globalTotals.byModel[result.modelUsed] = (globalTotals.byModel[result.modelUsed] ?? 0) + 1
 }
 
 export interface CacheSnapshot {
