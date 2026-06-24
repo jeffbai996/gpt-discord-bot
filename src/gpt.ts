@@ -403,13 +403,10 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'status') {
+      // Generic animated label for the placeholder only. The live trace rows now
+      // come from real tool_start events (codex emits the actual command/query/path
+      // alongside this status), so we no longer push the coarse label as a row.
       currentStatus = event.label
-      // codex path: coarse per-step labels — stream them as live trace rows too.
-      if (flags.trace && event.label) {
-        const last = liveToolRows[liveToolRows.length - 1]
-        const row = `+ ● ${event.label}`
-        if (row !== last) { liveToolRows.push(row); flushLiveTrace() }
-      }
       return
     }
     if (event.type === 'partial' && workMessage) {
@@ -615,6 +612,14 @@ async function handleUserMessage(
     const parts = chunk(body)
     const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
     let mergedMsg: Message | null = null
+    // Cards (trace / thinking) post ABOVE the reply. The placeholder sat at the top
+    // since turn start, so reusing it for the reply would force the reply above those
+    // cards. When a card posted, drop the placeholder and let the reply repost as a
+    // fresh message BELOW the cards (Jeff 2026-06-24).
+    if ((willTrace || willThinking) && workMessage && !targetMessage) {
+      try { await workMessage.delete() } catch {}
+      workMessage = null
+    }
     for (let i = 0; i < parts.length; i++) {
       if (i === 0) {
         if (workMessage && !targetMessage) {

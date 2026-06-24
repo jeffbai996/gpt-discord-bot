@@ -230,15 +230,25 @@ function cleanCmd(raw: string): string {
   return cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
 }
 
-// One-line live label for the placeholder as codex works (from item.started events).
-function liveLabel(ev: any): string | null {
+// From a codex item.started event, derive BOTH a generic animated status for the
+// placeholder AND the real tool call (name + args) for the live trace — so the
+// placeholder stays clean ("running…") while the trace shows the actual command.
+function liveEvent(ev: any): { status: string; tool?: { name: string; args: string } } | null {
   if (ev?.type !== 'item.started' || !ev.item) return null
-  switch (ev.item.type) {
-    case 'command_execution': return '🔧 running'
-    case 'web_search':        return '🌐 searching'
-    case 'file_change':       return '✎ editing'
-    case 'reasoning':         return '🧠 thinking'
-    default:                  return null
+  const it = ev.item
+  switch (it.type) {
+    case 'command_execution':
+      return { status: '🔧 running', tool: { name: 'shell', args: cleanCmd(String(it.command ?? '')) } }
+    case 'web_search':
+      return { status: '🌐 searching', tool: { name: 'web_search', args: String(it.query ?? '') } }
+    case 'file_change': {
+      const paths = Array.isArray(it.changes) ? it.changes.map((c: any) => c.path).join(', ') : ''
+      return { status: '✎ editing', tool: { name: 'edit', args: paths } }
+    }
+    case 'reasoning':
+      return { status: '🧠 thinking' }
+    default:
+      return null
   }
 }
 
@@ -274,8 +284,11 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     if (!line.trim()) return
     lines.push(line)
     try {
-      const label = liveLabel(JSON.parse(line))
-      if (label) input.onEvent?.({ type: 'status', label })
+      const ev = liveEvent(JSON.parse(line))
+      if (ev) {
+        input.onEvent?.({ type: 'status', label: ev.status })
+        if (ev.tool) input.onEvent?.({ type: 'tool_start', name: ev.tool.name, args: ev.tool.args })
+      }
     } catch { /* non-JSON line */ }
   })
   let replyFromFile = ''
