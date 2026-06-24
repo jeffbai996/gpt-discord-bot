@@ -6,14 +6,25 @@ import { randomBytes } from 'node:crypto'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 
+// Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
+// surface an explicit 'interrupted' indicator instead of failing silently.
+export class CodexInterruptedError extends Error {
+  constructor(public readonly afterMs: number) {
+    super(`codex turn interrupted by runaway-process backstop after ${Math.round(afterMs/1000)}s`)
+    this.name = 'CodexInterruptedError'
+  }
+}
+
 const execFileAsync = promisify(execFile)
 
 // Same binary the codex *tool* uses — Codex (OpenAI gpt-5.5) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
-// Chat must feel snappy. medium ≈ 10s, low ≈ 5s (measured 2026-06-23); web
-// search can add a few seconds. If a turn blows past this something is wrong —
-// we throw and the caller falls back to the API so the bot never hangs.
-const TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 75_000
+// Runaway-process BACKSTOP, not a turn timer. Legitimate reasoning turns can run
+// for minutes, so we do NOT cap on a guessed duration (the old 75s killed real
+// long turns). This only exists so a genuinely hung codex process can't live
+// forever. When it DOES fire, we surface an explicit "interrupted" signal rather
+// than silently swapping to the API (Jeff 2026-06-24).
+const TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 600_000
 
 // Squad-memory in the codex path: rather than an MCP server, we lean on codex's
 // agentic shell — it can run the shared-memory CLI directly (verified: works under
@@ -290,6 +301,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // agent_message in the event stream if the file came back empty.
   const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()
   if (!reply) {
+    if (timedOut) throw new CodexInterruptedError(Date.now() - t0)
     throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
   }
 

@@ -19,6 +19,7 @@
  *   🛑 blocked    — content_policy refusal
  *   ⚠️ denied     — rate-limited / quota / 429
  *   ❌ errored    — caught exception of any other kind
+ *   ⏳ interrupted — codex turn was killed by the runaway-process backstop
  *
  * Virtual: silenced — no emoji, used when the model returns nothing and we
  * deliberately stay quiet; clears all transients without leaving a tombstone.
@@ -36,6 +37,7 @@ export const EMOJI = {
   truncated:  '✂️',
   blocked:    '🛑',
   errored:    '❌',
+  interrupted:'⏳',
   denied:     '⚠️',
   silenced:   '',
 } as const
@@ -58,6 +60,7 @@ const PREDECESSORS: Record<LifecycleState, LifecycleState[]> = {
   truncated:  ALL_TRANSIENTS,
   blocked:    ALL_TRANSIENTS,
   errored:    ALL_TRANSIENTS,
+  interrupted:ALL_TRANSIENTS,
   denied:     ALL_TRANSIENTS,
   silenced:   ALL_TRANSIENTS,
 }

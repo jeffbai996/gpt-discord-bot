@@ -15,6 +15,7 @@ import { respondViaCodex } from './codex-chat.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
+import { CodexInterruptedError } from './codex-chat.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn } from './cache-stats.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
@@ -430,7 +431,18 @@ async function handleUserMessage(
         })
         setEnginePresence(false)
       } catch (e) {
-        console.error('codex chat failed, falling back to API:', e)
+        // Don't fail silently. If codex was interrupted by the backstop (or errored),
+        // SHOW it — an ⏳ reaction + a short note on the placeholder — THEN fall back
+        // to the API so the user still gets an answer, but knows what happened.
+        if (e instanceof CodexInterruptedError) {
+          console.error('codex interrupted by backstop, surfacing + falling back to API:', e.message)
+          void applyLifecycle(message, 'interrupted')
+          if (workMessage) { await workMessage.edit('⏳ **codex turn interrupted — retrying on the API…**').catch(() => {}) }
+        } else {
+          console.error('codex chat failed, falling back to API:', e)
+          void applyLifecycle(message, 'errored')
+          if (workMessage) { await workMessage.edit('⚠️ **codex hit an error — retrying on the API…**').catch(() => {}) }
+        }
         result = await apiRespond()
         setEnginePresence(true)
       }
