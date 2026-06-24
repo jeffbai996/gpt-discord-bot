@@ -59,6 +59,21 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
+    .setName('counter')
+    .setDescription('Footer counter for this channel: off | token | both.')
+    .addStringOption(o => o
+      .setName('value')
+      .setDescription('off | token | both')
+      .setRequired(true)
+      .addChoices(
+        { name: 'off - no footer', value: 'off' },
+        { name: 'token - tokens + time only', value: 'token' },
+        { name: 'both - tokens + cached/reasoning', value: 'both' },
+      )
+    )
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
     .setName('engine')
     .setDescription('Set this channel chat engine: codex (flat sub) or api (metered).')
     .addStringOption(o => o
@@ -83,7 +98,6 @@ export const gptCommand = new SlashCommandBuilder()
         { name: 'model — gpt-5.5 | gpt-5.4-mini | o3 (or "default" to clear)', value: 'model' },
         { name: 'reasoning — minimal | low | medium | high (o-series only)', value: 'reasoning' },
         { name: 'show_code — render tool-call artifacts', value: 'show_code' },
-        { name: 'verbose — usage/finish_reason footer', value: 'verbose' },
         { name: 'trace — diff-style tool-trace card', value: 'trace' },
         { name: 'thinking — post the model reasoning summary', value: 'thinking' },
         { name: 'require_mention — only respond when @-mentioned', value: 'require_mention' },
@@ -236,6 +250,23 @@ export async function executeGptCommand(
       })
     }
 
+    if (subcommand === 'counter') {
+      const value = interaction.options.getString('value', true).trim().toLowerCase()
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: 'No channel resolved (run inside a channel or pass the channel arg).', ephemeral: true })
+      }
+      if (value !== 'off' && value !== 'token' && value !== 'both') {
+        return interaction.reply({ content: `counter must be off, token, or both (got ${value})`, ephemeral: true })
+      }
+      try {
+        const updated = await access.setChannelFlags(channel.id, { counter: value })
+        return interaction.reply({ content: `<#${channel.id}> footer counter set to ${updated.counter}`, ephemeral: true })
+      } catch (e: any) {
+        return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
+      }
+    }
+
     if (subcommand === 'engine') {
       const value = interaction.options.getString('value', true).trim().toLowerCase()
       const channel = interaction.options.getChannel('channel') ?? interaction.channel
@@ -286,7 +317,7 @@ export async function executeGptCommand(
             })
           }
           updated = await access.setChannelFlags(channel.id, { reasoning: rawValue as ReasoningEffort })
-        } else if (flag === 'show_code' || flag === 'verbose' || flag === 'trace' || flag === 'thinking' || flag === 'require_mention') {
+        } else if (flag === 'show_code' || flag === 'trace' || flag === 'thinking' || flag === 'require_mention') {
           const truthy = ['true', 't', 'yes', 'y', 'on', '1']
           const falsy = ['false', 'f', 'no', 'n', 'off', '0']
           let parsed: boolean
@@ -300,7 +331,6 @@ export async function executeGptCommand(
           }
           const fieldKey =
             flag === 'show_code' ? 'showCode'
-            : flag === 'verbose' ? 'verbose'
             : flag === 'trace' ? 'trace'
             : flag === 'thinking' ? 'thinking'
             : 'requireMention'
@@ -313,7 +343,7 @@ export async function executeGptCommand(
         }
 
         const modelDisplay = updated.model ?? '(default)'
-        const summary = `model=${modelDisplay}, reasoning=${updated.reasoning}, showCode=${updated.showCode}, verbose=${updated.verbose}, trace=${updated.trace}, thinking=${updated.thinking}, engine=${updated.engine}, requireMention=${updated.requireMention}`
+        const summary = `model=${modelDisplay}, reasoning=${updated.reasoning}, showCode=${updated.showCode}, counter=${updated.counter}, trace=${updated.trace}, thinking=${updated.thinking}, engine=${updated.engine}, requireMention=${updated.requireMention}`
         return interaction.reply({
           content: `✅ <#${channel.id}> \`${flag}\` set. ${summary}`,
           ephemeral: true

@@ -186,10 +186,11 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // usage so trace+thinking+verbose work on codex turns). -o → the clean final
   // reply text to a file (kept separate from the event stream). Prompt goes via
   // env (CODEX_PROMPT) so user text can't break out of the shell command.
-  // Neutral cwd (/tmp) + read-only: this is chat, not a repo operation.
+  // Neutral cwd (/tmp) + workspace-write: codex auto-runs within the sandbox
+  // (writes confined to the /tmp workspace; reads allowed). Jeff opted into write 2026-06-24.
   const script =
     `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check ` +
-    `-s read-only -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
+    `-s workspace-write -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
     `</dev/null 2>/dev/null`
 
   let stdout = ''

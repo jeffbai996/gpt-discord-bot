@@ -14,6 +14,7 @@ export interface ChannelConfig {
   trace?: boolean            // default false — post a diff-style tool-trace card
   thinking?: boolean         // default false — post the model's reasoning summary
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
+  counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
 }
 
 export interface ChannelFlags {
@@ -24,6 +25,7 @@ export interface ChannelFlags {
   trace: boolean
   thinking: boolean
   engine: 'codex' | 'api'
+  counter: 'off' | 'token' | 'both'
   // requireMention isn't a "rendering" flag like the others — it sits at the
   // top of ChannelConfig — but exposing it through ChannelFlags lets the
   // /gpt set unified setter touch it without a separate command path.
@@ -51,6 +53,7 @@ const DEFAULT_FLAGS = {
   trace: false,
   thinking: false,
   engine: 'codex' as 'codex' | 'api',
+  counter: 'both' as 'off' | 'token' | 'both',
 }
 
 export class AccessManager {
@@ -140,6 +143,7 @@ export class AccessManager {
       trace: flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace,
       thinking: flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking,
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
+      counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,
     }
     await this.save()
   }
@@ -165,6 +169,7 @@ export class AccessManager {
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
       ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
+      ...(patch.counter !== undefined ? { counter: patch.counter } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }
     await this.save()
@@ -181,6 +186,7 @@ export class AccessManager {
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       thinking: channel?.thinking ?? DEFAULT_FLAGS.thinking,
       engine: channel?.engine ?? DEFAULT_FLAGS.engine,
+      counter: channel?.counter ?? (channel?.verbose === false ? 'off' : DEFAULT_FLAGS.counter),
       requireMention: channel?.requireMention,
     }
   }

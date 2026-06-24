@@ -405,7 +405,7 @@ async function handleUserMessage(
     // Verbose footer surfaces token cost. Cache + reasoning shards only
     // render when nonzero so the footer stays compact for cheap turns.
     const verbose = (() => {
-      if (!flags.verbose || !result.usage) return ''
+      if (flags.counter === 'off' || !result.usage) return ''
       const u = result.usage
       const n = (x: number) => x.toLocaleString('en-US')
       // Headline line: the TOTALS — input ↑, output ↓, elapsed ».
@@ -419,7 +419,7 @@ async function handleUserMessage(
         ...(u.cachedInputTokens > 0 ? [`cached ↑ ${n(u.cachedInputTokens)}`] : []),
         ...(u.reasoningTokens > 0 ? [`reasoning ↓ ${n(u.reasoningTokens)}`] : []),
       ]
-      const subLine = sub.length ? `\n\n-# \` ${sub.join(' · ')} \`` : ''
+      const subLine = (flags.counter === 'both' && sub.length) ? `\n\n-# \` ${sub.join(' · ')} \`` : ''
       // Leading blank line so the footer sits a line below the reply body
       // (not crammed against the last line of text). The non-verbose path
       // returns '' so a quiet reply gets no trailing whitespace.
