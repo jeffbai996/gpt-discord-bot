@@ -30,6 +30,7 @@ export interface CodexChatInput {
   userName: string
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'
   extraText?: string
+  channelId?: string
   onEvent?: (event: LifecycleEvent) => void
 }
 
@@ -74,6 +75,13 @@ function buildPrompt(input: CodexChatInput): string {
       `preference, a project, prior context). Skip it for general knowledge, code, or casual ` +
       `chat — don't slow those down.`,
     `For deeper semantic search across the whole squad corpus (past Discord conversations, indexed files, all memories/journals), run: ${VECGREP_BIN} search "<query>" — use it when recall isn't enough or you need older chat context; only when the question genuinely needs it.`,
+    `You are a FULL squad member — you can RECORD to the shared brain, not just read it. When `
+      + `something durable is worth saving (a decision, a preference, a person/project fact, a `
+      + `to-do), run ONE of these (always pass the --discord-chat-id shown so an undo card posts):\n`
+      + `  ${SQUAD_STORE_BIN} memory add --type project|user|feedback|reference --name "<short name>" --tags "a,b" --discord-chat-id "${input.channelId ?? ''}" "<body>"\n`
+      + `  ${SQUAD_STORE_BIN} journal add --discord-chat-id "${input.channelId ?? ''}" "<moment>"\n`
+      + `  ${SQUAD_STORE_BIN} todo add --discord-chat-id "${input.channelId ?? ''}" "<task>"\n`
+      + `Save ONLY genuinely durable, reusable facts — never chit-chat, recaps, or progress notes.`,
     '--- New message ---',
     `${input.userName}: ${input.userMessage}`,
     '',

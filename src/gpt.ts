@@ -374,6 +374,7 @@ async function handleUserMessage(
           userName: message.author.username,
           reasoningEffort: flags.reasoning,
           extraText,
+          channelId,
           onEvent,
         })
       } catch (e) {
