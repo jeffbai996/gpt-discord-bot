@@ -11,8 +11,8 @@ export interface ChannelConfig {
   reasoning?: ReasoningEffort  // for o-series; ignored by gpt-5.x
   showCode?: boolean         // default true — render tool calls + structured outputs
   verbose?: boolean          // default true — surface usage/finish_reason footer
-  trace?: boolean            // default false — post a diff-style tool-trace card
-  thinking?: boolean         // default false — post the model's reasoning summary
+  trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
+  thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
 }
@@ -22,8 +22,8 @@ export interface ChannelFlags {
   reasoning: ReasoningEffort
   showCode: boolean
   verbose: boolean
-  trace: boolean
-  thinking: boolean
+  trace: 'off' | 'on' | 'collapse'
+  thinking: 'off' | 'on' | 'collapse'
   engine: 'codex' | 'api'
   counter: 'off' | 'token' | 'both'
   // requireMention isn't a "rendering" flag like the others — it sits at the
@@ -46,12 +46,21 @@ export interface CanHandleInput {
 const EMPTY: AccessFile = { users: {}, channels: {} }
 const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh']
 
+// trace/thinking went boolean -> 'off'|'on'|'collapse'. Old saved configs may still
+// hold a boolean — map false->off, true->on so a legacy `false` doesn't read as "on".
+type TriState = 'off' | 'on' | 'collapse'
+function normTri(v: unknown): TriState {
+  if (v === true) return 'on'
+  if (v === false || v == null) return 'off'
+  return (v === 'on' || v === 'collapse') ? v : 'off'
+}
+
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
   showCode: true,
   verbose: true,
-  trace: false,
-  thinking: false,
+  trace: 'off' as 'off' | 'on' | 'collapse',
+  thinking: 'off' as 'off' | 'on' | 'collapse',
   engine: 'codex' as 'codex' | 'api',
   counter: 'both' as 'off' | 'token' | 'both',
 }
@@ -140,8 +149,8 @@ export class AccessManager {
       reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
       showCode: flags?.showCode ?? existing?.showCode ?? DEFAULT_FLAGS.showCode,
       verbose: flags?.verbose ?? existing?.verbose ?? DEFAULT_FLAGS.verbose,
-      trace: flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace,
-      thinking: flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking,
+      trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
+      thinking: normTri(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
       counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,
     }

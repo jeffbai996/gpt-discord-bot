@@ -477,7 +477,7 @@ async function handleUserMessage(
     if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
-      if (flags.trace) {
+      if (flags.trace !== 'off') {
         const dig = String(event.args ?? '').replace(/\s+/g, ' ').slice(0, 90)
         liveToolRows.push(`+ ● ${shortToolName(event.name)}(${dig})`)
         flushLiveTrace()
@@ -636,25 +636,26 @@ async function handleUserMessage(
     // will post and the placeholder is ours, drop it and let the reply repost as
     // a fresh message BELOW the cards. (Expansion flow edits an existing message
     // we can't reorder, so it keeps cards-after — an accepted edge case.)
-    const willThinking = !!(flags.thinking && result.reasoning?.trim()) && message.channel.isSendable()
-    const willTrace = !!(flags.trace && result.toolCalls.length > 0) && message.channel.isSendable()
+    const willThinking = flags.thinking !== 'off' && !!result.reasoning?.trim() && message.channel.isSendable()
+    const willTrace = flags.trace !== 'off' && result.toolCalls.length > 0 && message.channel.isSendable()
     // NOTE: workMessage (the "thinking…" placeholder) is NOT reused for the reply
     // anymore — it gets edited into the "thought for Ns" line in place (replacing
     // "thinking…" where it sat). The reply always posts as a fresh message below.
 
+    // Cards posted in 'collapse' mode are shown live then deleted once the reply lands.
+    const collapseMsgs: Message[] = []
     if (willThinking) {
       const quoted = result.reasoning!.trim().split('\n').map(l => `> ${l}`).join('\n')
       for (const piece of chunk(`💭 **Thinking:**\n${quoted}`)) {
-        try { await message.channel.send(piece) } catch {}
+        try { const tm = await message.channel.send(piece); if (flags.thinking === 'collapse') collapseMsgs.push(tm) } catch {}
       }
     }
 
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
     if (willTrace && !liveTraceMsg) {
-      const lines = buildTraceLines(result.toolCalls)
-      const card = renderTraceCard(lines)
-      try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
+      const card = renderTraceCard(buildTraceLines(result.toolCalls))
+      try { const sm = await message.channel.send(card); if (flags.trace === 'collapse') collapseMsgs.push(sm) } catch {}
     }
 
     // If we streamed the trace live, replace it with the final canonical version
@@ -674,7 +675,7 @@ async function handleUserMessage(
     // on → keep the thought line; else strip it after a 60s linger (edit the line
     // away, keep the reply). N = total turn time (codex has no per-item timing).
     const thoughtLine = `💭 **thought for ${fmtDur(result.durationMs)}**`
-    const persist = flags.trace && flags.thinking
+    const persist = flags.trace !== 'off' && flags.thinking !== 'off'
     const parts = chunk(body)
     const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
     let mergedMsg: Message | null = null
@@ -707,6 +708,10 @@ async function handleUserMessage(
       const bodyOnly = parts[0] ?? ''
       setTimeout(() => { mm.edit(bodyOnly).catch(() => {}) }, lingerMs)
     }
+
+    // Collapse: reply has landed — delete the live trace/thinking cards for a clean channel.
+    if (flags.trace === 'collapse' && liveTraceMsg) { try { await (liveTraceMsg as unknown as Message).delete() } catch {} }
+    for (const cm of collapseMsgs) { try { await cm.delete() } catch {} }
 
     if (result.finishReason === 'length') {
       await applyLifecycle(message, 'truncated')

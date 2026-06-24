@@ -95,23 +95,40 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
-    .setName('set')
-    .setDescription('Set a per-channel flag: model, reasoning, show_code, verbose, trace, thinking, require_mention.')
+    .setName('trace')
+    .setDescription('Tool-trace card for this channel: off | on | collapse.')
     .addStringOption(o => o
-      .setName('flag')
-      .setDescription('Which flag to set')
-      .setRequired(true)
+      .setName('value').setDescription('off | on | collapse').setRequired(true)
       .addChoices(
-        { name: 'show_code — render tool-call artifacts', value: 'show_code' },
-        { name: 'trace — diff-style tool-trace card', value: 'trace' },
-        { name: 'thinking — post the model reasoning summary', value: 'thinking' },
-        { name: 'require_mention — only respond when @-mentioned', value: 'require_mention' },
+        { name: 'off', value: 'off' },
+        { name: 'on — keep the trace card', value: 'on' },
+        { name: 'collapse — show live, delete after the reply', value: 'collapse' },
       )
     )
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('thinking')
+    .setDescription('Reasoning-summary card for this channel: off | on | collapse.')
     .addStringOption(o => o
-      .setName('value')
-      .setDescription('See flag choices for valid values.')
-      .setRequired(true)
+      .setName('value').setDescription('off | on | collapse').setRequired(true)
+      .addChoices(
+        { name: 'off', value: 'off' },
+        { name: 'on — keep the reasoning card', value: 'on' },
+        { name: 'collapse — show live, delete after the reply', value: 'collapse' },
+      )
+    )
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('mention')
+    .setDescription('Require an @-mention before responding in this channel: on | off.')
+    .addStringOption(o => o
+      .setName('value').setDescription('on | off').setRequired(true)
+      .addChoices(
+        { name: 'on — only respond when @-mentioned', value: 'on' },
+        { name: 'off — respond to all messages', value: 'off' },
+      )
     )
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
@@ -340,67 +357,38 @@ export async function executeGptCommand(
       }
     }
 
-    if (subcommand === 'set') {
-      const flag = interaction.options.getString('flag', true)
-      const rawValue = interaction.options.getString('value', true).trim().toLowerCase()
+    if (subcommand === 'trace' || subcommand === 'thinking') {
+      const value = interaction.options.getString('value', true).trim().toLowerCase()
       const channel = interaction.options.getChannel('channel') ?? interaction.channel
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
       }
-
+      if (!['off', 'on', 'collapse'].includes(value)) {
+        return interaction.reply({ content: `❌ \`${subcommand}\` must be off | on | collapse (got \`${value}\`)`, ephemeral: true })
+      }
       try {
-        let updated
-        if (flag === 'model') {
-          // "default" sentinel clears the per-channel override.
-          if (rawValue === 'default' || rawValue === '') {
-            updated = await access.setChannelFlags(channel.id, { model: null })
-          } else if (!ALLOWED_MODELS.includes(rawValue as typeof ALLOWED_MODELS[number])) {
-            return interaction.reply({
-              content: `❌ \`model\` value must be one of: ${ALLOWED_MODELS.join(', ')} (or "default" to clear). Got \`${rawValue}\`.`,
-              ephemeral: true
-            })
-          } else {
-            updated = await access.setChannelFlags(channel.id, { model: rawValue })
-          }
-        } else if (flag === 'reasoning') {
-          if (!['minimal', 'low', 'medium', 'high'].includes(rawValue)) {
-            return interaction.reply({
-              content: `❌ \`reasoning\` value must be one of: minimal, low, medium, high (got \`${rawValue}\`)`,
-              ephemeral: true
-            })
-          }
-          updated = await access.setChannelFlags(channel.id, { reasoning: rawValue as ReasoningEffort })
-        } else if (flag === 'show_code' || flag === 'trace' || flag === 'thinking' || flag === 'require_mention') {
-          const truthy = ['true', 't', 'yes', 'y', 'on', '1']
-          const falsy = ['false', 'f', 'no', 'n', 'off', '0']
-          let parsed: boolean
-          if (truthy.includes(rawValue)) parsed = true
-          else if (falsy.includes(rawValue)) parsed = false
-          else {
-            return interaction.reply({
-              content: `❌ \`${flag}\` value must be true or false (got \`${rawValue}\`)`,
-              ephemeral: true
-            })
-          }
-          const fieldKey =
-            flag === 'show_code' ? 'showCode'
-            : flag === 'trace' ? 'trace'
-            : flag === 'thinking' ? 'thinking'
-            : 'requireMention'
-          updated = await access.setChannelFlags(channel.id, { [fieldKey]: parsed })
-        } else {
-          return interaction.reply({
-            content: `❌ unknown flag \`${flag}\`. Choices: model, reasoning, show_code, verbose, trace, thinking, require_mention.`,
-            ephemeral: true
-          })
-        }
+        const tri = value as 'off' | 'on' | 'collapse'
+        const updated = await access.setChannelFlags(channel.id,
+          subcommand === 'trace' ? { trace: tri } : { thinking: tri })
+        const note = value === 'collapse' ? ' — shown live, deleted after the reply' : ''
+        return interaction.reply({ content: `✅ <#${channel.id}> \`${subcommand}\` = \`${value}\`${note}. (trace=${updated.trace}, thinking=${updated.thinking})`, ephemeral: true })
+      } catch (e: any) {
+        return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
+      }
+    }
 
-        const modelDisplay = updated.model ?? '(default)'
-        const summary = `model=${modelDisplay}, reasoning=${updated.reasoning}, showCode=${updated.showCode}, counter=${updated.counter}, trace=${updated.trace}, thinking=${updated.thinking}, engine=${updated.engine}, requireMention=${updated.requireMention}`
-        return interaction.reply({
-          content: `✅ <#${channel.id}> \`${flag}\` set. ${summary}`,
-          ephemeral: true
-        })
+    if (subcommand === 'mention') {
+      const value = interaction.options.getString('value', true).trim().toLowerCase()
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
+      }
+      if (!['on', 'off'].includes(value)) {
+        return interaction.reply({ content: `❌ \`mention\` must be on | off (got \`${value}\`)`, ephemeral: true })
+      }
+      try {
+        const updated = await access.setChannelFlags(channel.id, { requireMention: value === 'on' })
+        return interaction.reply({ content: `✅ <#${channel.id}> require-mention = \`${value}\` (${updated.requireMention}).`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }
