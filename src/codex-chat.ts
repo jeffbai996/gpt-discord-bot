@@ -20,6 +20,7 @@ const TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 75_000
 // model decides when to recall, exactly like a tool call. This is how the codex
 // path keeps squad-memory after the chat-engine swap (codex already has web).
 const SQUAD_STORE_BIN = process.env.GPT_SQUAD_STORE_BIN || '/home/user/.local/bin/shared-memory'
+const VECGREP_BIN = process.env.GPT_VECGREP_BIN || '/home/user/.local/bin/vecgrep'
 
 export interface CodexChatInput {
   systemPrompt: string
@@ -72,6 +73,7 @@ function buildPrompt(input: CodexChatInput): string {
       `the message turns on squad-specific knowledge you don't already have (a person, a ` +
       `preference, a project, prior context). Skip it for general knowledge, code, or casual ` +
       `chat — don't slow those down.`,
+    `For deeper semantic search across the whole squad corpus (past Discord conversations, indexed files, all memories/journals), run: ${VECGREP_BIN} search "<query>" — use it when recall isn't enough or you need older chat context; only when the question genuinely needs it.`,
     '--- New message ---',
     `${input.userName}: ${input.userMessage}`,
     '',

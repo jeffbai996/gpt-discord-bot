@@ -432,7 +432,7 @@ async function handleUserMessage(
     // left alone. Applied to the reply only, not the verbose footer.
     const headingsToBold = (t: string): string =>
       t.replace(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*$/gm, '**$1**')
-    const body = headingsToBold((result.reply ?? '').trim()) + verbose
+    const body = headingsToBold((result.reply ?? '').trim()) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim()) {
       await applyLifecycle(message, 'silenced')
@@ -472,7 +472,7 @@ async function handleUserMessage(
       for (const call of result.toolCalls) {
         const prefix = call.failed ? '- ● ' : '+ ● '
         const tail = call.failed ? ' FAILED' : ''
-        const dig = call.name === 'shell' ? argDigest(call.args, 56) : argDigest(call.args, 110)
+        const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
         lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`)
         if (call.resultPreview) {
           let rp = call.resultPreview.replace(/\n/g, ' ')
