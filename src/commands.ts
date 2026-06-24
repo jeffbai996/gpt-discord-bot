@@ -59,6 +59,21 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
+    .setName('effort')
+    .setDescription('Reasoning effort for this channel (gpt-5.5 / codex): low | medium | high.')
+    .addStringOption(o => o
+      .setName('value')
+      .setDescription('low | medium | high')
+      .setRequired(true)
+      .addChoices(
+        { name: 'low - fastest (~5s)', value: 'low' },
+        { name: 'medium - default (~10s)', value: 'medium' },
+        { name: 'high - deepest, slowest', value: 'high' },
+      )
+    )
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
     .setName('counter')
     .setDescription('Footer counter for this channel: off | token | both.')
     .addStringOption(o => o
@@ -96,7 +111,6 @@ export const gptCommand = new SlashCommandBuilder()
       .setRequired(true)
       .addChoices(
         { name: 'model — gpt-5.5 | gpt-5.4-mini | o3 (or "default" to clear)', value: 'model' },
-        { name: 'reasoning — minimal | low | medium | high (o-series only)', value: 'reasoning' },
         { name: 'show_code — render tool-call artifacts', value: 'show_code' },
         { name: 'trace — diff-style tool-trace card', value: 'trace' },
         { name: 'thinking — post the model reasoning summary', value: 'thinking' },
@@ -248,6 +262,23 @@ export async function executeGptCommand(
         ].join('\n'),
         ephemeral: true
       })
+    }
+
+    if (subcommand === 'effort') {
+      const value = interaction.options.getString('value', true).trim().toLowerCase()
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: 'No channel resolved (run inside a channel or pass the channel arg).', ephemeral: true })
+      }
+      if (value !== 'low' && value !== 'medium' && value !== 'high') {
+        return interaction.reply({ content: `effort must be low, medium, or high (got ${value})`, ephemeral: true })
+      }
+      try {
+        const updated = await access.setChannelFlags(channel.id, { reasoning: value as ReasoningEffort })
+        return interaction.reply({ content: `<#${channel.id}> reasoning effort set to ${updated.reasoning} (gpt-5.5/codex)`, ephemeral: true })
+      } catch (e: any) {
+        return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
+      }
     }
 
     if (subcommand === 'counter') {
