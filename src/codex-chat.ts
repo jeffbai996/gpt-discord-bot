@@ -233,15 +233,11 @@ function cleanCmd(raw: string): string {
 // One-line live label for the placeholder as codex works (from item.started events).
 function liveLabel(ev: any): string | null {
   if (ev?.type !== 'item.started' || !ev.item) return null
-  const it = ev.item
-  switch (it.type) {
-    case 'command_execution': return `🔧 ${clip2(cleanCmd(String(it.command ?? '')), 70)}`
-    case 'web_search':        return `🌐 searching: ${clip2(it.query, 60)}`
-    case 'file_change': {
-      const paths = Array.isArray(it.changes) ? it.changes.map((c: any) => c.path).join(', ') : ''
-      return `✎ editing ${clip2(paths, 70)}`
-    }
-    case 'reasoning':         return '🧠 thinking…'
+  switch (ev.item.type) {
+    case 'command_execution': return '🔧 running'
+    case 'web_search':        return '🌐 searching'
+    case 'file_change':       return '✎ editing'
+    case 'reasoning':         return '🧠 thinking'
     default:                  return null
   }
 }
@@ -279,7 +275,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     lines.push(line)
     try {
       const label = liveLabel(JSON.parse(line))
-      if (label) input.onEvent?.({ type: 'partial', reply: label })
+      if (label) input.onEvent?.({ type: 'status', label })
     } catch { /* non-JSON line */ }
   })
   let replyFromFile = ''

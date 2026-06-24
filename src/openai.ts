@@ -20,6 +20,7 @@ export type LifecycleEvent =
   | { type: 'reasoning_start' }   // first reasoning_summary token (o-series / gpt-5 reasoning)
   | { type: 'first_token' }       // first reply content token observed
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
+  | { type: 'status', label: string }  // live activity status (codex tool events)
   | { type: 'tool_start', name: string, args?: string }
   | { type: 'tool_end', name: string }
   | { type: 'searching' }         // web_search in flight (special-cased)

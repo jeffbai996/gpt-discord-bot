@@ -1,8 +1,6 @@
 import { Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
 import path from 'path'
 import os from 'os'
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
@@ -43,6 +41,12 @@ const ARG_DIGEST_PREFERENCE = [
 // Single-line, ID-shaped arg digest, <= maxLen chars.
 // codex accepts none|low|medium|high|xhigh; the OpenAI API (fallback path) only
 // takes minimal|low|medium|high. Map the codex extremes down for the API call.
+// Duration like the Claude bots: "40s" under a minute, "1m 5s" over.
+function fmtDur(ms: number): string {
+  const s = Math.round(ms / 1000)
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
+}
+
 function apiEffort(e: string): 'minimal' | 'low' | 'medium' | 'high' {
   if (e === 'none') return 'minimal'
   if (e === 'xhigh') return 'high'
@@ -250,27 +254,6 @@ client.on('interactionCreate', async interaction => {
 //
 // targetMessage non-null → edit that bot message instead of posting fresh.
 // expansion=true → prepend an "expand on your prior reply" instruction.
-const OWNER_ID = process.env.GPT_OWNER_ID || ''
-const bangExec = promisify(execFile)
-
-// Owner-only `!cmd` passthrough: raw host-side shell, no LLM, no tokens (mirrors the
-// Claude bots' cc-discord-passthrough). Unsandboxed bash as this bot's user.
-async function runBangCommand(message: Message): Promise<void> {
-  const cmd = message.content.slice(1).trim()
-  if (!cmd) return
-  let out = ''
-  try {
-    const res = await bangExec('bash', ['-lc', cmd], { timeout: 60_000, maxBuffer: 4 * 1024 * 1024, cwd: os.homedir() })
-    out = (res.stdout || '') + (res.stderr ? `\n[stderr] ${res.stderr}` : '')
-  } catch (e: any) {
-    out = `${e?.stdout || ''}${e?.stderr || ''}\n[exit ${e?.code ?? '?'}] ${e?.message ?? String(e)}`
-  }
-  out = out.trim() || '(no output)'
-  const MAX = 1850
-  if (out.length > MAX) out = out.slice(0, MAX) + '\n…(truncated)'
-  try { await message.reply('```\n' + out.replace(/```/g, "'''") + '\n```') } catch (e) { console.error('bang reply failed:', e) }
-}
-
 // Presence: @gpt sets its own status via a [[presence: …]] reply directive →
 // applyBasePresence(). The API-fallback indicator (setEnginePresence) temporarily
 // overrides with ⚠️ and restores the base on recovery.
@@ -357,12 +340,13 @@ async function handleUserMessage(
   // final render (stopThinkingAnim).
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
+  let currentStatus = '💭 thinking'
   if (workMessage && !targetMessage) {
-    const frames = ['💭 **thinking.**', '💭 **thinking..**', '💭 **thinking…**']
+    const frames = ['.', '..', '…']
     let fi = 0
     thinkingAnim = setInterval(() => {
       if (!workMessage) return
-      workMessage.edit(frames[fi++ % frames.length]).catch(() => {})
+      workMessage.edit(`**${currentStatus}${frames[fi++ % frames.length]}**`).catch(() => {})
     }, 1500)
   }
 
@@ -382,6 +366,7 @@ async function handleUserMessage(
       void applyLifecycle(message, 'tooling')
       return
     }
+    if (event.type === 'status') { currentStatus = event.label; return }
     if (event.type === 'partial' && workMessage) {
       stopThinkingAnim()
       const now = Date.now()
@@ -486,7 +471,7 @@ async function handleUserMessage(
       const n = (x: number) => x.toLocaleString('en-US')
       // Headline line: the TOTALS — input ↑, output ↓, elapsed ».
       const parts = [`↑ ${n(u.inputTokens)}`, `↓ ${n(u.outputTokens)}`,
-                     `» ${(result.durationMs / 1000).toFixed(1)}s`]
+                     `» ${fmtDur(result.durationMs)}`]
       // Breakdown line beneath: the sub-counts of the headline totals, grouped
       // because they're the same shape — cached is a slice of input (↑),
       // reasoning is a slice of output (↓). Each renders only when nonzero; the
@@ -575,10 +560,9 @@ async function handleUserMessage(
     // time (codex carries no per-item timing, so total is the honest cross-path one).
     if (workMessage && !targetMessage) {
       stopThinkingAnim()
-      const secs = (result.durationMs / 1000).toFixed(1)
       const persist = flags.trace && flags.thinking
       try {
-        await workMessage.edit(`-# 💭 thought for ${secs}s`)
+        await workMessage.edit(`💭 **thought for ${fmtDur(result.durationMs)}**`)
         if (!persist) {
           const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
           const tm = workMessage
@@ -625,11 +609,6 @@ client.on('messageCreate', async (message: Message) => {
     // counted toward the threshold. Single-flight per channel; no-op if a
     // run is already in progress.
     summarizer?.scheduleIfNeeded(channelId)
-  }
-
-  if (OWNER_ID && userId === OWNER_ID && message.content.startsWith('!') && access.isAllowedAndEnabled(userId, channelId)) {
-    await runBangCommand(message)
-    return
   }
 
   if (!access.canHandle({ channelId, userId, isMention })) return
