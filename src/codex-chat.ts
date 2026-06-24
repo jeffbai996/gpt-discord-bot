@@ -222,7 +222,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // (writes confined to the /tmp workspace; reads allowed). Jeff opted into write 2026-06-24.
   const script =
     `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check ` +
-    `-s workspace-write -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
+    `-s workspace-write -c sandbox_workspace_write.network_access=true -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
     `</dev/null 2>/dev/null`
 
   let stdout = ''
@@ -231,7 +231,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     const res = await execFileAsync('bash', ['-lc', script], {
       timeout: TIMEOUT_MS + 8_000,
       maxBuffer: 16 * 1024 * 1024,
-      env: { ...process.env, CODEX_PROMPT: prompt },
+      env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
     })
     stdout = res.stdout || ''
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
