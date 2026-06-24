@@ -362,15 +362,44 @@ async function handleUserMessage(
   // Lifecycle reactions still fire live via onEvent; the tool trace itself is
   // now built post-hoc from result.toolCalls (see the trace card below), so we
   // no longer accumulate raw trace lines here.
+  // Live tool trace (Jeff 2026-06-24): when `trace` is on, stream each tool into a
+  // growing message AS it runs, instead of one blob at the end. API path gives rich
+  // tool_start{name,args}; codex gives coarser status labels — both append a row.
+  const liveToolRows: string[] = []
+  let liveTraceMsg: Message | null = null
+  let liveTracePending = false
+  const flushLiveTrace = () => {
+    if (liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
+    liveTracePending = true
+    const card = '🔧 **Tool trace**\n```diff\n' + liveToolRows.join('\n').slice(0, 1850) + '\n```'
+    const done = () => { liveTracePending = false }
+    if (liveTraceMsg) liveTraceMsg.edit(card).then(done, done)
+    else message.channel.send(card).then(m => { liveTraceMsg = m; done() }, done)
+  }
+
   const onEvent = (event: LifecycleEvent) => {
     if (event.type === 'thinking_start') { void applyLifecycle(message, 'thinking'); return }
     if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
     if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
+      if (flags.trace) {
+        const dig = (event.args ?? '').slice(0, 90)
+        liveToolRows.push(`+ ● ${shortToolName(event.name)}(${dig})`)
+        flushLiveTrace()
+      }
       return
     }
-    if (event.type === 'status') { currentStatus = event.label; return }
+    if (event.type === 'status') {
+      currentStatus = event.label
+      // codex path: coarse per-step labels — stream them as live trace rows too.
+      if (flags.trace && event.label) {
+        const last = liveToolRows[liveToolRows.length - 1]
+        const row = `+ ● ${event.label}`
+        if (row !== last) { liveToolRows.push(row); flushLiveTrace() }
+      }
+      return
+    }
     if (event.type === 'partial' && workMessage) {
       stopThinkingAnim()
       const now = Date.now()
@@ -531,7 +560,7 @@ async function handleUserMessage(
 
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
-    if (willTrace) {
+    if (willTrace && !liveTraceMsg) {
       const lines: string[] = []
       for (const call of result.toolCalls) {
         const prefix = call.failed ? '- ● ' : '+ ● '
@@ -546,6 +575,20 @@ async function handleUserMessage(
       }
       const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n') + '\n```'
       try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
+    }
+
+    // If we streamed the trace live, replace it with the final canonical version
+    // (full names + per-call timings from result.toolCalls).
+    const ltm = liveTraceMsg as unknown as (Message | null)
+    if (ltm && willTrace && result.toolCalls.length) {
+      const lines = result.toolCalls.map(call => {
+        const prefix = call.failed ? '- ● ' : '+ ● '
+        const tail = call.failed ? ' FAILED' : ''
+        const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
+        return `${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`
+      })
+      const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n').slice(0, 1850) + '\n```'
+      try { await ltm.edit(card) } catch {}
     }
 
     stopThinkingAnim()
