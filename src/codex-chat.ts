@@ -134,14 +134,36 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
       case 'reasoning':
         if (it.text) reasoningParts.push(String(it.text))
         break
-      case 'command_execution':
+      case 'command_execution': {
+        // codex wraps shell cmds as `/bin/bash -lc '<inner>'`. Unwrap + basename the
+        // leading path so the trace header reads `shared-memory recall "x"` (short, like
+        // Claude's) instead of the full /home/... path that wraps in Discord.
+        const rawCmd = String(it.command ?? '')
+        const inner = rawCmd.match(/-l?c\s+'([\s\S]*)'\s*$/)
+        let cmd = (inner ? inner[1] : rawCmd).trim()
+        cmd = cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
         toolCalls.push({
           name: 'shell',
-          args: { cmd: clip(it.command, 140) },
+          args: { command: clip(cmd, 80) },
           durationMs: 0, // codex JSONL carries no per-item timing
           resultPreview: clip(it.aggregated_output, 200),
           failed: typeof it.exit_code === 'number' ? it.exit_code !== 0 : false,
         })
+        break
+      }
+      case 'file_change':
+        // codex now writes/edits files (workspace-write). The --json file_change item
+        // carries the changed paths + kind (add/update/delete) but NOT the hunk text,
+        // so we surface the edited files (these can wrap — they're the "diffs").
+        for (const ch of (Array.isArray(it.changes) ? it.changes : [])) {
+          toolCalls.push({
+            name: 'edit',
+            args: { file_path: String(ch.path ?? '') },
+            durationMs: 0,
+            resultPreview: String(ch.kind ?? 'update'),
+            failed: false,
+          })
+        }
         break
       case 'web_search':
         toolCalls.push({

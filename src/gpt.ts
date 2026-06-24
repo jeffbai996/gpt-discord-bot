@@ -293,7 +293,7 @@ async function handleUserMessage(
   let workMessage: Message | null = targetMessage
   if (!workMessage) {
     try {
-      workMessage = await message.reply('💭 thinking…')
+      workMessage = await message.reply('💭 **thinking…**')
     } catch (e) {
       console.error('placeholder reply failed:', e)
     }
@@ -306,7 +306,7 @@ async function handleUserMessage(
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
   if (workMessage && !targetMessage) {
-    const frames = ['💭 thinking.', '💭 thinking..', '💭 thinking…']
+    const frames = ['💭 **thinking.**', '💭 **thinking..**', '💭 **thinking…**']
     let fi = 0
     thinkingAnim = setInterval(() => {
       if (!workMessage) return
@@ -472,7 +472,8 @@ async function handleUserMessage(
       for (const call of result.toolCalls) {
         const prefix = call.failed ? '- ● ' : '+ ● '
         const tail = call.failed ? ' FAILED' : ''
-        lines.push(`${prefix}${shortToolName(call.name)}(${argDigest(call.args)})${tail} [${call.durationMs}ms]`)
+        const dig = call.name === 'shell' ? argDigest(call.args, 56) : argDigest(call.args, 110)
+        lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`)
         if (call.resultPreview) {
           let rp = call.resultPreview.replace(/\n/g, ' ')
           if (rp.length > 86) rp = rp.slice(0, 86) + '…'
