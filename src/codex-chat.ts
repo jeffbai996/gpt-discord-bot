@@ -228,7 +228,7 @@ const clip2 = (x: unknown, n: number) => String(x ?? '').replace(/\s+/g, ' ').tr
 // Strip codex's `/bin/bash -lc '<inner>'` wrapper + basename the leading path.
 function cleanCmd(raw: string): string {
   const m = raw.match(/-l?c\s+'([\s\S]*)'\s*$/)
-  const cmd = (m ? m[1] : raw).trim()
+  const cmd = (m ? m[1] : raw).trim().replace(/\s+/g, ' ')
   return cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
 }
 

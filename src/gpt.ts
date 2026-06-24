@@ -75,6 +75,48 @@ function argDigest(args: Record<string, unknown>, maxLen = 80): string {
 // mcp__server__ns__tool -> tool (last segment).
 // Codex unified diff -> Claude-style: a [+adds, -dels] badge + the changed lines
 // (red '-' / green '+', context plain), minus the git '@@' / file-header noise.
+const SECRET_RE = /[A-Za-z0-9_\-]{32,256}/g
+// Redact credential-looking runs before a trace hits Discord — gpt can edit
+// /home/user (incl. .env / auth.json), so an edit diff could otherwise leak a key.
+function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<REDACTED>') }
+
+const MEGA_LINE_MAX = 300
+const TRACE_BODY_CHAR_BUDGET = 1800
+const TRACE_MAX_LINES = 50
+
+function capMegaLine(ln: string): string {
+  return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
+}
+
+// Claude's _tool_message_content padding: a colorizer line (+/-/!/@) keeps its
+// marker at column 0 with ONE space after it; any other line gets a 1-cell left
+// pad. Net: '+x' -> '+ x', ' ctx' -> '  ctx', '⎿ s' -> ' ⎿ s' — content aligns at col 2.
+function padTraceLine(ln: string): string {
+  if (!ln) return ln
+  const f = ln[0]
+  if (f === '+' || f === '-' || f === '!' || f === '@') {
+    return (ln.length > 1 && ln[1] !== ' ') ? ln[0] + ' ' + ln.slice(1) : ln
+  }
+  return ' ' + ln
+}
+
+// Assemble the fenced trace card: pad + mega-cap each line, drop whole trailing
+// lines past the line/char budget (with a marker), redact secrets, then wrap.
+function renderTraceCard(rawLines: string[]): string {
+  const lines = rawLines.map(l => padTraceLine(capMegaLine(l)))
+  const fitted: string[] = []
+  let running = 0
+  for (const ln of lines.slice(0, TRACE_MAX_LINES)) {
+    const cost = ln.length + (fitted.length ? 1 : 0)
+    if (running + cost > TRACE_BODY_CHAR_BUDGET) break
+    fitted.push(ln); running += cost
+  }
+  const dropped = rawLines.length - fitted.length
+  if (dropped > 0) fitted.push(`... (${dropped} more lines)`)
+  const body = redactSecrets(fitted.join('\n'))
+  return '🔧 **Tool trace**\n```diff\n' + body + '\n```'
+}
+
 function formatDiff(unified: string): { badge: string; body: string[] } {
   let adds = 0, dels = 0
   const body: string[] = []
@@ -94,21 +136,20 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
   for (const call of toolCalls) {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
-    const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
-    // Header alone (Claude shows no per-call ms; keep it only when real, i.e. API path).
+    // Digest stretched +5 now the [0ms] tail is gone (Jeff 2026-06-24).
+    const dig = call.name === 'shell' ? argDigest(call.args, 71) : argDigest(call.args, 115)
     const ms = call.durationMs > 0 ? ` [${call.durationMs}ms]` : ''
     lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail}${ms}`)
     if (call.diff) {
-      // Claude-style: the [+N, -M] summary on its own ⎿ line (1-cell indent, plain —
-      // not a +/- line, so the diff highlighter leaves it grey), then the body.
+      // Bare ⎿ summary + body; renderTraceCard's padTraceLine adds the 1-cell indent.
       const { badge, body } = formatDiff(call.diff)
-      lines.push(` ⎿ ${badge}`)
+      lines.push(`⎿ ${badge}`)
       for (const b of body.slice(0, 16)) lines.push(b)
       if (body.length > 16) lines.push(`... (${body.length - 16} more lines)`)
     } else if (call.resultPreview) {
       let rp = call.resultPreview.replace(/\n/g, ' ')
       if (rp.length > 60) rp = rp.slice(0, 60) + '…'
-      lines.push(` ⎿ ${rp}`)
+      lines.push(`⎿ ${rp}`)
     }
   }
   return lines
@@ -424,7 +465,7 @@ async function handleUserMessage(
   const flushLiveTrace = () => {
     if (liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
     liveTracePending = true
-    const card = '🔧 **Tool trace**\n```diff\n' + liveToolRows.join('\n').slice(0, 1850) + '\n```'
+    const card = renderTraceCard(liveToolRows)
     const done = () => { liveTracePending = false }
     if (liveTraceMsg) liveTraceMsg.edit(card).then(done, done)
     else message.channel.send(card).then(m => { liveTraceMsg = m; done() }, done)
@@ -437,7 +478,7 @@ async function handleUserMessage(
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
       if (flags.trace) {
-        const dig = (event.args ?? '').slice(0, 90)
+        const dig = String(event.args ?? '').replace(/\s+/g, ' ').slice(0, 90)
         liveToolRows.push(`+ ● ${shortToolName(event.name)}(${dig})`)
         flushLiveTrace()
       }
@@ -612,7 +653,7 @@ async function handleUserMessage(
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
     if (willTrace && !liveTraceMsg) {
       const lines = buildTraceLines(result.toolCalls)
-      const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n') + '\n```'
+      const card = renderTraceCard(lines)
       try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
     }
 
@@ -621,7 +662,7 @@ async function handleUserMessage(
     const ltm = liveTraceMsg as unknown as (Message | null)
     if (ltm && willTrace && result.toolCalls.length) {
       const lines = buildTraceLines(result.toolCalls)
-      const card = '🔧 **Tool trace**\n```diff\n' + lines.join('\n').slice(0, 1850) + '\n```'
+      const card = renderTraceCard(lines)
       try { await ltm.edit(card) } catch {}
     }
 
