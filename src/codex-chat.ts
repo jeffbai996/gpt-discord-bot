@@ -14,6 +14,13 @@ const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v2
 // we throw and the caller falls back to the API so the bot never hangs.
 const TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 75_000
 
+// Squad-memory in the codex path: rather than an MCP server, we lean on codex's
+// agentic shell — it can run the shared-memory CLI directly (verified: works under
+// `-s read-only`, the CLI POSTs/GETs the local Flask store over loopback). The
+// model decides when to recall, exactly like a tool call. This is how the codex
+// path keeps squad-memory after the chat-engine swap (codex already has web).
+const SQUAD_STORE_BIN = process.env.GPT_SQUAD_STORE_BIN || '/home/user/.local/bin/shared-memory'
+
 export interface CodexChatInput {
   systemPrompt: string
   // Same shape gpt.ts already builds (history.ts/formatHistoryForOpenAI).
@@ -58,6 +65,13 @@ function buildPrompt(input: CodexChatInput): string {
     '--- You are chatting in a Discord conversation. Recent history (oldest first): ---',
     transcript || '(no prior messages)',
     input.extraText?.trim() ? `\n[Additional context]\n${input.extraText.trim()}` : '',
+    '--- Squad memory (use when relevant) ---',
+    `You can search the squad's shared long-term memory — durable facts about Jeff, his ` +
+      `family, his portfolio/projects, preferences, and past decisions — by running this shell ` +
+      `command:\n  ${SQUAD_STORE_BIN} recall "<search query>"\nRun it BEFORE replying whenever ` +
+      `the message turns on squad-specific knowledge you don't already have (a person, a ` +
+      `preference, a project, prior context). Skip it for general knowledge, code, or casual ` +
+      `chat — don't slow those down.`,
     '--- New message ---',
     `${input.userName}: ${input.userMessage}`,
     '',
