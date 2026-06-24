@@ -325,10 +325,14 @@ async function handleUserMessage(
       '[Expansion request: the user wants you to go deeper on your most recent reply in this channel — add detail, examples, or counter-points. Don\'t repeat what you already said; build on it.]'
   }
 
+  // "thinking with [effort] effort…" — surface the reasoning effort in the live
+  // placeholder (Jeff 2026-06-24). 'none' effort just reads "thinking".
+  const effortLabel = flags.reasoning && flags.reasoning !== 'none'
+    ? `thinking with ${flags.reasoning} effort` : 'thinking'
   let workMessage: Message | null = targetMessage
   if (!workMessage) {
     try {
-      workMessage = await message.reply('💭 **thinking…**')
+      workMessage = await message.reply(`💭 **${effortLabel}…**`)
     } catch (e) {
       console.error('placeholder reply failed:', e)
     }
@@ -340,7 +344,7 @@ async function handleUserMessage(
   // final render (stopThinkingAnim).
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
-  let currentStatus = '💭 thinking'
+  let currentStatus = `💭 ${effortLabel}`
   if (workMessage && !targetMessage) {
     const frames = ['.', '..', '…']
     let fi = 0
@@ -544,32 +548,38 @@ async function handleUserMessage(
       try { await message.channel.send(card.length > 1900 ? card.slice(0, 1900) + '\n```' : card) } catch {}
     }
 
+    stopThinkingAnim()
+    // "thought for Ns" sits ON TOP of the reply, in the SAME message block (Jeff
+    // 2026-06-24) — small-text first line, then the answer. We reuse the placeholder
+    // as the first message so the thought line replaces "thinking…" in place AND the
+    // reply flows directly beneath it (one block). Persistence: trace+reasoning both
+    // on → keep the thought line; else strip it after a 60s linger (edit the line
+    // away, keep the reply). N = total turn time (codex has no per-item timing).
+    const thoughtLine = `-# 💭 thought for ${fmtDur(result.durationMs)}`
+    const persist = flags.trace && flags.thinking
     const parts = chunk(body)
+    const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
+    let mergedMsg: Message | null = null
     for (let i = 0; i < parts.length; i++) {
       if (i === 0) {
-        await message.reply(parts[i])
+        if (workMessage && !targetMessage) {
+          await workMessage.edit(firstWithThought)
+          mergedMsg = workMessage
+          workMessage = null
+        } else {
+          mergedMsg = await message.reply(firstWithThought)
+        }
       } else if (message.channel.isSendable()) {
         await message.channel.send(parts[i])
       }
     }
-
-    // "thought for Ns" — REPLACES the "thinking…" placeholder in place (same spot,
-    // above the reply), like the Claude bots collapse their thinking indicator.
-    // Persistence (Jeff 2026-06-24): if BOTH tool-trace AND reasoning are on, keep
-    // it; otherwise it's transient — auto-delete after a 60s linger. N is total turn
-    // time (codex carries no per-item timing, so total is the honest cross-path one).
-    if (workMessage && !targetMessage) {
-      stopThinkingAnim()
-      const persist = flags.trace && flags.thinking
-      try {
-        await workMessage.edit(`💭 **thought for ${fmtDur(result.durationMs)}**`)
-        if (!persist) {
-          const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
-          const tm = workMessage
-          setTimeout(() => { tm.delete().catch(() => {}) }, lingerMs)
-        }
-      } catch { /* fire-and-forget */ }
-      workMessage = null
+    // Transient thought line: after the linger, strip just the thought prefix from
+    // the merged message, leaving the reply body intact.
+    if (!persist && mergedMsg) {
+      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
+      const mm = mergedMsg
+      const bodyOnly = parts[0] ?? ''
+      setTimeout(() => { mm.edit(bodyOnly).catch(() => {}) }, lingerMs)
     }
 
     if (result.finishReason === 'length') {
