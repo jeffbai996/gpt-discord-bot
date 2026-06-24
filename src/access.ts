@@ -47,7 +47,7 @@ const EMPTY: AccessFile = { users: {}, channels: {} }
 const VALID_REASONING: ReasoningEffort[] = ['minimal', 'low', 'medium', 'high']
 
 const DEFAULT_FLAGS = {
-  reasoning: 'medium' as ReasoningEffort,
+  reasoning: 'high' as ReasoningEffort,
   showCode: true,
   verbose: true,
   trace: false,
