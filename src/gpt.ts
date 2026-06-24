@@ -370,26 +370,23 @@ async function handleUserMessage(
     const verbose = (() => {
       if (!flags.verbose || !result.usage) return ''
       const u = result.usage
-      // Main telemetry line: tokens in/out, reasoning shard, elapsed.
-      const parts = [
-        `↑ ${u.inputTokens.toLocaleString('en-US')}`,
-        `↓ ${u.outputTokens.toLocaleString('en-US')}`,
-        ...(u.reasoningTokens > 0
-          ? [`(reasoning ${u.reasoningTokens.toLocaleString('en-US')})`]
-          : []),
-        `» ${(result.durationMs / 1000).toFixed(1)}s`,
+      const n = (x: number) => x.toLocaleString('en-US')
+      // Headline line: the TOTALS — input ↑, output ↓, elapsed ».
+      const parts = [`↑ ${n(u.inputTokens)}`, `↓ ${n(u.outputTokens)}`,
+                     `» ${(result.durationMs / 1000).toFixed(1)}s`]
+      // Breakdown line beneath: the sub-counts of the headline totals, grouped
+      // because they're the same shape — cached is a slice of input (↑),
+      // reasoning is a slice of output (↓). Each renders only when nonzero; the
+      // whole line is omitted when both are zero (cheap non-reasoning turns).
+      const sub = [
+        ...(u.cachedInputTokens > 0 ? [`cached ↑ ${n(u.cachedInputTokens)}`] : []),
+        ...(u.reasoningTokens > 0 ? [`reasoning ↓ ${n(u.reasoningTokens)}`] : []),
       ]
-      // Cache info gets its own subtle code block beneath the main line so the
-      // prompt-cache hit is legible at a glance without cluttering the headline
-      // token counts. Only rendered when there was a cache hit.
-      const cacheLine =
-        u.cachedInputTokens > 0
-          ? `\n\n-# \` cached ↑ ${u.cachedInputTokens.toLocaleString('en-US')} \``
-          : ''
+      const subLine = sub.length ? `\n\n-# \` ${sub.join(' · ')} \`` : ''
       // Leading blank line so the footer sits a line below the reply body
       // (not crammed against the last line of text). The non-verbose path
       // returns '' so a quiet reply gets no trailing whitespace.
-      return `\n\n-# \` ${parts.join(' · ')} \`${cacheLine}`
+      return `\n\n-# \` ${parts.join(' · ')} \`${subLine}`
     })()
 
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
