@@ -504,7 +504,7 @@ async function handleUserMessage(
       const n = (x: number) => x.toLocaleString('en-US')
       // Headline line: the TOTALS — input ↑, output ↓, elapsed ».
       const parts = [`↑ ${n(u.inputTokens)}`, `↓ ${n(u.outputTokens)}`,
-                     `» ${fmtDur(result.durationMs)}`]
+                     `» ${(result.durationMs / 1000).toFixed(1)}s`]
       // Breakdown line beneath: the sub-counts of the headline totals, grouped
       // because they're the same shape — cached is a slice of input (↑),
       // reasoning is a slice of output (↓). Each renders only when nonzero; the
@@ -598,7 +598,7 @@ async function handleUserMessage(
     // reply flows directly beneath it (one block). Persistence: trace+reasoning both
     // on → keep the thought line; else strip it after a 60s linger (edit the line
     // away, keep the reply). N = total turn time (codex has no per-item timing).
-    const thoughtLine = `-# 💭 thought for ${fmtDur(result.durationMs)}`
+    const thoughtLine = `💭 **thought for ${fmtDur(result.durationMs)}**`
     const persist = flags.trace && flags.thinking
     const parts = chunk(body)
     const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
