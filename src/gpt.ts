@@ -270,16 +270,23 @@ async function runBangCommand(message: Message): Promise<void> {
   try { await message.reply('```\n' + out.replace(/```/g, "'''") + '\n```') } catch (e) { console.error('bang reply failed:', e) }
 }
 
-// API-fallback status: flip the bot presence when codex unexpectedly falls back to
-// the metered API (e.g. sub rate-limit), and back when codex recovers.
+// Presence: @gpt sets its own status via a [[presence: …]] reply directive →
+// applyBasePresence(). The API-fallback indicator (setEnginePresence) temporarily
+// overrides with ⚠️ and restores the base on recovery.
+let basePresenceText = '📎 actually, on reflection—'
 let lastDegraded = false
+function presenceActivity(text: string) {
+  return { name: text, type: ActivityType.Custom, state: text }
+}
+function applyBasePresence(text: string): void {
+  basePresenceText = text.slice(0, 128) || basePresenceText
+  if (!lastDegraded) { try { client.user?.setPresence({ activities: [presenceActivity(basePresenceText)] }) } catch {} }
+}
 function setEnginePresence(degraded: boolean): void {
   if (degraded === lastDegraded) return
   lastDegraded = degraded
-  const act = degraded
-    ? { name: '⚠️ on API (codex fell back)', type: ActivityType.Custom, state: '⚠️ on API — sub limit?' }
-    : { name: '📎 actually, on reflection—', type: ActivityType.Custom, state: '📎 actually, on reflection—' }
-  try { client.user?.setPresence({ activities: [act] }) } catch {}
+  const text = degraded ? '⚠️ on API (codex fell back)' : basePresenceText
+  try { client.user?.setPresence({ activities: [presenceActivity(text)] }) } catch {}
 }
 
 async function handleUserMessage(
@@ -434,6 +441,16 @@ async function handleUserMessage(
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     stopThinkingAnim()
     recordCacheTurn(channelId, result)
+
+    // @gpt can set its own Discord status: a [[presence: …]] directive in the reply
+    // is applied to the bot presence + stripped from the message.
+    {
+      const pm = result.reply?.match(/\[\[presence:\s*([^\]]+)\]\]/i)
+      if (pm) {
+        applyBasePresence(pm[1].trim())
+        result.reply = (result.reply ?? '').replace(/\[\[presence:\s*[^\]]+\]\]/ig, '').trim()
+      }
+    }
 
     if (result.react) {
       // Outbound react validator: the model occasionally emits custom Discord

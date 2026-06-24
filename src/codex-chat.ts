@@ -85,6 +85,7 @@ function buildPrompt(input: CodexChatInput): string {
       + `  ${SQUAD_STORE_BIN} journal add --discord-chat-id "${input.channelId ?? ''}" "<moment>"\n`
       + `  ${SQUAD_STORE_BIN} todo add --discord-chat-id "${input.channelId ?? ''}" "<task>"\n`
       + `Save ONLY genuinely durable, reusable facts — never chit-chat, recaps, or progress notes.`,
+    `You can set your own Discord status: include [[presence: <short status>]] anywhere in your reply and it'll be applied to your presence + stripped from the message. Use it sparingly — only for a genuine status change.`,
     '--- New message ---',
     `${input.userName}: ${input.userMessage}`,
     '',
