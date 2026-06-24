@@ -408,23 +408,32 @@ async function handleUserMessage(
       return
     }
 
-    // Thinking card — when enabled and the model produced a reasoning summary,
-    // post it as its OWN message (keeps it off the reply, mirrors the trace
-    // card). Blockquoted, chunked if long. Sparse on non-reasoning models is
-    // fine — we only render when there's actual reasoning text.
-    if (flags.thinking && result.reasoning?.trim() && message.channel.isSendable()) {
-      const quoted = result.reasoning.trim().split('\n').map(l => `> ${l}`).join('\n')
-      const thinkingCard = `💭 **Thinking:**\n${quoted}`
-      for (const piece of chunk(thinkingCard)) {
+    // Thinking + trace cards belong ABOVE the reply (the intended "here's my
+    // reasoning / what I ran, then the answer" order). The reply normally reuses
+    // the streaming placeholder, which was posted at TURN START and so sits at
+    // the top — editing it there would push these cards below the reply (the o3
+    // "reasoning under the output" report; it's not o3-specific, it's every
+    // model that emits a reasoning summary or runs a tool). Fix: when a card
+    // will post and the placeholder is ours, drop it and let the reply repost as
+    // a fresh message BELOW the cards. (Expansion flow edits an existing message
+    // we can't reorder, so it keeps cards-after — an accepted edge case.)
+    const willThinking = !!(flags.thinking && result.reasoning?.trim()) && message.channel.isSendable()
+    const willTrace = !!(flags.trace && result.toolCalls.length > 0) && message.channel.isSendable()
+    if ((willThinking || willTrace) && workMessage && !targetMessage) {
+      try { await workMessage.delete() } catch {}
+      workMessage = null
+    }
+
+    if (willThinking) {
+      const quoted = result.reasoning!.trim().split('\n').map(l => `> ${l}`).join('\n')
+      for (const piece of chunk(`💭 **Thinking:**\n${quoted}`)) {
         try { await message.channel.send(piece) } catch {}
       }
     }
 
-    // Tool-trace card — posted before the reply when enabled and any tool ran
-    // this turn. Built post-hoc from result.toolCalls in the gem-bot diff
-    // format: `+ ● shortName(argDigest) [Nms]` (green), `- ● ... FAILED [Nms]`
-    // (red) on failure, plus a grey `  ⎿ resultPreview` line.
-    if (flags.trace && result.toolCalls.length > 0 && message.channel.isSendable()) {
+    // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
+    // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
+    if (willTrace) {
       const lines: string[] = []
       for (const call of result.toolCalls) {
         const prefix = call.failed ? '- ● ' : '+ ● '

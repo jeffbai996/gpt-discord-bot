@@ -250,6 +250,11 @@ export class OpenAIClient {
     let modelUsed = model
     let lastFinish: string | null = null
     let reasoningAcc = ''
+    // OpenAI emits the reasoning summary as distinct PARTS (each often a bold
+    // section title + body), keyed by summary_index. Track the last index so we
+    // can insert a blank line between parts — otherwise the next part's title
+    // runs onto the end of the prior line ("…web search!**Discussing details**").
+    let lastSummaryIndex = -1
     const toolCalls: ToolCall[] = []
     // Tool-loop cap. 3 rounds covers realistic tool chains (e.g. fetch then
     // summarize) without giving a misbehaving model room to spin expensive
@@ -314,6 +319,11 @@ export class OpenAIClient {
             }
             case 'response.reasoning_summary_text.delta': {
               if (event.delta) {
+                // New summary part → separate it from the previous with a blank
+                // line so a part-leading bold title lands on its own line.
+                const idx = (event as { summary_index?: number }).summary_index ?? 0
+                if (reasoningAcc && idx !== lastSummaryIndex) reasoningAcc += '\n\n'
+                lastSummaryIndex = idx
                 reasoningAcc += event.delta
                 if (!reasoningStartEmitted) {
                   reasoningStartEmitted = true
