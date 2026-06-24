@@ -38,6 +38,15 @@ const ARG_DIGEST_PREFERENCE = [
 ]
 
 // Single-line, ID-shaped arg digest, <= maxLen chars.
+// codex accepts none|low|medium|high|xhigh; the OpenAI API (fallback path) only
+// takes minimal|low|medium|high. Map the codex extremes down for the API call.
+function apiEffort(e: string): 'minimal' | 'low' | 'medium' | 'high' {
+  if (e === 'none') return 'minimal'
+  if (e === 'xhigh') return 'high'
+  if (e === 'low' || e === 'medium' || e === 'high') return e
+  return 'medium'
+}
+
 function argDigest(args: Record<string, unknown>, maxLen = 80): string {
   if (!args || typeof args !== 'object') return ''
   for (const key of ARG_DIGEST_PREFERENCE) {
@@ -355,7 +364,7 @@ async function handleUserMessage(
       userMessage: message.content,
       userName: message.author.username,
       model,
-      reasoningEffort: flags.reasoning,
+      reasoningEffort: apiEffort(flags.reasoning),
       imageParts,
       extraText,
       toolRegistry,

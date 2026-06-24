@@ -2,7 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
 
-export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high'
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 
 export interface ChannelConfig {
   enabled: boolean
@@ -44,10 +44,10 @@ export interface CanHandleInput {
 }
 
 const EMPTY: AccessFile = { users: {}, channels: {} }
-const VALID_REASONING: ReasoningEffort[] = ['minimal', 'low', 'medium', 'high']
+const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh']
 
 const DEFAULT_FLAGS = {
-  reasoning: 'high' as ReasoningEffort,
+  reasoning: 'medium' as ReasoningEffort,
   showCode: true,
   verbose: true,
   trace: false,

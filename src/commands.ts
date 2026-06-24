@@ -60,15 +60,17 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('effort')
-    .setDescription('Reasoning effort for this channel (gpt-5.5 / codex): low | medium | high.')
+    .setDescription('Reasoning effort for this channel (gpt-5.5 / codex): none | low | medium | high | xhigh.')
     .addStringOption(o => o
       .setName('value')
-      .setDescription('low | medium | high')
+      .setDescription('none | low | medium | high | xhigh')
       .setRequired(true)
       .addChoices(
-        { name: 'low - fastest (~5s)', value: 'low' },
-        { name: 'medium - default (~10s)', value: 'medium' },
-        { name: 'high - deepest, slowest', value: 'high' },
+        { name: 'none - no reasoning, fastest', value: 'none' },
+        { name: 'low', value: 'low' },
+        { name: 'medium', value: 'medium' },
+        { name: 'high', value: 'high' },
+        { name: 'xhigh - deepest, slowest', value: 'xhigh' },
       )
     )
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -270,8 +272,8 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: 'No channel resolved (run inside a channel or pass the channel arg).', ephemeral: true })
       }
-      if (value !== 'low' && value !== 'medium' && value !== 'high') {
-        return interaction.reply({ content: `effort must be low, medium, or high (got ${value})`, ephemeral: true })
+      if (!['none', 'low', 'medium', 'high', 'xhigh'].includes(value)) {
+        return interaction.reply({ content: `effort must be none, low, medium, high, or xhigh (got ${value})`, ephemeral: true })
       }
       try {
         const updated = await access.setChannelFlags(channel.id, { reasoning: value as ReasoningEffort })

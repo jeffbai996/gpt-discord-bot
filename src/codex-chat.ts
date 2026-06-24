@@ -28,7 +28,7 @@ export interface CodexChatInput {
   history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
   userMessage: string
   userName: string
-  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high'
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
   extraText?: string
   channelId?: string
   onEvent?: (event: LifecycleEvent) => void
@@ -39,9 +39,12 @@ export interface CodexChatInput {
 // sweet spot; only an explicit 'high' flag opts into the slower deep mode.
 function mapEffort(effort?: string): string {
   switch (effort) {
-    case 'high': return 'high'
-    case 'minimal':
-    case 'low': return 'low'
+    case 'none':
+    case 'low':
+    case 'medium':
+    case 'high':
+    case 'xhigh': return effort
+    case 'minimal': return 'low' // legacy alias
     default: return 'medium'
   }
 }
