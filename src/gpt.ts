@@ -95,18 +95,20 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
     const dig = call.name === 'shell' ? argDigest(call.args, 66) : argDigest(call.args, 110)
+    // Header alone (Claude shows no per-call ms; keep it only when real, i.e. API path).
+    const ms = call.durationMs > 0 ? ` [${call.durationMs}ms]` : ''
+    lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail}${ms}`)
     if (call.diff) {
+      // Claude-style: the [+N, -M] summary on its own ⎿ line (1-cell indent, plain —
+      // not a +/- line, so the diff highlighter leaves it grey), then the body.
       const { badge, body } = formatDiff(call.diff)
-      lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} ${badge}`)
+      lines.push(` ⎿ ${badge}`)
       for (const b of body.slice(0, 16)) lines.push(b)
-      if (body.length > 16) lines.push(`… (+${body.length - 16} more)`)
-    } else {
-      lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail} [${call.durationMs}ms]`)
-      if (call.resultPreview) {
-        let rp = call.resultPreview.replace(/\n/g, ' ')
-        if (rp.length > 60) rp = rp.slice(0, 60) + '…'
-        lines.push(`    ⎿ ${rp}`)
-      }
+      if (body.length > 16) lines.push(`... (${body.length - 16} more lines)`)
+    } else if (call.resultPreview) {
+      let rp = call.resultPreview.replace(/\n/g, ' ')
+      if (rp.length > 60) rp = rp.slice(0, 60) + '…'
+      lines.push(` ⎿ ${rp}`)
     }
   }
   return lines
