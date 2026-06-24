@@ -529,10 +529,9 @@ async function handleUserMessage(
     // we can't reorder, so it keeps cards-after — an accepted edge case.)
     const willThinking = !!(flags.thinking && result.reasoning?.trim()) && message.channel.isSendable()
     const willTrace = !!(flags.trace && result.toolCalls.length > 0) && message.channel.isSendable()
-    if ((willThinking || willTrace) && workMessage && !targetMessage) {
-      try { await workMessage.delete() } catch {}
-      workMessage = null
-    }
+    // NOTE: workMessage (the "thinking…" placeholder) is NOT reused for the reply
+    // anymore — it gets edited into the "thought for Ns" line in place (replacing
+    // "thinking…" where it sat). The reply always posts as a fresh message below.
 
     if (willThinking) {
       const quoted = result.reasoning!.trim().split('\n').map(l => `> ${l}`).join('\n')
@@ -562,31 +561,31 @@ async function handleUserMessage(
 
     const parts = chunk(body)
     for (let i = 0; i < parts.length; i++) {
-      if (i === 0 && workMessage) {
-        await workMessage.edit(parts[i])
-      } else if (i === 0) {
+      if (i === 0) {
         await message.reply(parts[i])
       } else if (message.channel.isSendable()) {
         await message.channel.send(parts[i])
       }
     }
 
-    // "Thought for Ns" footer — a light summary line posted after the reply, like
-    // the Claude bots. Persistence (Jeff 2026-06-24): if BOTH tool-trace AND
-    // reasoning are on, keep it (you're in deep-inspect mode, the context matters);
-    // otherwise it's transient — auto-delete after a short linger so it doesn't
-    // clutter the channel. N is the total turn time (the same number as the » in
-    // the verbose footer; codex carries no per-item timing so total is the honest one).
-    if (message.channel.isSendable()) {
+    // "thought for Ns" — REPLACES the "thinking…" placeholder in place (same spot,
+    // above the reply), like the Claude bots collapse their thinking indicator.
+    // Persistence (Jeff 2026-06-24): if BOTH tool-trace AND reasoning are on, keep
+    // it; otherwise it's transient — auto-delete after a 60s linger. N is total turn
+    // time (codex carries no per-item timing, so total is the honest cross-path one).
+    if (workMessage && !targetMessage) {
+      stopThinkingAnim()
       const secs = (result.durationMs / 1000).toFixed(1)
       const persist = flags.trace && flags.thinking
       try {
-        const thoughtMsg = await message.channel.send(`-# 💭 Thought for ${secs}s`)
+        await workMessage.edit(`-# 💭 thought for ${secs}s`)
         if (!persist) {
-          const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 12_000
-          setTimeout(() => { thoughtMsg.delete().catch(() => {}) }, lingerMs)
+          const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
+          const tm = workMessage
+          setTimeout(() => { tm.delete().catch(() => {}) }, lingerMs)
         }
       } catch { /* fire-and-forget */ }
+      workMessage = null
     }
 
     if (result.finishReason === 'length') {
