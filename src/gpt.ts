@@ -349,7 +349,7 @@ async function handleUserMessage(
     })
 
     let result: RespondResult
-    if (process.env.GPT_CODEX_CHAT !== '0' && imageParts.length === 0) {
+    if (flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0' && imageParts.length === 0) {
       try {
         result = await respondViaCodex({
           systemPrompt,

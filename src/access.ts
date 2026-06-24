@@ -13,6 +13,7 @@ export interface ChannelConfig {
   verbose?: boolean          // default true — surface usage/finish_reason footer
   trace?: boolean            // default false — post a diff-style tool-trace card
   thinking?: boolean         // default false — post the model's reasoning summary
+  engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
 }
 
 export interface ChannelFlags {
@@ -22,6 +23,7 @@ export interface ChannelFlags {
   verbose: boolean
   trace: boolean
   thinking: boolean
+  engine: 'codex' | 'api'
   // requireMention isn't a "rendering" flag like the others — it sits at the
   // top of ChannelConfig — but exposing it through ChannelFlags lets the
   // /gpt set unified setter touch it without a separate command path.
@@ -48,6 +50,7 @@ const DEFAULT_FLAGS = {
   verbose: true,
   trace: false,
   thinking: false,
+  engine: 'codex' as 'codex' | 'api',
 }
 
 export class AccessManager {
@@ -136,6 +139,7 @@ export class AccessManager {
       verbose: flags?.verbose ?? existing?.verbose ?? DEFAULT_FLAGS.verbose,
       trace: flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace,
       thinking: flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking,
+      engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
     }
     await this.save()
   }
@@ -160,6 +164,7 @@ export class AccessManager {
       ...(patch.verbose !== undefined ? { verbose: patch.verbose } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
+      ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }
     await this.save()
@@ -175,6 +180,7 @@ export class AccessManager {
       verbose: channel?.verbose ?? DEFAULT_FLAGS.verbose,
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       thinking: channel?.thinking ?? DEFAULT_FLAGS.thinking,
+      engine: channel?.engine ?? DEFAULT_FLAGS.engine,
       requireMention: channel?.requireMention,
     }
   }

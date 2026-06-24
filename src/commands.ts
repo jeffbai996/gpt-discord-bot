@@ -59,6 +59,20 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
+    .setName('engine')
+    .setDescription('Set this channel chat engine: codex (flat sub) or api (metered).')
+    .addStringOption(o => o
+      .setName('value')
+      .setDescription('codex | api')
+      .setRequired(true)
+      .addChoices(
+        { name: 'codex - flat sub (default)', value: 'codex' },
+        { name: 'api - metered OpenAI API', value: 'api' },
+      )
+    )
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
     .setName('set')
     .setDescription('Set a per-channel flag: model, reasoning, show_code, verbose, trace, thinking, require_mention.')
     .addStringOption(o => o
@@ -222,6 +236,26 @@ export async function executeGptCommand(
       })
     }
 
+    if (subcommand === 'engine') {
+      const value = interaction.options.getString('value', true).trim().toLowerCase()
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: 'No channel resolved (run inside a channel or pass the channel arg).', ephemeral: true })
+      }
+      if (value !== 'codex' && value !== 'api') {
+        return interaction.reply({ content: `engine must be codex or api (got ${value})`, ephemeral: true })
+      }
+      try {
+        const updated = await access.setChannelFlags(channel.id, { engine: value })
+        const note = value === 'codex'
+          ? 'codex (flat sub) - falls back to the API on error/rate-limit'
+          : 'api (metered OpenAI) - bypasses codex entirely'
+        return interaction.reply({ content: `<#${channel.id}> chat engine set to ${updated.engine} - ${note}`, ephemeral: true })
+      } catch (e: any) {
+        return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
+      }
+    }
+
     if (subcommand === 'set') {
       const flag = interaction.options.getString('flag', true)
       const rawValue = interaction.options.getString('value', true).trim().toLowerCase()
@@ -279,7 +313,7 @@ export async function executeGptCommand(
         }
 
         const modelDisplay = updated.model ?? '(default)'
-        const summary = `model=${modelDisplay}, reasoning=${updated.reasoning}, showCode=${updated.showCode}, verbose=${updated.verbose}, trace=${updated.trace}, thinking=${updated.thinking}, requireMention=${updated.requireMention}`
+        const summary = `model=${modelDisplay}, reasoning=${updated.reasoning}, showCode=${updated.showCode}, verbose=${updated.verbose}, trace=${updated.trace}, thinking=${updated.thinking}, engine=${updated.engine}, requireMention=${updated.requireMention}`
         return interaction.reply({
           content: `✅ <#${channel.id}> \`${flag}\` set. ${summary}`,
           ephemeral: true
