@@ -404,10 +404,14 @@ function setEnginePresence(degraded: boolean): void {
 async function handleUserMessage(
   message: Message,
   targetMessage: Message | null,
-  expansion: boolean
+  expansion: boolean,
+  contentOverride?: string
 ): Promise<void> {
   const channelId = message.channel.id
   const userId = message.author.id
+  // When a batched-queue turn folds several messages together, the combined
+  // text comes in via contentOverride; otherwise use the message's own content.
+  const userText = contentOverride ?? message.content
   const flags = access.channelFlags(channelId)
   const model = flags.model ?? DEFAULT_MODEL
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
@@ -561,7 +565,7 @@ async function handleUserMessage(
     const apiRespond = () => openai.respond({
       systemPrompt,
       history,
-      userMessage: message.content,
+      userMessage: userText,
       userName: message.author.username,
       model,
       reasoningEffort: apiEffort(flags.reasoning),
@@ -579,7 +583,7 @@ async function handleUserMessage(
         result = await respondViaCodex({
           systemPrompt,
           history,
-          userMessage: message.content,
+          userMessage: userText,
           userName: message.author.username,
           reasoningEffort: flags.reasoning,
           codexModel: flags.codexModel,
@@ -792,6 +796,42 @@ async function handleUserMessage(
   }
 }
 
+// Per-channel turn queue: serialize turns within a channel so rapid-fire
+// messages don't each spawn a parallel codex process. While a turn runs, new
+// messages queue; when it finishes, ALL queued messages are batched into one
+// follow-up turn (repeated until the queue drains). Cross-channel stays
+// parallel — only same-channel pile-ups serialize. (Jeff 2026-06-25)
+const channelTurns = new Map<string, { running: boolean; queue: Message[] }>()
+
+async function runChannelTurn(message: Message, target: Message | null): Promise<void> {
+  const cid = message.channel.id
+  let st = channelTurns.get(cid)
+  if (!st) { st = { running: false, queue: [] }; channelTurns.set(cid, st) }
+  if (st.running) {
+    // A turn is already in flight for this channel — queue + signal it was seen.
+    st.queue.push(message)
+    void message.react('\u{1F557}').catch(() => {})
+    return
+  }
+  st.running = true
+  try {
+    await handleUserMessage(message, target, false)
+    while (st.queue.length) {
+      const batch = st.queue.splice(0, st.queue.length)
+      const carrier = batch[batch.length - 1]
+      const combined = batch.map(m => m.content).filter(Boolean).join('\n')
+      const botId = client.user?.id
+      if (botId) for (const m of batch) {
+        void m.reactions.cache.get('\u{1F557}')?.users.remove(botId).catch(() => {})
+      }
+      await handleUserMessage(carrier, null, false, combined || undefined)
+    }
+  } finally {
+    st.running = false
+    if (!st.queue.length) channelTurns.delete(cid)
+  }
+}
+
 client.on('messageCreate', async (message: Message) => {
   if (message.author.bot) return
 
@@ -824,7 +864,7 @@ client.on('messageCreate', async (message: Message) => {
     }
   }
 
-  await handleUserMessage(message, target, false)
+  await runChannelTurn(message, target)
 })
 
 client.on('messageReactionAdd', async (reaction, user) => {
