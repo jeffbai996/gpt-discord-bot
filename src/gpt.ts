@@ -16,7 +16,7 @@ import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError } from './codex-chat.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
-import { recordTurn as recordCacheTurn } from './cache-stats.ts'
+import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
 import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
@@ -219,6 +219,7 @@ const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
 const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md'))
 const pendingPlaceholders = new PendingPlaceholders(path.join(STATE_DIR, 'pending-placeholders.json'))
+initGlobalStats(path.join(STATE_DIR, 'global-stats.json'))
 const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)

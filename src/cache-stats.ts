@@ -25,16 +25,46 @@ interface TurnRecord {
 
 const channelStats = new Map<string, TurnRecord[]>()
 
-// Cumulative totals across all channels since boot — for /gpt stats.
+import { readFileSync, writeFileSync } from 'node:fs'
+
+// Cumulative totals across all channels — for /gpt stats. Persisted to disk so they
+// survive restarts (were in-memory only, resetting every redeploy — Jeff 2026-06-25).
 interface GlobalTotals {
   turns: number; inputTokens: number; outputTokens: number
   cachedInputTokens: number; reasoningTokens: number
-  byModel: Record<string, number>; bootTs: number
+  byModel: Record<string, number>; bootTs: number; since: number
 }
 const globalTotals: GlobalTotals = {
-  turns: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, byModel: {}, bootTs: Date.now(),
+  turns: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, byModel: {}, bootTs: Date.now(), since: Date.now(),
 }
 export function globalSnapshot(): GlobalTotals { return { ...globalTotals, byModel: { ...globalTotals.byModel } } }
+
+// Persistence: bootTs stays per-process (drives uptime); the totals + `since` carry
+// across restarts so /gpt stats reflects real cumulative usage, not just this boot.
+let _statsFile: string | null = null
+export function initGlobalStats(file: string): void {
+  _statsFile = file
+  try {
+    const d = JSON.parse(readFileSync(file, 'utf8'))
+    globalTotals.turns = d.turns ?? 0
+    globalTotals.inputTokens = d.inputTokens ?? 0
+    globalTotals.outputTokens = d.outputTokens ?? 0
+    globalTotals.cachedInputTokens = d.cachedInputTokens ?? 0
+    globalTotals.reasoningTokens = d.reasoningTokens ?? 0
+    globalTotals.byModel = (d.byModel && typeof d.byModel === 'object') ? d.byModel : {}
+    globalTotals.since = d.since ?? Date.now()
+  } catch { /* fresh / unreadable — start clean */ }
+}
+function saveGlobalStats(): void {
+  if (!_statsFile) return
+  try {
+    writeFileSync(_statsFile, JSON.stringify({
+      turns: globalTotals.turns, inputTokens: globalTotals.inputTokens, outputTokens: globalTotals.outputTokens,
+      cachedInputTokens: globalTotals.cachedInputTokens, reasoningTokens: globalTotals.reasoningTokens,
+      byModel: globalTotals.byModel, since: globalTotals.since,
+    }))
+  } catch { /* best-effort */ }
+}
 
 export function recordTurn(channelId: string, result: RespondResult): void {
   if (!result.usage) return
@@ -56,6 +86,7 @@ export function recordTurn(channelId: string, result: RespondResult): void {
   globalTotals.cachedInputTokens += result.usage.cachedInputTokens
   globalTotals.reasoningTokens += result.usage.reasoningTokens
   globalTotals.byModel[result.modelUsed] = (globalTotals.byModel[result.modelUsed] ?? 0) + 1
+  saveGlobalStats()
 }
 
 export interface CacheSnapshot {

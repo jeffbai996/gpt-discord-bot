@@ -274,7 +274,7 @@ export async function executeGptCommand(
       const engines = Object.entries(g.byModel).map(([m, ct]) => `${m} ${ct}`).join(' · ') || '—'
       const rl = await readLatestRateLimits()
       const body = [
-        '\ud83d\udcca @gpt usage — since boot, all channels',
+        '\ud83d\udcca @gpt usage — cumulative across restarts, all channels',
         '```',
         `turns:    ${n(g.turns)}`,
         `input:    ${n(g.inputTokens)} tok  (${n(g.cachedInputTokens)} cached, ${cachePct}%)`,
