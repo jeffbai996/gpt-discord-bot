@@ -424,7 +424,7 @@ async function handleUserMessage(
   let placeholderId: string | null = null
   if (!workMessage) {
     try {
-      workMessage = await message.reply(`💭 **${effortLabel}…**`)
+      workMessage = await message.reply(`💭 ✻ **${effortLabel}…**`)
       placeholderId = workMessage.id
       pendingPlaceholders.track(message.channel.id, workMessage.id)
     } catch (e) {
@@ -444,7 +444,7 @@ async function handleUserMessage(
     // glyph set + trailing dots both pulse each 1.5s tick, then settle to ✓.
     const GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸']
     const dots = ['.', '..', '…']
-    let fi = 0
+    let fi = 1
     thinkingAnim = setInterval(() => {
       if (!workMessage) return
       const sp = GLYPHS[fi % GLYPHS.length]
