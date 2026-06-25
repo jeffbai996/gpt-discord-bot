@@ -17,6 +17,7 @@ import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError } from './codex-chat.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
+import { channelSessions } from './channel-sessions.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
 import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
@@ -589,10 +590,16 @@ async function handleUserMessage(
           codexModel: flags.codexModel,
           extraText,
           channelId,
+          resumeSessionId: channelSessions.get(channelId),
           onEvent,
         })
+        if (result.threadId) channelSessions.set(channelId, result.threadId)
         setEnginePresence(false)
       } catch (e) {
+        // A codex turn failed — drop this channel's session pointer so the NEXT turn
+        // starts a clean fresh session (a wedged/expired session would otherwise fail
+        // every turn; the fresh turn re-grounds from Discord history).
+        channelSessions.clear(channelId)
         // Don't fail silently. If codex was interrupted by the backstop (or errored),
         // SHOW it — an ⏳ reaction + a short note on the placeholder — THEN fall back
         // to the API so the user still gets an answer, but knows what happened.

@@ -74,6 +74,9 @@ export interface RespondResult extends ParsedResponse {
   finishReason: string | null
   durationMs: number
   modelUsed: string
+  // codex session id (rollout thread.started) for per-channel resume; set only on
+  // the codex path, undefined on the API path. (Jeff 2026-06-25)
+  threadId?: string
   // The captured reasoning-summary text ('' when the model produced none /
   // isn't a reasoning model). Rendered by gpt.ts when the `thinking` flag is on.
   reasoning: string

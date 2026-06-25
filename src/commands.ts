@@ -25,6 +25,7 @@ function fmtLimitLines(rl: RateLimits | null): string[] {
   return out
 }
 import { rewriteEnvVar, scheduleSelfRestart } from './restart.ts'
+import { channelSessions } from './channel-sessions.ts'
 
 const ALLOWED_MODELS = ['gpt-5.5'] as const
 
@@ -58,6 +59,10 @@ export const gptCommand = new SlashCommandBuilder()
     .setName('compact')
     .setDescription('Force a context-summary rollup now, regardless of the message threshold')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('clear')
+    .setDescription('Reset this channel — the next codex turn starts from a blank slate.')
   )
   .addSubcommand(s => s
     .setName('stats')
@@ -217,6 +222,16 @@ export async function executeGptCommand(
       const filename = interaction.options.getString('filename', true)
       await persona.load(filename)
       return interaction.reply({ content: `✅ Persona swapped to \`${filename}\`.`, ephemeral: true })
+    }
+
+    if (subcommand === 'clear') {
+      const had = channelSessions.clear(interaction.channelId)
+      return interaction.reply({
+        content: had
+          ? '🧹 Session cleared — the next turn in this channel starts fresh.'
+          : 'ℹ️ No active session here (already a blank slate).',
+        ephemeral: true,
+      })
     }
 
     if (subcommand === 'compact') {

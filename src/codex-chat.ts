@@ -47,6 +47,7 @@ export interface CodexChatInput {
   codexModel?: string
   extraText?: string
   channelId?: string
+  resumeSessionId?: string
   onEvent?: (event: LifecycleEvent) => void
 }
 
@@ -329,25 +330,39 @@ export async function readLatestRateLimits(): Promise<RateLimits | null> {
   return null
 }
 
+// Lean prompt for a RESUMED session: codex already holds persona + history in the
+// session, so send only the new user turn (+ any extra context). Keeping it minimal
+// is what stops the session from bloating turn over turn.
+function buildResumePrompt(input: CodexChatInput): string {
+  const who = input.userName ? `[${input.userName}] ` : ''
+  const extra = input.extraText?.trim() ? `\n\n[Additional context]\n${input.extraText.trim()}` : ''
+  return `${who}${input.userMessage}${extra}`
+}
+
 export async function respondViaCodex(input: CodexChatInput): Promise<RespondResult> {
   const t0 = Date.now()
   input.onEvent?.({ type: 'thinking_start' })
 
-  const prompt = buildPrompt(input)
+  const resuming = !!input.resumeSessionId
+  // On resume, codex already holds the persona + full prior conversation in the
+  // session, so send a LEAN prompt (just the new message); re-injecting persona +
+  // history every turn would bloat the session. Fresh turns get the full prompt.
+  const prompt = resuming ? buildResumePrompt(input) : buildPrompt(input)
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
   const secs = Math.floor(TIMEOUT_MS / 1000)
+  const model = input.codexModel || 'gpt-5.5'
 
-  // --json → JSONL events on stdout (parsed for tool calls / reasoning / token
-  // usage so trace+thinking+verbose work on codex turns). -o → the clean final
-  // reply text to a file (kept separate from the event stream). Prompt goes via
-  // env (CODEX_PROMPT) so user text can't break out of the shell command.
-  // Neutral cwd (/tmp) + workspace-write: codex auto-runs within the sandbox
-  // (writes confined to the /tmp workspace; reads allowed). Jeff opted into write 2026-06-24.
-  const script =
-    `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check --add-dir /home/user ` +
-    `-s workspace-write -c sandbox_workspace_write.network_access=true -c model="${input.codexModel || 'gpt-5.5'}" -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
-    `</dev/null 2>/dev/null`
+  // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
+  // env (CODEX_PROMPT) so user text can't break out of the shell. `exec resume` is
+  // pickier than fresh `exec`: it REJECTS --add-dir and -s (the resumed session
+  // INHERITS its sandbox + dirs from the original), so resume carries only the
+  // minimal flags. Fresh exec keeps the full sandbox setup. (verified 2026-06-25)
+  const common = `-c model="${model}" -c model_reasoning_effort=${effort} --json -o "${outfile}"`
+  const execPart = resuming
+    ? `exec resume --skip-git-repo-check ${common} "${input.resumeSessionId}" "$CODEX_PROMPT"`
+    : `exec --skip-git-repo-check --add-dir /home/user -s workspace-write -c sandbox_workspace_write.network_access=true ${common} "$CODEX_PROMPT"`
+  const script = `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" ${execPart} </dev/null 2>/dev/null`
 
   // Stream codex's JSONL events line-by-line so we can surface what it's doing
   // LIVE (running cmd / searching / editing) to the placeholder via onEvent, while
@@ -418,5 +433,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     modelUsed: 'codex',
     reasoning: parsed.reasoning,
     toolCalls: parsed.toolCalls,
+    threadId,
   }
 }
