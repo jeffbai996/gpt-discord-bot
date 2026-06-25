@@ -257,8 +257,8 @@ function liveEvent(ev: any): { status: string; tool?: { name: string; args: stri
 // The --json exec stream omits file-edit hunk text; codex's session rollout keeps
 // it. Locate the rollout by thread_id (== the rollout filename suffix) and pull
 // each path's unified_diff from the patch_apply_end events. Best-effort.
-async function readRolloutDiffs(threadId: string): Promise<Map<string, string>> {
-  const out = new Map<string, string>()
+async function readRolloutDiffs(threadId: string): Promise<Array<{ path: string; diff: string }>> {
+  const out: Array<{ path: string; diff: string }> = []
   const base = path.join(os.homedir(), '.codex', 'sessions')
   let entries: string[] = []
   try { entries = (await readdir(base, { recursive: true })) as string[] } catch { return out }
@@ -266,6 +266,9 @@ async function readRolloutDiffs(threadId: string): Promise<Map<string, string>> 
   if (!rel) return out
   let content = ''
   try { content = await readFile(path.join(base, rel), 'utf8') } catch { return out }
+  // Ordered list, not a per-path map: multiple edits to the SAME file each get
+  // their own patch_apply_end, and we must pair them to edit toolCalls in order
+  // (else two edits to one file both show the last diff — Jeff 2026-06-24).
   for (const line of content.split('\n')) {
     if (!line.includes('patch_apply_end')) continue
     try {
@@ -273,7 +276,7 @@ async function readRolloutDiffs(threadId: string): Promise<Map<string, string>> 
       const changes = ev?.payload?.changes
       if (changes && typeof changes === 'object') {
         for (const [p, info] of Object.entries(changes as Record<string, any>)) {
-          if (info?.unified_diff) out.set(p, String(info.unified_diff))
+          if (info?.unified_diff) out.push({ path: p, diff: String(info.unified_diff) })
         }
       }
     } catch { /* skip malformed line */ }
@@ -342,11 +345,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   if (threadId && parsed.toolCalls.some(t => t.name === 'edit')) {
     try {
       const diffs = await readRolloutDiffs(threadId)
+      const used = new Array(diffs.length).fill(false)
       for (const tc of parsed.toolCalls) {
-        if (tc.name === 'edit') {
-          const d = diffs.get(String(tc.args.file_path ?? ''))
-          if (d) tc.diff = d
-        }
+        if (tc.name !== 'edit') continue
+        const p = String(tc.args.file_path ?? '')
+        const idx = diffs.findIndex((d, i) => !used[i] && d.path === p)
+        if (idx >= 0) { tc.diff = diffs[idx].diff; used[idx] = true }
       }
     } catch { /* diff is best-effort enrichment */ }
   }
