@@ -12,6 +12,7 @@ export interface ToolCall {
   args: Record<string, unknown>
   durationMs: number
   resultPreview: string
+  resultLines?: number   // line count of the raw (pre-clip) output, for the [N lines] tag
   failed: boolean
   diff?: string   // unified diff for file edits (from codex rollout), shown in the trace
 }

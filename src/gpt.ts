@@ -152,9 +152,15 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       for (const b of body.slice(0, 24)) lines.push(b)
       if (body.length > 24) lines.push(`... (${body.length - 24} more lines)`)
     } else if (call.resultPreview) {
+      // Match the output's truncation budget to the command's (71 shell / 115 other);
+      // append a same-line [N lines] tag when the raw output was multi-line (Jeff 2026-06-24).
+      const budget = call.name === 'shell' ? 71 : 115
+      const n = call.resultLines ?? 0
+      const suffix = n > 1 ? ` [${n} lines]` : ''
       let rp = call.resultPreview.replace(/\n/g, ' ')
-      if (rp.length > 60) rp = rp.slice(0, 60) + '…'
-      lines.push(`⎿ ${rp}`)
+      const cap = budget - suffix.length
+      if (rp.length > cap) rp = rp.slice(0, cap - 1) + '…'
+      lines.push(`⎿ ${rp}${suffix}`)
     }
   }
   return lines

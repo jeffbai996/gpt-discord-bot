@@ -132,6 +132,10 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
 
   const clip = (s: unknown, n: number) =>
     String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
+  const countLines = (s: unknown) => {
+    const t = String(s ?? '').replace(/\n+$/, '')
+    return t ? t.split('\n').length : 0
+  }
 
   for (const line of jsonl.split('\n')) {
     const s = line.trim()
@@ -175,6 +179,7 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
           args: { command: clip(cmd, 80) },
           durationMs: 0, // codex JSONL carries no per-item timing
           resultPreview: clip(it.aggregated_output, 200),
+          resultLines: countLines(it.aggregated_output),
           failed: typeof it.exit_code === 'number' ? it.exit_code !== 0 : false,
         })
         break
