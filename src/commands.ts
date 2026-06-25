@@ -240,35 +240,6 @@ export async function executeGptCommand(
     }
 
     if (subcommand === 'model') {
-      const newModel = interaction.options.getString('value', true)
-      if (!ALLOWED_MODELS.includes(newModel as typeof ALLOWED_MODELS[number])) {
-        return interaction.reply({
-          content: `❌ Model must be one of: ${ALLOWED_MODELS.join(', ')}. Got \`${newModel}\`.`,
-          ephemeral: true
-        })
-      }
-      const stateDir = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
-      const envPath = path.join(stateDir, '.env')
-      try {
-        await rewriteEnvVar(envPath, 'OPENAI_MODEL', newModel)
-      } catch (e: any) {
-        return interaction.reply({
-          content: `❌ Could not write \`${envPath}\`: ${e?.message ?? e}`,
-          ephemeral: true,
-        })
-      }
-      // Reply BEFORE scheduling the restart so Discord acks while the process
-      // is still alive. The detached `bash -c 'sleep ... && systemctl restart'`
-      // outlives this process; systemd brings us back up reading the new env.
-      await interaction.reply({
-        content: `🔁 Model set to \`${newModel}\`. Restarting in ~1.5s — back in a few seconds with the new model loaded.`,
-        ephemeral: true,
-      })
-      scheduleSelfRestart('gpt', 1500)
-      return
-    }
-
-    if (subcommand === 'model') {
       const value = interaction.options.getString('value', true).trim().toLowerCase()
       const channel = interaction.options.getChannel('channel') ?? interaction.channel
       if (!channel) {
