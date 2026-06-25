@@ -54,7 +54,7 @@ export class PendingPlaceholders {
         const ch = await client.channels.fetch(p.channelId)
         if (ch && ch.isTextBased()) {
           const msg = await ch.messages.fetch(p.messageId)
-          await msg.edit('✗ Interrupted')
+          await msg.edit('✗ **Interrupted**')
           swept++
         }
       } catch {
