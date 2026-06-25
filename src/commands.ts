@@ -390,8 +390,8 @@ export async function executeGptCommand(
           '```',
           `cache hit rate: ${hitPct}%`,
           `input tokens:   ${inK}k total · ${cachedK}k cached (50% rate)`,
-          `output tokens:  ${outK}k`,
-          '```' + reasoningLine + modelsLine,
+          `output tokens:  ${outK}k` + reasoningLine + modelsLine,
+          '```',
           `_OpenAI caches prompt prefixes automatically — no TTL or flush controls. Cached tokens bill at ~50% of the input rate._`
         ].join('\n'),
         ephemeral: true
