@@ -85,6 +85,9 @@ function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<
 const MEGA_LINE_MAX = 300
 const TRACE_BODY_CHAR_BUDGET = 1800
 const TRACE_MAX_LINES = 50
+// Max visible width of one trace row before Discord wraps it in the fenced diff
+// block. Keeps shell commands + their output on a single line (Jeff 2026-06-25).
+const ROW_W = 54
 
 function capMegaLine(ln: string): string {
   return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
@@ -142,10 +145,12 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
   for (const call of ordered) {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
-    // Digest stretched +5 now the [0ms] tail is gone (Jeff 2026-06-24).
-    const dig = call.name === 'shell' ? argDigest(call.args, 71) : argDigest(call.args, 115)
     const ms = call.durationMs > 0 ? ` [${call.durationMs}ms]` : ''
-    lines.push(`${prefix}${shortToolName(call.name)}(${dig})${tail}${ms}`)
+    const nm = shortToolName(call.name)
+    // Keep the whole row within ROW_W so it never wraps in Discord's code block.
+    const overhead = prefix.length + nm.length + 2 + tail.length + ms.length
+    const dig = argDigest(call.args, Math.max(20, ROW_W - overhead))
+    lines.push(`${prefix}${nm}(${dig})${tail}${ms}`)
     if (call.diff) {
       // Bare ⎿ summary + body; renderTraceCard's padTraceLine adds the 1-cell indent.
       const { badge, body } = formatDiff(call.diff)
@@ -155,11 +160,10 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
     } else if (call.resultPreview) {
       // Match the output's truncation budget to the command's (71 shell / 115 other);
       // append a same-line [N lines] tag when the raw output was multi-line (Jeff 2026-06-24).
-      const budget = call.name === 'shell' ? 71 : 115
       const n = call.resultLines ?? 0
       const suffix = n > 1 ? ` [${n} lines]` : ''
       let rp = call.resultPreview.replace(/\n/g, ' ')
-      const cap = budget - suffix.length
+      const cap = Math.max(20, ROW_W - 3 - suffix.length)
       if (rp.length > cap) rp = rp.slice(0, cap - 1) + '…'
       lines.push(`⎿ ${rp}${suffix}`)
     }
@@ -519,8 +523,10 @@ async function handleUserMessage(
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
       if (flags.trace !== 'off') {
-        const dig = String(event.args ?? '').replace(/\s+/g, ' ').slice(0, 90)
-        liveToolRows.push(`+ ● ${shortToolName(event.name)}(${dig})`)
+        const nm = shortToolName(event.name)
+        const cap = Math.max(20, ROW_W - (4 + nm.length + 2))
+        const dig = String(event.args ?? '').replace(/\s+/g, ' ').slice(0, cap)
+        liveToolRows.push(`+ ● ${nm}(${dig})`)
         flushLiveTrace()
       }
       return
