@@ -33,15 +33,21 @@ export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore |
     registry.register(makeSearchMemoryTool(client, memory))
   }
 
-  // MCP autoload — opt-in via GPT_MCP_URL. Failures are logged + an
-  // unreachable stub is registered so the model has a valid tool surface to
-  // call when asked about the missing service. Future: support multiple
-  // servers via comma-separated GPT_MCP_URL or a JSON config.
-  const mcpUrl = process.env.GPT_MCP_URL
-  if (mcpUrl) {
-    const label = process.env.GPT_MCP_LABEL || mcpUrl
+  // MCP autoload — opt-in via GPT_MCP_URL. Supports MULTIPLE servers via
+  // comma-separated GPT_MCP_URL (+ matching comma-separated GPT_MCP_LABEL),
+  // e.g. GPT_MCP_URL=http://…:8001/mcp,http://…:8772/mcp with
+  // GPT_MCP_LABEL=ibkr,playwright. A single value is the common case and still
+  // works unchanged. Each server is connected independently: one failing just
+  // registers an unreachable stub for that label, the others still load.
+  const mcpUrls = (process.env.GPT_MCP_URL || '')
+    .split(',').map(s => s.trim()).filter(Boolean)
+  const mcpLabels = (process.env.GPT_MCP_LABEL || '')
+    .split(',').map(s => s.trim())
+  for (let i = 0; i < mcpUrls.length; i++) {
+    const url = mcpUrls[i]
+    const label = mcpLabels[i] || url
     try {
-      const mcpClient = await connectMcpClient(mcpUrl)
+      const mcpClient = await connectMcpClient(url)
       const tools = await loadMcpTools(mcpClient)
       for (const t of tools) registry.register(t)
       console.error(`[mcp] connected to ${label}; registered ${tools.length} tools`)
