@@ -1,10 +1,10 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction } from 'discord.js'
+import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction, AttachmentBuilder } from 'discord.js'
 import path from 'node:path'
 import os from 'node:os'
 import { AccessManager, type ReasoningEffort } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
-import { readLatestRateLimits, type RateLimits, type RateWindow } from './codex-chat.ts'
+import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -63,6 +63,10 @@ export const gptCommand = new SlashCommandBuilder()
   .addSubcommand(s => s
     .setName('clear')
     .setDescription('Reset this channel — the next codex turn starts from a blank slate.')
+  )
+  .addSubcommand(s => s
+    .setName('history')
+    .setDescription('Print this channel\'s codex session conversation (inline, or .md if long).')
   )
   .addSubcommand(s => s
     .setName('stats')
@@ -222,6 +226,33 @@ export async function executeGptCommand(
       const filename = interaction.options.getString('filename', true)
       await persona.load(filename)
       return interaction.reply({ content: `✅ Persona swapped to \`${filename}\`.`, ephemeral: true })
+    }
+
+    if (subcommand === 'history') {
+      const sid = channelSessions.get(interaction.channelId)
+      if (!sid) {
+        return interaction.reply({ content: 'ℹ️ No active session in this channel yet — nothing to show.', ephemeral: true })
+      }
+      await interaction.deferReply({ ephemeral: true })
+      const turns = await readSessionHistory(sid)
+      if (!turns.length) {
+        return interaction.editReply('⚠️ Session found but no readable conversation in the rollout.')
+      }
+      const raw = turns.map(t => `${t.role === 'user' ? '🧑 USER' : '🤖 GPT'}: ${t.text}`).join('\n\n')
+      const text = raw.replace(/```/g, '`\u200b`\u200b`')  // neutralize fences so they don't break our code block
+      const MAX_INLINE = 10000
+      if (text.length <= MAX_INLINE) {
+        const chunks: string[] = []
+        for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
+        await interaction.editReply('```\n' + chunks[0] + '\n```')
+        for (let i = 1; i < chunks.length; i++) {
+          await interaction.followUp({ content: '```\n' + chunks[i] + '\n```', ephemeral: true })
+        }
+      } else {
+        const file = new AttachmentBuilder(Buffer.from(raw, 'utf8'), { name: `gpt-session-${sid.slice(0, 8)}.md` })
+        await interaction.editReply({ content: `📜 Session history — ${turns.length} turns, ${text.length} chars (too long for inline, attached):`, files: [file] })
+      }
+      return
     }
 
     if (subcommand === 'clear') {

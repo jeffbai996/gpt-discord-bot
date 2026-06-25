@@ -293,6 +293,34 @@ async function readRolloutDiffs(threadId: string): Promise<Array<{ path: string;
   return out
 }
 
+// Extract the user/assistant conversation from a codex session rollout, for
+// /gpt history. event_msg events carry the clean turns (user_message /
+// agent_message); developer/permissions noise is skipped. Oldest-first; [] if
+// the session file can't be found.
+export async function readSessionHistory(sessionId: string): Promise<Array<{ role: 'user' | 'assistant'; text: string }>> {
+  const turns: Array<{ role: 'user' | 'assistant'; text: string }> = []
+  const base = path.join(os.homedir(), '.codex', 'sessions')
+  let entries: string[] = []
+  try { entries = (await readdir(base, { recursive: true })) as string[] } catch { return turns }
+  const rel = entries.find(e => e.endsWith(`${sessionId}.jsonl`))
+  if (!rel) return turns
+  let content = ''
+  try { content = await readFile(path.join(base, rel), 'utf8') } catch { return turns }
+  for (const line of content.split('\n')) {
+    if (!line.includes('event_msg')) continue
+    try {
+      const o = JSON.parse(line)
+      if (o?.type !== 'event_msg') continue
+      const p = o.payload || {}
+      const text = String(p.message ?? p.text ?? '').trim()
+      if (!text) continue
+      if (p.type === 'user_message') turns.push({ role: 'user', text })
+      else if (p.type === 'agent_message') turns.push({ role: 'assistant', text })
+    } catch { /* skip malformed */ }
+  }
+  return turns
+}
+
 export interface RateWindow { usedPercent: number; windowMinutes: number; resetsAt: number }
 export interface RateLimits { primary?: RateWindow; secondary?: RateWindow; planType?: string }
 
