@@ -22,6 +22,7 @@ import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
 import { PinnedFactsStore } from './pinned-facts.ts'
 import { PendingPlaceholders } from './pending-placeholders.ts'
+import { DeferredActions } from './deferred-actions.ts'
 import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
@@ -218,6 +219,7 @@ const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
 const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md'))
 const pendingPlaceholders = new PendingPlaceholders(path.join(STATE_DIR, 'pending-placeholders.json'))
+const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for non-chat endpoints (audio.transcriptions, embeddings,
@@ -347,6 +349,7 @@ client.once('ready', async () => {
   try {
     const n = await pendingPlaceholders.sweep(client)
     if (n) console.error(`swept ${n} interrupted placeholder(s) from a prior run`)
+    deferredActions.rearm(client)
   } catch (e) {
     console.error('placeholder sweep failed:', e)
   }
@@ -571,6 +574,7 @@ async function handleUserMessage(
           userMessage: message.content,
           userName: message.author.username,
           reasoningEffort: flags.reasoning,
+          codexModel: flags.codexModel,
           extraText,
           channelId,
           onEvent,
@@ -742,9 +746,7 @@ async function handleUserMessage(
     // the merged message, leaving the reply body intact.
     if (!persist && mergedMsg) {
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 120_000
-      const mm = mergedMsg
-      const bodyOnly = parts[0] ?? ''
-      setTimeout(() => { mm.edit(bodyOnly).catch(() => {}) }, lingerMs)
+      deferredActions.schedule(client, { channelId: mergedMsg.channelId, messageId: mergedMsg.id, action: 'strip', content: parts[0] ?? '', dueAt: Date.now() + lingerMs })
     }
 
     // Collapse: keep the trace/thinking card(s) up for a readable 120s linger (same
@@ -753,7 +755,7 @@ async function handleUserMessage(
     if (flags.trace === 'collapse' && liveTraceMsg) toCollapse.push(liveTraceMsg as unknown as Message)
     if (toCollapse.length) {
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 120_000
-      setTimeout(() => { for (const m of toCollapse) m.delete().catch(() => {}) }, lingerMs)
+      for (const m of toCollapse) deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + lingerMs })
     }
 
     if (result.finishReason === 'length') {

@@ -43,6 +43,7 @@ export interface CodexChatInput {
   userMessage: string
   userName: string
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+  codexModel?: string
   extraText?: string
   channelId?: string
   onEvent?: (event: LifecycleEvent) => void
@@ -343,7 +344,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // (writes confined to the /tmp workspace; reads allowed). Jeff opted into write 2026-06-24.
   const script =
     `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" exec --skip-git-repo-check --add-dir /home/user ` +
-    `-s workspace-write -c sandbox_workspace_write.network_access=true -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
+    `-s workspace-write -c sandbox_workspace_write.network_access=true -c model="${input.codexModel || 'gpt-5.5'}" -c model_reasoning_effort=${effort} --json -o "${outfile}" "$CODEX_PROMPT" ` +
     `</dev/null 2>/dev/null`
 
   // Stream codex's JSONL events line-by-line so we can surface what it's doing

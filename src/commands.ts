@@ -68,6 +68,17 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('ChatGPT-sub usage left: the 5-hour + weekly rate-limit windows.')
   )
   .addSubcommand(s => s
+    .setName('model')
+    .setDescription('Codex engine model: gpt-5.5 (default), gpt-5.4, or gpt-5.4-mini (lighter on quota).')
+    .addStringOption(o => o.setName('value').setDescription('gpt-5.5 | gpt-5.4 | gpt-5.4-mini').setRequired(true)
+      .addChoices(
+        { name: 'gpt-5.5 — default, most capable', value: 'gpt-5.5' },
+        { name: 'gpt-5.4 — lighter', value: 'gpt-5.4' },
+        { name: 'gpt-5.4-mini — lightest on the 5h/weekly quota', value: 'gpt-5.4-mini' },
+      ))
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
     .setName('cache')
     .setDescription('Show recent prompt-cache hit telemetry for this channel (rolling window of last 50 turns).')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -255,6 +266,19 @@ export async function executeGptCommand(
       })
       scheduleSelfRestart('gpt', 1500)
       return
+    }
+
+    if (subcommand === 'model') {
+      const value = interaction.options.getString('value', true).trim().toLowerCase()
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
+      }
+      if (!['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'].includes(value)) {
+        return interaction.reply({ content: `❌ \`model\` must be gpt-5.5 | gpt-5.4 | gpt-5.4-mini (got \`${value}\`)`, ephemeral: true })
+      }
+      const updated = await access.setChannelFlags(channel.id, { codexModel: value as 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini' })
+      return interaction.reply({ content: `✅ <#${channel.id}> codex model = \`${updated.codexModel}\` (codex engine only; API path unchanged).`, ephemeral: true })
     }
 
     if (subcommand === 'limits') {

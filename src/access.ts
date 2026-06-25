@@ -12,6 +12,7 @@ export interface ChannelConfig {
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
   thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
+  codexModel?: 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini'  // default gpt-5.5 — codex engine model only
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
 }
 
@@ -21,6 +22,7 @@ export interface ChannelFlags {
   trace: 'off' | 'on' | 'collapse'
   thinking: 'off' | 'on' | 'collapse'
   engine: 'codex' | 'api'
+  codexModel: 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini'
   counter: 'off' | 'token' | 'both'
   // requireMention isn't a "rendering" flag like the others — it sits at the
   // top of ChannelConfig — but exposing it through ChannelFlags lets the
@@ -56,6 +58,7 @@ const DEFAULT_FLAGS = {
   trace: 'off' as 'off' | 'on' | 'collapse',
   thinking: 'off' as 'off' | 'on' | 'collapse',
   engine: 'codex' as 'codex' | 'api',
+  codexModel: 'gpt-5.5' as 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini',
   counter: 'both' as 'off' | 'token' | 'both',
 }
 
@@ -144,6 +147,7 @@ export class AccessManager {
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
       thinking: normTri(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
+      codexModel: flags?.codexModel ?? existing?.codexModel ?? DEFAULT_FLAGS.codexModel,
       counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,
     }
     await this.save()
@@ -168,6 +172,7 @@ export class AccessManager {
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
       ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
+      ...(patch.codexModel !== undefined ? { codexModel: patch.codexModel } : {}),
       ...(patch.counter !== undefined ? { counter: patch.counter } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }
@@ -183,6 +188,7 @@ export class AccessManager {
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       thinking: channel?.thinking ?? DEFAULT_FLAGS.thinking,
       engine: channel?.engine ?? DEFAULT_FLAGS.engine,
+      codexModel: channel?.codexModel ?? DEFAULT_FLAGS.codexModel,
       counter: channel?.counter ?? DEFAULT_FLAGS.counter,
       requireMention: channel?.requireMention,
     }
