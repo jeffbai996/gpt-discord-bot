@@ -56,7 +56,7 @@ function normTri(v: unknown): TriState {
 // Codex-engine models available on the flat ChatGPT sub (verified live 2026-06-25).
 // gpt-5-pro errors ("model metadata not found") and o3 is being retired — both excluded.
 // The -codex variants are OpenAI's agentic/tool-use-tuned line.
-export const CODEX_MODELS = ['gpt-5.5', 'gpt-5.5-codex', 'gpt-5.4', 'gpt-5.4-codex', 'gpt-5-codex', 'gpt-5.4-mini'] as const
+export const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const  // -codex variants 400 on a ChatGPT account (API-only); pro/o3 also unsupported
 export type CodexModel = typeof CODEX_MODELS[number]
 
 const DEFAULT_FLAGS = {

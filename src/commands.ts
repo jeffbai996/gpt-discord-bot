@@ -87,10 +87,7 @@ export const gptCommand = new SlashCommandBuilder()
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
         { name: 'gpt-5.5 — default, most capable all-rounder', value: 'gpt-5.5' },
-        { name: 'gpt-5.5-codex — agentic/tool-tuned (best for browser + multi-step)', value: 'gpt-5.5-codex' },
-        { name: 'gpt-5.4 — lighter', value: 'gpt-5.4' },
-        { name: 'gpt-5.4-codex — agentic-tuned, lighter', value: 'gpt-5.4-codex' },
-        { name: 'gpt-5-codex — agentic-tuned (older)', value: 'gpt-5-codex' },
+        { name: 'gpt-5.4 — lighter, easier on quota', value: 'gpt-5.4' },
         { name: 'gpt-5.4-mini — lightest on the 5h/weekly quota', value: 'gpt-5.4-mini' },
       ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
