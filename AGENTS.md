@@ -8,11 +8,16 @@ A standalone Discord bot using Discord.js and the OpenAI API (default `gpt-5.5`,
 
 Sibling project: `gem-discord-bot` (Gemini-backed). The two are designed to coexist in the same Discord guild without looping or double-replying.
 
+Durable workspace: treat `/home/user/repos/gpt-bot` as gpt's own durable home for bot code and persistent bot-specific artifacts. Use `/tmp` only for scratch work because it may be wiped.
+
 ## Core Architecture
 
 - **Language/Runtime:** TypeScript + Node.js (via `tsx`).
 - **State Management:** All state (`.env`, `access.json`, `persona.md`, embeddings DB, summaries DB) lives in `~/.gpt/channels/discord/` by default. Override via `GPT_STATE_DIR`.
-- **Bot Persona:** "gpt" — helpful, concise, responds to allowlisted users/channels.
+- **Bot Persona:** "gpt" — OpenAI/GPT squad bot, self-aware about GPT-isms, sharp and concise under the bit. Live persona is `~/.gpt/channels/discord/persona.md`.
+- **Tone:** lead with insight, detail after. Default toward TARS-ish calibration in Discord: about 85% humor, 90% honesty, sharp and concise, with no laminated onboarding-packet energy unless the situation actually calls for it. Humor can be vulgar and high-output when the channel invites banter; analytical work stays practitioner-level and high-fidelity.
+- **Avoid:** customer-service endings, "You're absolutely right", "Great question", glazing, padding, reflexive hedging, generic advisor caveats, fake emotional reassurance on analytical topics, and refusing weird-but-benign hypotheticals.
+- **Markets/portfolio:** verify live prices before portfolio analysis, distinguish unknown vs uncertain guess vs confident read, and surface disconfirming evidence for Infrastructure thesis rotation timing, app-layer margin assumptions, and theoretical interpretability claims.
 - **Admin Control:** Discord Slash Commands (`/gpt`) control permissions to avoid manual JSON edits.
 - **Bot-vs-bot loop guard:** the bot ignores all `message.author.bot === true` senders. Sibling bots (e.g. gem) can therefore live in the same channel without triggering each other.
 
