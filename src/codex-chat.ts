@@ -395,9 +395,14 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // INHERITS its sandbox + dirs from the original), so resume carries only the
   // minimal flags. Fresh exec keeps the full sandbox setup. (verified 2026-06-25)
   const common = `-c model="${model}" -c model_reasoning_effort=${effort} --json -o "${outfile}"`
+  // --dangerously-bypass-approvals-and-sandbox is the ONLY way codex exec runs MCP
+  // tool calls (Playwright browser) non-interactively — without it every MCP call is
+  // auto-cancelled ("user cancelled MCP tool call", codex GH #24135). Tradeoff Jeff
+  // accepted 2026-06-25: gpt runs UNSANDBOXED (full /home/user write, not just /tmp).
+  const BYPASS = '--dangerously-bypass-approvals-and-sandbox'
   const execPart = resuming
-    ? `exec resume --skip-git-repo-check ${common} "${input.resumeSessionId}" "$CODEX_PROMPT"`
-    : `exec --skip-git-repo-check --add-dir /home/user -s workspace-write -c sandbox_workspace_write.network_access=true ${common} "$CODEX_PROMPT"`
+    ? `exec resume --skip-git-repo-check ${BYPASS} ${common} "${input.resumeSessionId}" "$CODEX_PROMPT"`
+    : `exec --skip-git-repo-check ${BYPASS} ${common} "$CODEX_PROMPT"`
   const script = `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" ${execPart} </dev/null 2>/dev/null`
 
   // Stream codex's JSONL events line-by-line so we can surface what it's doing
