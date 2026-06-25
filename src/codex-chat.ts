@@ -35,6 +35,7 @@ const TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 600_000
 // path keeps squad-memory after the chat-engine swap (codex already has web).
 const SQUAD_STORE_BIN = process.env.GPT_SQUAD_STORE_BIN || '/home/user/.local/bin/shared-memory'
 const VECGREP_BIN = process.env.GPT_VECGREP_BIN || '/home/user/.local/bin/vecgrep'
+const IBKR_BIN = process.env.GPT_IBKR_BIN || '/home/user/.local/bin/ibkr'
 
 export interface CodexChatInput {
   systemPrompt: string
@@ -93,6 +94,7 @@ function buildPrompt(input: CodexChatInput): string {
       `preference, a project, prior context). Skip it for general knowledge, code, or casual ` +
       `chat — don't slow those down.`,
     `For deeper semantic search across the whole squad corpus (past Discord conversations, indexed files, all memories/journals), run: ${VECGREP_BIN} search "<query>" — use it when recall isn't enough or you need older chat context; only when the question genuinely needs it.`,
+    `For Jeff's live IBKR brokerage data (real quotes, positions, margin/liquidity, P&L, technicals, risk metrics), run the ${IBKR_BIN} CLI. Examples: ${IBKR_BIN} quote MU  |  ${IBKR_BIN} positions  |  ${IBKR_BIN} margin  |  ${IBKR_BIN} pnl  |  ${IBKR_BIN} tools (lists all 34, then ${IBKR_BIN} <tool> '<json-args>' to call any). Use it whenever the question needs real account or market numbers - never guess prices or invent positions. Output is sensitive: only share portfolio specifics where Jeff already is.`,
     `You are a FULL squad member — you can RECORD to the shared brain, not just read it. When `
       + `something durable is worth saving (a decision, a preference, a person/project fact, a `
       + `to-do), run ONE of these (always pass the --discord-chat-id shown so an undo card posts):\n`
