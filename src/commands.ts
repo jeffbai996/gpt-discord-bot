@@ -260,8 +260,7 @@ export async function executeGptCommand(
     if (subcommand === 'limits') {
       const rl = await readLatestRateLimits()
       const plan = rl?.planType ? ` (plan: ${rl.planType})` : ''
-      const body = ['\ud83c\udfab @gpt — ChatGPT-sub limits' + plan, '```', ...fmtLimitLines(rl), '```',
-        '-# snapshot from the last codex turn; refreshes as the bot runs'].join('\n')
+      const body = ['\ud83c\udfab @gpt — ChatGPT-sub limits' + plan, '```', ...fmtLimitLines(rl), '```'].join('\n')
       return interaction.reply({ content: body, ephemeral: true })
     }
 
