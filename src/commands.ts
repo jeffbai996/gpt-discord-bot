@@ -83,7 +83,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('model')
-    .setDescription('Codex engine model — 5.5 default; -codex variants are agentic/tool-tuned. Omit value to read current.')
+    .setDescription('Codex engine model (5.5 default; -codex = agentic-tuned). Omit value to read current.')
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
         { name: 'gpt-5.5 — default, most capable all-rounder', value: 'gpt-5.5' },
