@@ -719,9 +719,14 @@ async function handleUserMessage(
       setTimeout(() => { mm.edit(bodyOnly).catch(() => {}) }, lingerMs)
     }
 
-    // Collapse: reply has landed — delete the live trace/thinking cards for a clean channel.
-    if (flags.trace === 'collapse' && liveTraceMsg) { try { await (liveTraceMsg as unknown as Message).delete() } catch {} }
-    for (const cm of collapseMsgs) { try { await cm.delete() } catch {} }
+    // Collapse: keep the trace/thinking card(s) up for a readable 60s linger (same
+    // window as the thought-for line), THEN delete for a clean channel (Jeff 2026-06-24).
+    const toCollapse: Message[] = [...collapseMsgs]
+    if (flags.trace === 'collapse' && liveTraceMsg) toCollapse.push(liveTraceMsg as unknown as Message)
+    if (toCollapse.length) {
+      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
+      setTimeout(() => { for (const m of toCollapse) m.delete().catch(() => {}) }, lingerMs)
+    }
 
     if (result.finishReason === 'length') {
       await applyLifecycle(message, 'truncated')
