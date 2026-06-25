@@ -642,23 +642,49 @@ async function handleUserMessage(
     }
 
 
-    // codex can produce image files (e.g. a screenshot via its shell) but only
-    // references them by local path in the reply text — it has no Discord-attach
-    // hook like the API/MCP playwright path does (which fills result.files). So
-    // pull local image paths that actually exist on disk, attach the real files,
+    // codex can produce image files (e.g. a screenshot via its shell / the
+    // playwright MCP) but only references them by NAME or local path in the reply
+    // text — it has no Discord-attach hook like the API/MCP path does. So pull
+    // image references that resolve to a real file on disk, attach the real files,
     // and strip the dead path/link from the text. (Jeff 2026-06-25)
+    //
+    // KEY: codex's cwd is its HOME (~), NOT gpt's process cwd (repos/gpt-bot), and
+    // the model frequently picks a BARE filename ("airbnb-listings.png") that
+    // playwright writes into codex's cwd. So an existsSync on the literal string
+    // fails (wrong cwd) and bare names aren't even absolute. resolveShot() tries
+    // the literal path, then ~/<name>, then a couple of known screenshot dirs.
     if (result.reply) {
+      const CODEX_CWD = os.homedir()
+      const SHOT_DIRS = [
+        CODEX_CWD,
+        path.join(CODEX_CWD, '.cache', 'playwright-mcp-output'),
+        path.join(CODEX_CWD, '.cache', 'gpt-mcp-images'),
+      ]
+      const resolveShot = (raw: string): string | null => {
+        const cands = [raw]
+        if (!raw.startsWith('/')) for (const d of SHOT_DIRS) cands.push(path.join(d, raw))
+        else cands.push(path.join(CODEX_CWD, path.basename(raw)))  // /elsewhere/x.png → ~/x.png
+        for (const c of cands) { try { if (fs.existsSync(c)) return c } catch {} }
+        return null
+      }
       const shots: string[] = []
       const grab = (m: string, p: string): string => {
-        try { if (fs.existsSync(p)) { shots.push(p); return '' } } catch {}
+        const real = resolveShot(p)
+        if (real) { shots.push(real); return '' }
         return m
       }
       const txt = result.reply
-        .replace(/!?\[[^\]]*\]\((\/[^)\s]+\.(?:png|jpe?g|gif|webp))\)/gi, (m, p) => grab(m, p))
-        .replace(/(\/[^\s)]+\.(?:png|jpe?g|gif|webp))/gi, (m, p) => grab(m, p))
+        // markdown image/link: ![alt](path) or [text](path)
+        .replace(/!?\[[^\]]*\]\(([^)\s]+\.(?:png|jpe?g|gif|webp))\)/gi, (m, p) => grab(m, p))
+        // backtick-wrapped path/name: `airbnb-listings.png` or `/abs/x.jpg`
+        .replace(/`([^`\s]+\.(?:png|jpe?g|gif|webp))`/gi, (m, p) => grab(m, p))
+        // bare absolute path or bare filename token
+        .replace(/(?<![\w/])((?:\/[^\s)]+|[\w.-]+)\.(?:png|jpe?g|gif|webp))(?![\w])/gi, (m, p) => grab(m, p))
       if (shots.length) {
+        // De-dupe (the same file can match multiple patterns).
+        const uniq = [...new Set(shots)]
         result.reply = txt.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim()
-        result.files = [...(result.files ?? []), ...shots]
+        result.files = [...(result.files ?? []), ...uniq]
       }
     }
 
