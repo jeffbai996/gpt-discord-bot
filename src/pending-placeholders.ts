@@ -3,7 +3,8 @@ import type { Client } from 'discord.js'
 
 interface Pending {
   channelId: string
-  messageId: string
+  messageId: string        // the placeholder bubble
+  userMessageId?: string   // the inbound message that triggered the turn
 }
 
 // Tiny on-disk registry of "live" placeholder messages (the 💭 thinking…/running…
@@ -30,8 +31,8 @@ export class PendingPlaceholders {
     }
   }
 
-  track(channelId: string, messageId: string): void {
-    this.pending.push({ channelId, messageId })
+  track(channelId: string, messageId: string, userMessageId?: string): void {
+    this.pending.push({ channelId, messageId, userMessageId })
     this.flush()
   }
 
@@ -56,6 +57,11 @@ export class PendingPlaceholders {
           const msg = await ch.messages.fetch(p.messageId)
           await msg.edit('✗ **Interrupted**')
           swept++
+          // Stamp ❌ on the user's original message so the interruption is visible
+          // even after they've scrolled past the placeholder (Jeff 2026-06-24).
+          if (p.userMessageId) {
+            try { const um = await ch.messages.fetch(p.userMessageId); await um.react('❌') } catch { /* msg gone */ }
+          }
         }
       } catch {
         // message deleted / no access — nothing to clean up

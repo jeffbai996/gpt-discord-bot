@@ -426,7 +426,7 @@ async function handleUserMessage(
     try {
       workMessage = await message.reply(`💭 ✻ **${effortLabel}…**`)
       placeholderId = workMessage.id
-      pendingPlaceholders.track(message.channel.id, workMessage.id)
+      pendingPlaceholders.track(message.channel.id, workMessage.id, message.id)
     } catch (e) {
       console.error('placeholder reply failed:', e)
     }
