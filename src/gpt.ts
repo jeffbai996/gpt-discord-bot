@@ -87,7 +87,7 @@ const TRACE_BODY_CHAR_BUDGET = 1800
 const TRACE_MAX_LINES = 50
 // Max visible width of one trace row before Discord wraps it in the fenced diff
 // block. Keeps shell commands + their output on a single line (Jeff 2026-06-25).
-const ROW_W = 54
+const ROW_W = 70
 
 function capMegaLine(ln: string): string {
   return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
