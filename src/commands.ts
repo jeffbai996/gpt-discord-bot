@@ -1,7 +1,7 @@
 import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction, AttachmentBuilder } from 'discord.js'
 import path from 'node:path'
 import os from 'node:os'
-import { AccessManager, type ReasoningEffort } from './access.ts'
+import { AccessManager, CODEX_MODELS, type ReasoningEffort, type CodexModel } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
@@ -83,11 +83,14 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('model')
-    .setDescription('Codex engine model: gpt-5.5 (default), gpt-5.4, or gpt-5.4-mini (lighter on quota).')
-    .addStringOption(o => o.setName('value').setDescription('omit to show current; else gpt-5.5 | gpt-5.4 | gpt-5.4-mini').setRequired(false)
+    .setDescription('Codex engine model — 5.5 default; -codex variants are agentic/tool-tuned. Omit value to read current.')
+    .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
-        { name: 'gpt-5.5 — default, most capable', value: 'gpt-5.5' },
+        { name: 'gpt-5.5 — default, most capable all-rounder', value: 'gpt-5.5' },
+        { name: 'gpt-5.5-codex — agentic/tool-tuned (best for browser + multi-step)', value: 'gpt-5.5-codex' },
         { name: 'gpt-5.4 — lighter', value: 'gpt-5.4' },
+        { name: 'gpt-5.4-codex — agentic-tuned, lighter', value: 'gpt-5.4-codex' },
+        { name: 'gpt-5-codex — agentic-tuned (older)', value: 'gpt-5-codex' },
         { name: 'gpt-5.4-mini — lightest on the 5h/weekly quota', value: 'gpt-5.4-mini' },
       ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -309,10 +312,10 @@ export async function executeGptCommand(
         return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API-fallback path uses its own model).`, ephemeral: true })
       }
       const value = raw.trim().toLowerCase()
-      if (!['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'].includes(value)) {
-        return interaction.reply({ content: `❌ \`model\` must be gpt-5.5 | gpt-5.4 | gpt-5.4-mini (got \`${value}\`)`, ephemeral: true })
+      if (!(CODEX_MODELS as readonly string[]).includes(value)) {
+        return interaction.reply({ content: `❌ \`model\` must be one of: ${CODEX_MODELS.join(' | ')} (got \`${value}\`)`, ephemeral: true })
       }
-      const updated = await access.setChannelFlags(channel.id, { codexModel: value as 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini' })
+      const updated = await access.setChannelFlags(channel.id, { codexModel: value as CodexModel })
       return interaction.reply({ content: `✅ <#${channel.id}> codex model = \`${updated.codexModel}\` (codex engine only; API path unchanged).`, ephemeral: true })
     }
 

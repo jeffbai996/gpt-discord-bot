@@ -12,7 +12,7 @@ export interface ChannelConfig {
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
   thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
-  codexModel?: 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini'  // default gpt-5.5 — codex engine model only
+  codexModel?: CodexModel  // default gpt-5.5 — codex engine model only
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
 }
 
@@ -22,7 +22,7 @@ export interface ChannelFlags {
   trace: 'off' | 'on' | 'collapse'
   thinking: 'off' | 'on' | 'collapse'
   engine: 'codex' | 'api'
-  codexModel: 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini'
+  codexModel: CodexModel
   counter: 'off' | 'token' | 'both'
   // requireMention isn't a "rendering" flag like the others — it sits at the
   // top of ChannelConfig — but exposing it through ChannelFlags lets the
@@ -53,12 +53,18 @@ function normTri(v: unknown): TriState {
   return (v === 'on' || v === 'collapse') ? v : 'off'
 }
 
+// Codex-engine models available on the flat ChatGPT sub (verified live 2026-06-25).
+// gpt-5-pro errors ("model metadata not found") and o3 is being retired — both excluded.
+// The -codex variants are OpenAI's agentic/tool-use-tuned line.
+export const CODEX_MODELS = ['gpt-5.5', 'gpt-5.5-codex', 'gpt-5.4', 'gpt-5.4-codex', 'gpt-5-codex', 'gpt-5.4-mini'] as const
+export type CodexModel = typeof CODEX_MODELS[number]
+
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
   trace: 'off' as 'off' | 'on' | 'collapse',
   thinking: 'off' as 'off' | 'on' | 'collapse',
   engine: 'codex' as 'codex' | 'api',
-  codexModel: 'gpt-5.5' as 'gpt-5.5' | 'gpt-5.4' | 'gpt-5.4-mini',
+  codexModel: 'gpt-5.5' as CodexModel,
   counter: 'both' as 'off' | 'token' | 'both',
 }
 
