@@ -347,7 +347,7 @@ export async function executeGptCommand(
         `output:   ${h(g.outputTokens)} tok  (${h(g.reasoningTokens)} reasoning)`,
         `total:    ${h(total)} tok`,
         '',
-        `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.5 API rates; ~$0 actual on the flat sub)`,
+        `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.5 API rates, est.)`,
         `          in $${dIn.toFixed(2)} \u00b7 cached $${dCached.toFixed(2)} \u00b7 out $${dOut.toFixed(2)}`,
         '',
         `engines:  ${engines}`,
