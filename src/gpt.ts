@@ -626,6 +626,27 @@ async function handleUserMessage(
       }
     }
 
+
+    // codex can produce image files (e.g. a screenshot via its shell) but only
+    // references them by local path in the reply text — it has no Discord-attach
+    // hook like the API/MCP playwright path does (which fills result.files). So
+    // pull local image paths that actually exist on disk, attach the real files,
+    // and strip the dead path/link from the text. (Jeff 2026-06-25)
+    if (result.reply) {
+      const shots: string[] = []
+      const grab = (m: string, p: string): string => {
+        try { if (fs.existsSync(p)) { shots.push(p); return '' } } catch {}
+        return m
+      }
+      const txt = result.reply
+        .replace(/!?\[[^\]]*\]\((\/[^)\s]+\.(?:png|jpe?g|gif|webp))\)/gi, (m, p) => grab(m, p))
+        .replace(/(\/[^\s)]+\.(?:png|jpe?g|gif|webp))/gi, (m, p) => grab(m, p))
+      if (shots.length) {
+        result.reply = txt.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim()
+        result.files = [...(result.files ?? []), ...shots]
+      }
+    }
+
     if (result.react) {
       // Outbound react validator: the model occasionally emits custom Discord
       // emoji names from past channel context (`:pack_sticker_14:`, `:foo:123`),
