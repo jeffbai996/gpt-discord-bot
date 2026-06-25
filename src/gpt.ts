@@ -87,6 +87,23 @@ function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<
 const MEGA_LINE_MAX = 300
 const TRACE_BODY_CHAR_BUDGET = 1800
 const TRACE_MAX_LINES = 50
+
+// Codex session rollover ceiling (Jeff 2026-06-25). Each channel resumes its
+// persistent Codex session every turn (codex exec resume <id>) so gpt keeps its
+// own prior reasoning/tool context. But Codex counts the WHOLE resumed session
+// as turn input, and `exec resume` has no compaction — so a long-lived session
+// bloats unboundedly. One channel hit 1.78M input/turn (12.5M cumulative / 39
+// turns). When a turn's reported input crosses this ceiling we drop the session
+// pointer so the NEXT turn cold-starts a fresh Codex session.
+//
+// Does this lose context? Largely NO: a cold start already RE-GROUNDS from recent
+// Discord history (codex-chat feeds input.history) AND the model can pull older
+// context on demand via `shared-memory recall` / `vecgrep search` (it calls those
+// itself). What's dropped is only gpt's own prior private reasoning chain — not
+// the conversation, which is recoverable. So rollover trades a bit of reasoning
+// continuity for bounded cost; the ceiling is set high enough (500k) that it only
+// fires on genuine bloat, not normal multi-turn chat. Tunable via env; 0 disables.
+const SESSION_ROLLOVER_TOKENS = Number(process.env.GPT_SESSION_ROLLOVER_TOKENS ?? 500_000)
 // Match the Claude bots' tool_watcher.py caps byte-for-byte: tool-call header
 // rows <= 83 (HEADER_LINE_MAX), stdout/output lines <= 88 (Jeff 2026-06-25).
 const ROW_W = 83
@@ -595,6 +612,18 @@ async function handleUserMessage(
           onEvent,
         })
         if (result.threadId) channelSessions.set(channelId, result.threadId)
+        // Session rollover: if Codex reported a turn-input above the ceiling, the
+        // resumed session has bloated — drop the pointer so the NEXT turn starts
+        // fresh. We keep THIS turn's session id set above (the reply already used
+        // it); clearing after means the next turn cold-starts and re-grounds from
+        // Discord history instead of resuming the oversized context. (Jeff 2026-06-25)
+        if (SESSION_ROLLOVER_TOKENS > 0
+            && (result.usage?.inputTokens ?? 0) >= SESSION_ROLLOVER_TOKENS) {
+          channelSessions.clear(channelId)
+          console.log(`[session-rollover] channel ${channelId}: input `
+            + `${result.usage?.inputTokens} >= ${SESSION_ROLLOVER_TOKENS} — `
+            + `cleared session, next turn starts fresh`)
+        }
         setEnginePresence(false)
       } catch (e) {
         if (e instanceof CodexStoppedError) {
@@ -658,9 +687,21 @@ async function handleUserMessage(
       // exec`), so a bare-filename screenshot lands in /tmp. Also check ~ (manual
       // codex runs) and the MCP output dirs. /tmp first — it's the live path.
       const CODEX_CWD = '/tmp'
+      // The Playwright MCP wrapper `cd`s into its output dir before exec, so a
+      // bare-name screenshot ("koyfin.jpg") resolves THERE, not /tmp. That dir
+      // was renamed playwright-mcp-output → computer-use on 2026-06-25; gpt-bot's
+      // lookup wasn't updated, so resolveShot() failed to find real screenshots
+      // and posted the raw path instead of the image (Jeff 2026-06-25). Honor
+      // the same COMPUTER_USE_OUTPUT_DIR / PLAYWRIGHT_OUTPUT_DIR knobs the wrapper
+      // uses, with the current dir first, and keep the legacy dirs for back-compat.
+      const MCP_OUT = process.env.COMPUTER_USE_OUTPUT_DIR
+        || process.env.PLAYWRIGHT_OUTPUT_DIR
+        || path.join(os.homedir(), '.cache', 'computer-use')
       const SHOT_DIRS = [
         CODEX_CWD,
+        MCP_OUT,
         os.homedir(),
+        path.join(os.homedir(), '.cache', 'computer-use'),
         path.join(os.homedir(), '.cache', 'playwright-mcp-output'),
         path.join(os.homedir(), '.cache', 'gpt-mcp-images'),
       ]
