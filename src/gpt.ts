@@ -85,9 +85,10 @@ function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<
 const MEGA_LINE_MAX = 300
 const TRACE_BODY_CHAR_BUDGET = 1800
 const TRACE_MAX_LINES = 50
-// Max visible width of one trace row before Discord wraps it in the fenced diff
-// block. Keeps shell commands + their output on a single line (Jeff 2026-06-25).
-const ROW_W = 70
+// Match the Claude bots' tool_watcher.py caps byte-for-byte: tool-call header
+// rows <= 83 (HEADER_LINE_MAX), stdout/output lines <= 88 (Jeff 2026-06-25).
+const ROW_W = 83
+const OUT_W = 88
 
 function capMegaLine(ln: string): string {
   return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
@@ -163,7 +164,7 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       const n = call.resultLines ?? 0
       const suffix = n > 1 ? ` [${n} lines]` : ''
       let rp = call.resultPreview.replace(/\n/g, ' ')
-      const cap = Math.max(20, ROW_W - 3 - suffix.length)
+      const cap = Math.max(20, OUT_W - suffix.length)
       if (rp.length > cap) rp = rp.slice(0, cap - 1) + '…'
       lines.push(`⎿ ${rp}${suffix}`)
     }
