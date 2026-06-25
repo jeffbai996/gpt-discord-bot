@@ -240,7 +240,7 @@ function liveEvent(ev: any): { status: string; tool?: { name: string; args: stri
   const it = ev.item
   switch (it.type) {
     case 'command_execution':
-      return { status: '🔧 running', tool: { name: 'shell', args: cleanCmd(String(it.command ?? '')) } }
+      return { status: '🛠️ running', tool: { name: 'shell', args: cleanCmd(String(it.command ?? '')) } }
     case 'web_search':
       return { status: '🌐 searching', tool: { name: 'web_search', args: String(it.query ?? '') } }
     case 'file_change': {
