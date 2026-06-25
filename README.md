@@ -29,7 +29,7 @@ then settles to, top-to-bottom:
 
 💭 ✓ thought for 19s
 Done — flipped DEBUG off in config.ts and confirmed it's the only reference.
- ↑ 17,140 · ↓ 211 · » 19s
+ ↑ 17,140 · ↓ 211 · ◷ 19s
 ```
 
 The trace card (real commands, diffs first), the `💭 ✓ thought for Ns` line, and the token footer are each **per-channel toggleable**. With everything off you get just the prose reply — codex still does all the work, you just don't see the receipts.

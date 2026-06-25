@@ -12,7 +12,7 @@ function botMsg(id: string, content: string): HistoryMessage {
 }
 
 test('stripBotMetadata: drops -# directive lines', () => {
-  const text = 'real reply\n-# ↑ 1 · ↓ 2 · » 3s'
+  const text = 'real reply\n-# ↑ 1 · ↓ 2 · ◷ 3s'
   assert.equal(stripBotMetadata(text), 'real reply')
 })
 

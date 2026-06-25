@@ -630,9 +630,9 @@ async function handleUserMessage(
       if (flags.counter === 'off' || !result.usage) return ''
       const u = result.usage
       const n = (x: number) => x.toLocaleString('en-US')
-      // Headline line: the TOTALS — input ↑, output ↓, elapsed ».
+      // Headline line: the TOTALS — input ↑, output ↓, elapsed ◷.
       const parts = [`↑ ${n(u.inputTokens)}`, `↓ ${n(u.outputTokens)}`,
-                     `» ${(result.durationMs / 1000).toFixed(1)}s`]
+                     `◷ ${(result.durationMs / 1000).toFixed(1)}s`]
       // Breakdown line beneath: the sub-counts of the headline totals, grouped
       // because they're the same shape — cached is a slice of input (↑),
       // reasoning is a slice of output (↓). Each renders only when nonzero; the

@@ -81,7 +81,7 @@ function describeAttachment(att: HistoryAttachment): string {
 // Strip metadata lines the bot adds to its own replies (verbose footer, etc.)
 // before feeding past replies back into context. Without this, the model
 // pattern-matches its own footer format and starts hallucinating
-// `↑ X · ↓ Y · » Zs` lines inside its reply text. Discord's `-# ` directive
+// `↑ X · ↓ Y · ◷ Zs` lines inside its reply text. Discord's `-# ` directive
 // is reserved for metadata in this bot, so any line starting with `-# ` drops.
 export function stripBotMetadata(text: string): string {
   if (!text) return text
