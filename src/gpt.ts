@@ -680,11 +680,12 @@ async function handleUserMessage(
     // "thought for Ns" sits ON TOP of the reply, in the SAME message block (Jeff
     // 2026-06-24) — small-text first line, then the answer. We reuse the placeholder
     // as the first message so the thought line replaces "thinking…" in place AND the
-    // reply flows directly beneath it (one block). Persistence: trace+reasoning both
-    // on → keep the thought line; else strip it after a 60s linger (edit the line
-    // away, keep the reply). N = total turn time (codex has no per-item timing).
+    // reply flows directly beneath it (one block). Persistence: keep the thought
+    // line indefinitely ONLY when trace='on'; for trace 'collapse'/'off' it's a
+    // transient duration tag, stripped after a 60s linger (Jeff 2026-06-24).
+    // N = total turn time (codex has no per-item timing).
     const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
-    const persist = flags.trace !== 'off' && flags.thinking !== 'off'
+    const persist = flags.trace === 'on'
     const parts = chunk(body)
     const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
     let mergedMsg: Message | null = null
