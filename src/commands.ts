@@ -326,6 +326,8 @@ export async function executeGptCommand(
     if (subcommand === 'stats') {
       const g = globalSnapshot()
       const n = (x: number) => x.toLocaleString('en-US')
+      // Humanize big token counts so they don't sprawl: 4.39M / 45k / 1,234.
+      const h = (x: number) => x >= 1e6 ? `${(x / 1e6).toFixed(2)}M` : x >= 1e4 ? `${Math.round(x / 1e3)}k` : n(x)
       const uncachedIn = Math.max(0, g.inputTokens - g.cachedInputTokens)
       const dIn = uncachedIn * 5.00 / 1e6        // gpt-5.5 standard, per 1M
       const dCached = g.cachedInputTokens * 0.50 / 1e6
@@ -341,9 +343,9 @@ export async function executeGptCommand(
         '\ud83d\udcca @gpt usage — cumulative across restarts, all channels',
         '```',
         `turns:    ${n(g.turns)}`,
-        `input:    ${n(g.inputTokens)} tok  (${n(g.cachedInputTokens)} cached, ${cachePct}%)`,
-        `output:   ${n(g.outputTokens)} tok  (${n(g.reasoningTokens)} reasoning)`,
-        `total:    ${n(total)} tok`,
+        `input:    ${h(g.inputTokens)} tok  (${h(g.cachedInputTokens)} cached, ${cachePct}%)`,
+        `output:   ${h(g.outputTokens)} tok  (${h(g.reasoningTokens)} reasoning)`,
+        `total:    ${h(total)} tok`,
         '',
         `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.5 API rates; ~$0 actual on the flat sub)`,
         `          in $${dIn.toFixed(2)} \u00b7 cached $${dCached.toFixed(2)} \u00b7 out $${dOut.toFixed(2)}`,
