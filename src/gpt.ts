@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
 import path from 'path'
 import os from 'os'
+import fs from 'fs'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
@@ -133,7 +134,11 @@ function formatDiff(unified: string): { badge: string; body: string[] } {
 // File edits show the [+N, -M] badge and the diff body; other tools keep [Nms].
 function buildTraceLines(toolCalls: ToolCall[]): string[] {
   const lines: string[] = []
-  for (const call of toolCalls) {
+  // Edits (with diffs) first: the diff is the payload and must not get starved by a
+  // long list of shell rows below it, which the card's length cap then truncates to
+  // a couple lines (Jeff 2026-06-24). Order within edits / within non-edits preserved.
+  const ordered = [...toolCalls.filter(c => c.diff), ...toolCalls.filter(c => !c.diff)]
+  for (const call of ordered) {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
     // Digest stretched +5 now the [0ms] tail is gone (Jeff 2026-06-24).
@@ -144,8 +149,8 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       // Bare ⎿ summary + body; renderTraceCard's padTraceLine adds the 1-cell indent.
       const { badge, body } = formatDiff(call.diff)
       lines.push(`⎿ ${badge}`)
-      for (const b of body.slice(0, 16)) lines.push(b)
-      if (body.length > 16) lines.push(`... (${body.length - 16} more lines)`)
+      for (const b of body.slice(0, 24)) lines.push(b)
+      if (body.length > 24) lines.push(`... (${body.length - 24} more lines)`)
     } else if (call.resultPreview) {
       let rp = call.resultPreview.replace(/\n/g, ' ')
       if (rp.length > 60) rp = rp.slice(0, 60) + '…'
@@ -184,6 +189,23 @@ const OPENAI_KEY: string = process.env.OPENAI_API_KEY
 // /gpt set model gpt-5.5 (see commands.ts ALLOWED_MODELS).
 const DEFAULT_MODEL: string = process.env.GPT_MODEL || 'gpt-5.5'
 const ADMIN_USER_ID: string | undefined = process.env.DISCORD_ADMIN_USER_ID
+const DEFAULT_PRESENCE_TEXT = '📎 actually, on reflection—'
+
+function loadSettings(): { presence?: string } {
+  try {
+    const raw = fs.readFileSync(path.join(STATE_DIR, 'settings.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    return typeof parsed.presence === 'string' ? { presence: parsed.presence } : {}
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT') console.error('settings load failed:', e)
+    return {}
+  }
+}
+
+const settings = loadSettings()
+const initialPresenceText = settings.presence?.slice(0, 128) || DEFAULT_PRESENCE_TEXT
 
 const access = new AccessManager()
 const persona = new PersonaLoader()
@@ -305,7 +327,7 @@ client.once('ready', async () => {
   console.error(`gpt online as ${client.user?.tag} (${client.user?.id})`)
   client.user?.setPresence({
     status: 'online',
-    activities: [{ name: '📎 actually, on reflection—', type: ActivityType.Custom, state: '📎 actually, on reflection—' }]
+    activities: [{ name: initialPresenceText, type: ActivityType.Custom, state: initialPresenceText }]
   })
 
   try {
@@ -348,7 +370,7 @@ client.on('interactionCreate', async interaction => {
 // Presence: @gpt sets its own status via a [[presence: …]] reply directive →
 // applyBasePresence(). The API-fallback indicator (setEnginePresence) temporarily
 // overrides with ⚠️ and restores the base on recovery.
-let basePresenceText = '📎 actually, on reflection—'
+let basePresenceText = initialPresenceText
 let lastDegraded = false
 function presenceActivity(text: string) {
   return { name: text, type: ActivityType.Custom, state: text }
