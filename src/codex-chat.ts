@@ -245,7 +245,7 @@ function liveEvent(ev: any): { status: string; tool?: { name: string; args: stri
       return { status: '🌐 searching', tool: { name: 'web_search', args: String(it.query ?? '') } }
     case 'file_change': {
       const paths = Array.isArray(it.changes) ? it.changes.map((c: any) => c.path).join(', ') : ''
-      return { status: '✎ editing', tool: { name: 'edit', args: paths } }
+      return { status: '✏️ editing', tool: { name: 'edit', args: paths } }
     }
     case 'reasoning':
       return { status: '🧠 thinking' }
