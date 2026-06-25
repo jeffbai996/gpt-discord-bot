@@ -14,7 +14,8 @@ import { respondViaCodex } from './codex-chat.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
-import { CodexInterruptedError } from './codex-chat.ts'
+import { CodexInterruptedError, CodexStoppedError } from './codex-chat.ts'
+import { activeTurns } from './active-turns.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { channelSessions } from './channel-sessions.ts'
@@ -596,6 +597,13 @@ async function handleUserMessage(
         if (result.threadId) channelSessions.set(channelId, result.threadId)
         setEnginePresence(false)
       } catch (e) {
+        if (e instanceof CodexStoppedError) {
+          // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
+          stopThinkingAnim()
+          if (workMessage) { await workMessage.edit('\U0001F6D1 **Stopped.**').catch(() => {}) }
+          try { await message.react('\U0001F6D1') } catch {}
+          return
+        }
         // A codex turn failed — drop this channel's session pointer so the NEXT turn
         // starts a clean fresh session (a wedged/expired session would otherwise fail
         // every turn; the fresh turn re-grounds from Discord history).
@@ -855,6 +863,7 @@ async function runChannelTurn(message: Message, target: Message | null): Promise
   st.running = true
   try {
     await handleUserMessage(message, target, false)
+    if (activeTurns.consumeStopped(cid)) st.queue.length = 0
     while (st.queue.length) {
       const batch = st.queue.splice(0, st.queue.length)
       const carrier = batch[batch.length - 1]
@@ -864,6 +873,7 @@ async function runChannelTurn(message: Message, target: Message | null): Promise
         void m.reactions.cache.get('\u{1F557}')?.users.remove(botId).catch(() => {})
       }
       await handleUserMessage(carrier, null, false, combined || undefined)
+      if (activeTurns.consumeStopped(cid)) { st.queue.length = 0; break }
     }
   } finally {
     st.running = false

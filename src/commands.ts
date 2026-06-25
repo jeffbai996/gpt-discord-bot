@@ -26,6 +26,7 @@ function fmtLimitLines(rl: RateLimits | null): string[] {
 }
 import { rewriteEnvVar, scheduleSelfRestart } from './restart.ts'
 import { channelSessions } from './channel-sessions.ts'
+import { activeTurns } from './active-turns.ts'
 
 const ALLOWED_MODELS = ['gpt-5.5'] as const
 
@@ -59,6 +60,10 @@ export const gptCommand = new SlashCommandBuilder()
     .setName('compact')
     .setDescription('Force a context-summary rollup now, regardless of the message threshold')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('stop')
+    .setDescription('Abort the in-flight turn in this channel (kill a stuck codex turn).')
   )
   .addSubcommand(s => s
     .setName('clear')
@@ -253,6 +258,14 @@ export async function executeGptCommand(
         await interaction.editReply({ content: `📜 Session history — ${turns.length} turns, ${text.length} chars (too long for inline, attached):`, files: [file] })
       }
       return
+    }
+
+    if (subcommand === 'stop') {
+      const killed = activeTurns.stop(interaction.channelId)
+      return interaction.reply({
+        content: killed ? '\U0001F6D1 Aborted the in-flight turn in this channel.' : 'ℹ️ Nothing is running in this channel right now.',
+        ephemeral: true,
+      })
     }
 
     if (subcommand === 'clear') {

@@ -5,6 +5,7 @@ import { rm, readFile, readdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { activeTurns } from './active-turns.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 
@@ -14,6 +15,13 @@ export class CodexInterruptedError extends Error {
   constructor(public readonly afterMs: number) {
     super(`codex turn interrupted by runaway-process backstop after ${Math.round(afterMs/1000)}s`)
     this.name = 'CodexInterruptedError'
+  }
+}
+
+export class CodexStoppedError extends Error {
+  constructor(public readonly afterMs: number) {
+    super(`codex turn stopped by user (/gpt stop) after ${Math.round(afterMs/1000)}s`)
+    this.name = 'CodexStoppedError'
   }
 }
 
@@ -396,8 +404,14 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // LIVE (running cmd / searching / editing) to the placeholder via onEvent, while
   // still collecting every line for the post-turn trace/usage parse.
   const child = spawn('bash', ['-lc', script], {
+    detached: true,  // own process group so /gpt stop can SIGKILL the whole codex tree
     env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
   })
+  // Kill the whole group (bash + timeout + codex), not just bash, so a stuck
+  // tool-loop actually dies; falls back to a plain kill if the group send fails.
+  const killTree = () => { try { process.kill(-(child.pid as number), 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
+  let stoppedByUser = false
+  if (input.channelId) activeTurns.register(input.channelId, () => { stoppedByUser = true; killTree() })
   const lines: string[] = []
   let threadId = ''
   const rl = createInterface({ input: child.stdout! })
@@ -418,12 +432,13 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   let timedOut = false
   try {
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); resolve() }, TIMEOUT_MS + 8_000)
+      const timer = setTimeout(() => { timedOut = true; killTree(); resolve() }, TIMEOUT_MS + 8_000)
       child.on('error', (e) => { clearTimeout(timer); reject(e) })
       child.on('close', () => { clearTimeout(timer); resolve() })
     })
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
   } finally {
+    if (input.channelId) activeTurns.done(input.channelId)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})
   }
@@ -445,6 +460,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // Prefer the -o file (the clean final message); fall back to the last
   // agent_message in the event stream if the file came back empty.
   const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()
+  if (stoppedByUser) throw new CodexStoppedError(Date.now() - t0)
   if (!reply) {
     if (timedOut) throw new CodexInterruptedError(Date.now() - t0)
     throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
