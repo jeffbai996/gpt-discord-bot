@@ -4,6 +4,12 @@ import type { RealtimeTool } from '../voice/realtime.ts'
 export interface ToolContext {
   channelId?: string
   userId?: string
+  // Sink for files a tool produced this turn (e.g. a Playwright screenshot) that
+  // should be ATTACHED to the Discord reply, not stuffed into the model's text
+  // context. A tool saves the file to disk and calls onFile(path); the caller
+  // (openai.ts) collects the paths and gpt.ts attaches them. Optional — tools
+  // that don't emit files ignore it.
+  onFile?: (path: string) => void
 }
 
 // JSONSchema fragment describing the tool's args. Using a loose `unknown`

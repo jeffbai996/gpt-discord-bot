@@ -754,6 +754,17 @@ async function handleUserMessage(
         await message.channel.send(parts[i])
       }
     }
+    // Attach any screenshots a tool produced this turn (Playwright browser_take_
+    // screenshot → saved to disk → path collected on result.files). Sent as a
+    // follow-up message so it works regardless of the edit-vs-reply branch above,
+    // and so the visual lands right under the text. Discord caps 10 files/msg.
+    if (result.files?.length && message.channel.isSendable()) {
+      try {
+        await message.channel.send({ files: result.files.slice(0, 10) })
+      } catch (e) {
+        console.error('screenshot attach failed:', e instanceof Error ? e.message : e)
+      }
+    }
     // Transient thought line: after the linger, strip just the thought prefix from
     // the merged message, leaving the reply body intact.
     if (!persist && mergedMsg) {

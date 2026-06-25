@@ -79,6 +79,10 @@ export interface RespondResult extends ParsedResponse {
   reasoning: string
   // Per-call tool dispatches, for the post-hoc trace card in gpt.ts.
   toolCalls: ToolCall[]
+  // Absolute paths of files a tool produced this turn (Playwright screenshots)
+  // for gpt.ts to ATTACH to the Discord reply. Optional/empty when no tool emitted
+  // a file (so other RespondResult producers needn't set it).
+  files?: string[]
 }
 
 export class OpenAIRequestRejected extends Error {
@@ -252,6 +256,9 @@ export class OpenAIClient {
     let totalUsage: RespondResult['usage'] = null
     let modelUsed = model
     let lastFinish: string | null = null
+    // Files (screenshots) a tool produced this turn, collected via ToolContext.onFile
+    // and surfaced on the result so gpt.ts attaches them to the Discord reply.
+    const collectedFiles: string[] = []
     let reasoningAcc = ''
     // OpenAI emits the reasoning summary as distinct PARTS (each often a bold
     // section title + body), keyed by summary_index. Track the last index so we
@@ -468,6 +475,7 @@ export class OpenAIClient {
             modelUsed,
             reasoning: reasoningAcc.trim(),
             toolCalls,
+            files: collectedFiles,
           }
         }
 
@@ -499,7 +507,9 @@ export class OpenAIClient {
           let resultStr = ''
           let failed = false
           try {
-            resultStr = await toolRegistry.dispatch(c.name, parsedArgs, { channelId, userId })
+            resultStr = await toolRegistry.dispatch(c.name, parsedArgs, {
+              channelId, userId, onFile: (p) => collectedFiles.push(p),
+            })
           } catch (e: any) {
             failed = true
             resultStr = `Error in ${c.name}: ${e?.message ?? String(e)}`
@@ -532,6 +542,7 @@ export class OpenAIClient {
         modelUsed,
         reasoning: reasoningAcc.trim(),
         toolCalls,
+        files: collectedFiles,
       }
     } catch (e: any) {
       const status = e?.status ?? e?.response?.status
