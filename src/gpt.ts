@@ -654,16 +654,20 @@ async function handleUserMessage(
     // fails (wrong cwd) and bare names aren't even absolute. resolveShot() tries
     // the literal path, then ~/<name>, then a couple of known screenshot dirs.
     if (result.reply) {
-      const CODEX_CWD = os.homedir()
+      // codex-chat runs codex from /tmp (see codex-chat.ts `cd /tmp && codex
+      // exec`), so a bare-filename screenshot lands in /tmp. Also check ~ (manual
+      // codex runs) and the MCP output dirs. /tmp first — it's the live path.
+      const CODEX_CWD = '/tmp'
       const SHOT_DIRS = [
         CODEX_CWD,
-        path.join(CODEX_CWD, '.cache', 'playwright-mcp-output'),
-        path.join(CODEX_CWD, '.cache', 'gpt-mcp-images'),
+        os.homedir(),
+        path.join(os.homedir(), '.cache', 'playwright-mcp-output'),
+        path.join(os.homedir(), '.cache', 'gpt-mcp-images'),
       ]
       const resolveShot = (raw: string): string | null => {
-        const cands = [raw]
-        if (!raw.startsWith('/')) for (const d of SHOT_DIRS) cands.push(path.join(d, raw))
-        else cands.push(path.join(CODEX_CWD, path.basename(raw)))  // /elsewhere/x.png → ~/x.png
+        // Try the literal path, then the basename under each known screenshot dir
+        // (covers both bare names and absolute paths that point at the wrong cwd).
+        const cands = [raw, ...SHOT_DIRS.map(d => path.join(d, path.basename(raw)))]
         for (const c of cands) { try { if (fs.existsSync(c)) return c } catch {} }
         return null
       }
