@@ -24,7 +24,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('channel')
-    .setDescription('Set bot access for a channel — enable + mention rule. Other flags via /gpt set.')
+    .setDescription('Set bot access for a channel — enable + mention rule. Other flags via /gpt trace|thinking|counter|engine|effort.')
     .addChannelOption(o => o.setName('channel').setDescription('The channel to configure').setRequired(true))
     .addBooleanOption(o => o.setName('enabled').setDescription('Enable bot in this channel').setRequired(true))
     .addBooleanOption(o => o.setName('require_mention').setDescription('Require explicit mention').setRequired(true))
@@ -173,7 +173,7 @@ export async function executeGptCommand(
       const flags = access.channelFlags(channel.id)
       const modelDisplay = flags.model ?? '(default)'
       return interaction.reply({
-        content: `✅ <#${channel.id}> configured. enabled=${enabled}, requireMention=${requireMention}. flags: model=${modelDisplay}, reasoning=${flags.reasoning}, showCode=${flags.showCode}, verbose=${flags.verbose} — change via \`/gpt set\`.`,
+        content: `✅ <#${channel.id}> configured. enabled=${enabled}, requireMention=${requireMention}. flags: model=${modelDisplay}, reasoning=${flags.reasoning}, engine=${flags.engine}, counter=${flags.counter}, trace=${flags.trace}, thinking=${flags.thinking} — change via the \`/gpt\` subcommands.`,
         ephemeral: true
       })
     }
