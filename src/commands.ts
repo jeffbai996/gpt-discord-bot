@@ -79,7 +79,7 @@ export const gptCommand = new SlashCommandBuilder()
   .addSubcommand(s => s
     .setName('model')
     .setDescription('Codex engine model: gpt-5.5 (default), gpt-5.4, or gpt-5.4-mini (lighter on quota).')
-    .addStringOption(o => o.setName('value').setDescription('gpt-5.5 | gpt-5.4 | gpt-5.4-mini').setRequired(true)
+    .addStringOption(o => o.setName('value').setDescription('omit to show current; else gpt-5.5 | gpt-5.4 | gpt-5.4-mini').setRequired(false)
       .addChoices(
         { name: 'gpt-5.5 — default, most capable', value: 'gpt-5.5' },
         { name: 'gpt-5.4 — lighter', value: 'gpt-5.4' },
@@ -286,11 +286,16 @@ export async function executeGptCommand(
     }
 
     if (subcommand === 'model') {
-      const value = interaction.options.getString('value', true).trim().toLowerCase()
       const channel = interaction.options.getChannel('channel') ?? interaction.channel
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
       }
+      const raw = interaction.options.getString('value')
+      if (!raw) {
+        const cur = access.channelFlags(channel.id).codexModel ?? 'gpt-5.5'
+        return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API-fallback path uses its own model).`, ephemeral: true })
+      }
+      const value = raw.trim().toLowerCase()
       if (!['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'].includes(value)) {
         return interaction.reply({ content: `❌ \`model\` must be gpt-5.5 | gpt-5.4 | gpt-5.4-mini (got \`${value}\`)`, ephemeral: true })
       }
