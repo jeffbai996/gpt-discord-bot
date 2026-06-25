@@ -24,7 +24,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('channel')
-    .setDescription('Set bot access for a channel — enable + mention rule. Other flags via /gpt trace|thinking|counter|engine|effort.')
+    .setDescription('Enable a channel + set its mention rule. Other flags via the /gpt subcommands.')
     .addChannelOption(o => o.setName('channel').setDescription('The channel to configure').setRequired(true))
     .addBooleanOption(o => o.setName('enabled').setDescription('Enable bot in this channel').setRequired(true))
     .addBooleanOption(o => o.setName('require_mention').setDescription('Require explicit mention').setRequired(true))
