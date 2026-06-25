@@ -4,6 +4,26 @@ import os from 'node:os'
 import { AccessManager, type ReasoningEffort } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
+import { readLatestRateLimits, type RateLimits, type RateWindow } from './codex-chat.ts'
+
+// Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
+// /gpt limits and /gpt stats.
+function fmtLimitLines(rl: RateLimits | null): string[] {
+  if (!rl || (!rl.primary && !rl.secondary)) return ['limits:   (no codex snapshot yet — run a turn first)']
+  const bar = (p: number) => { const f = Math.max(0, Math.min(10, Math.round(p / 10))); return '\u2588'.repeat(f) + '\u2591'.repeat(10 - f) }
+  const reset = (ts: number) => {
+    const s = ts - Math.floor(Date.now() / 1000)
+    if (s <= 0) return 'now'
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60)
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`
+  }
+  const line = (label: string, w?: RateWindow) =>
+    w ? `${label} ${bar(w.usedPercent)} ${String(Math.round(w.usedPercent)).padStart(3)}%  \u00b7 resets in ${reset(w.resetsAt)}` : null
+  const out: string[] = []
+  const p = line('5-hour:', rl.primary); if (p) out.push(p)
+  const s = line('weekly:', rl.secondary); if (s) out.push(s)
+  return out
+}
 import { rewriteEnvVar, scheduleSelfRestart } from './restart.ts'
 
 const ALLOWED_MODELS = ['gpt-5.5'] as const
@@ -42,6 +62,10 @@ export const gptCommand = new SlashCommandBuilder()
   .addSubcommand(s => s
     .setName('stats')
     .setDescription('Token usage + $-equivalent (gpt-5.5 rates; flat sub = ~$0 actual) since boot.')
+  )
+  .addSubcommand(s => s
+    .setName('limits')
+    .setDescription('ChatGPT-sub usage left: the 5-hour + weekly rate-limit windows.')
   )
   .addSubcommand(s => s
     .setName('cache')
@@ -233,6 +257,14 @@ export async function executeGptCommand(
       return
     }
 
+    if (subcommand === 'limits') {
+      const rl = await readLatestRateLimits()
+      const plan = rl?.planType ? ` (plan: ${rl.planType})` : ''
+      const body = ['\ud83c\udfab @gpt — ChatGPT-sub limits' + plan, '```', ...fmtLimitLines(rl), '```',
+        '-# snapshot from the last codex turn; refreshes as the bot runs'].join('\n')
+      return interaction.reply({ content: body, ephemeral: true })
+    }
+
     if (subcommand === 'stats') {
       const g = globalSnapshot()
       const n = (x: number) => x.toLocaleString('en-US')
@@ -246,6 +278,7 @@ export async function executeGptCommand(
       const upMin = Math.floor((Date.now() - g.bootTs) / 60000)
       const up = `${Math.floor(upMin / 60)}h ${upMin % 60}m`
       const engines = Object.entries(g.byModel).map(([m, ct]) => `${m} ${ct}`).join(' · ') || '—'
+      const rl = await readLatestRateLimits()
       const body = [
         '\ud83d\udcca @gpt usage — since boot, all channels',
         '```',
@@ -259,6 +292,8 @@ export async function executeGptCommand(
         '',
         `engines:  ${engines}`,
         `uptime:   ${up}`,
+        '',
+        ...fmtLimitLines(rl),
         '```',
       ].join('\n')
       return interaction.reply({ content: body, ephemeral: true })

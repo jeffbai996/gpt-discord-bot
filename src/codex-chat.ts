@@ -289,6 +289,43 @@ async function readRolloutDiffs(threadId: string): Promise<Array<{ path: string;
   return out
 }
 
+export interface RateWindow { usedPercent: number; windowMinutes: number; resetsAt: number }
+export interface RateLimits { primary?: RateWindow; secondary?: RateWindow; planType?: string }
+
+function findRateLimits(o: any): any {
+  if (!o || typeof o !== 'object') return null
+  if (o.rate_limits && (o.rate_limits.primary || o.rate_limits.secondary)) return o.rate_limits
+  for (const k of Object.keys(o)) { const r = findRateLimits(o[k]); if (r) return r }
+  return null
+}
+
+// Freshest ChatGPT-sub rate-limit snapshot codex logged — rides a token_count event
+// in the session rollout (not the --json stream), so scan the newest rollouts for the
+// most recent one. primary = 5h window, secondary = weekly. Best-effort; null if none.
+export async function readLatestRateLimits(): Promise<RateLimits | null> {
+  const base = path.join(os.homedir(), '.codex', 'sessions')
+  let entries: string[] = []
+  try { entries = (await readdir(base, { recursive: true })) as string[] } catch { return null }
+  const rollouts = entries.filter(e => e.includes('rollout-') && e.endsWith('.jsonl')).sort().reverse()
+  for (const rel of rollouts.slice(0, 40)) {
+    let content = ''
+    try { content = await readFile(path.join(base, rel), 'utf8') } catch { continue }
+    const lines = content.split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('rate_limits')) continue
+      try {
+        const rl = findRateLimits(JSON.parse(lines[i]))
+        if (rl) {
+          const w = (x: any): RateWindow | undefined =>
+            x ? { usedPercent: Number(x.used_percent), windowMinutes: Number(x.window_minutes), resetsAt: Number(x.resets_at) } : undefined
+          return { primary: w(rl.primary), secondary: w(rl.secondary), planType: rl.plan_type ?? undefined }
+        }
+      } catch { /* skip non-JSON */ }
+    }
+  }
+  return null
+}
+
 export async function respondViaCodex(input: CodexChatInput): Promise<RespondResult> {
   const t0 = Date.now()
   input.onEvent?.({ type: 'thinking_start' })
