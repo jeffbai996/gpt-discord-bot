@@ -36,7 +36,7 @@ export async function deleteMessage(ctx: ActionContext): Promise<void> {
 
 export async function mute(ctx: ActionContext): Promise<void> {
   // Mute = require explicit mention to engage. Preserves all other channel
-  // flags (model override, reasoning, showCode, verbose).
+  // flags (model override, reasoning, trace, thinking, counter, engine).
   const channel = ctx.access.channelConfig(ctx.message.channelId)
   if (!channel) return  // never been configured; nothing to mute
   await ctx.access.setChannel(ctx.message.channelId, true, true, ctx.access.channelFlags(ctx.message.channelId))

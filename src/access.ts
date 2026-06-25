@@ -9,8 +9,6 @@ export interface ChannelConfig {
   requireMention: boolean
   model?: string             // override default model per-channel (gpt-5.5 | gpt-5.4-mini | o3)
   reasoning?: ReasoningEffort  // for o-series; ignored by gpt-5.x
-  showCode?: boolean         // default true — render tool calls + structured outputs
-  verbose?: boolean          // default true — surface usage/finish_reason footer
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
   thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
@@ -20,8 +18,6 @@ export interface ChannelConfig {
 export interface ChannelFlags {
   model: string | null
   reasoning: ReasoningEffort
-  showCode: boolean
-  verbose: boolean
   trace: 'off' | 'on' | 'collapse'
   thinking: 'off' | 'on' | 'collapse'
   engine: 'codex' | 'api'
@@ -57,8 +53,6 @@ function normTri(v: unknown): TriState {
 
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
-  showCode: true,
-  verbose: true,
   trace: 'off' as 'off' | 'on' | 'collapse',
   thinking: 'off' as 'off' | 'on' | 'collapse',
   engine: 'codex' as 'codex' | 'api',
@@ -147,8 +141,6 @@ export class AccessManager {
       requireMention,
       ...(flags?.model != null ? { model: flags.model } : existing?.model ? { model: existing.model } : {}),
       reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
-      showCode: flags?.showCode ?? existing?.showCode ?? DEFAULT_FLAGS.showCode,
-      verbose: flags?.verbose ?? existing?.verbose ?? DEFAULT_FLAGS.verbose,
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
       thinking: normTri(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
@@ -173,8 +165,6 @@ export class AccessManager {
       // null sentinel = clear the per-channel override (back to global default).
       ...(patch.model === null ? { model: undefined } : patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
-      ...(patch.showCode !== undefined ? { showCode: patch.showCode } : {}),
-      ...(patch.verbose !== undefined ? { verbose: patch.verbose } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
       ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
@@ -190,12 +180,10 @@ export class AccessManager {
     return {
       model: channel?.model ?? null,
       reasoning: channel?.reasoning ?? DEFAULT_FLAGS.reasoning,
-      showCode: channel?.showCode ?? DEFAULT_FLAGS.showCode,
-      verbose: channel?.verbose ?? DEFAULT_FLAGS.verbose,
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       thinking: channel?.thinking ?? DEFAULT_FLAGS.thinking,
       engine: channel?.engine ?? DEFAULT_FLAGS.engine,
-      counter: channel?.counter ?? (channel?.verbose === false ? 'off' : DEFAULT_FLAGS.counter),
+      counter: channel?.counter ?? DEFAULT_FLAGS.counter,
       requireMention: channel?.requireMention,
     }
   }
