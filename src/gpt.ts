@@ -440,11 +440,20 @@ async function handleUserMessage(
   const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
   let currentStatus = `💭 ${effortLabel}`
   if (workMessage && !targetMessage) {
-    const frames = ['.', '..', '…']
+    // Claude-bot spinner in the ✓/✗ position (between the emoji and the word):
+    // glyph set + trailing dots both pulse each 1.5s tick, then settle to ✓.
+    const GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸']
+    const dots = ['.', '..', '…']
     let fi = 0
     thinkingAnim = setInterval(() => {
       if (!workMessage) return
-      workMessage.edit(`**${currentStatus}${frames[fi++ % frames.length]}**`).catch(() => {})
+      const sp = GLYPHS[fi % GLYPHS.length]
+      const d = dots[fi % dots.length]
+      fi++
+      const i = currentStatus.indexOf(' ')
+      const emoji = i > 0 ? currentStatus.slice(0, i) : currentStatus
+      const text = i > 0 ? currentStatus.slice(i + 1) : ''
+      workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
     }, 1500)
   }
 
