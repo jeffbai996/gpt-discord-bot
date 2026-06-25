@@ -343,7 +343,7 @@ export async function executeGptCommand(
       }
       try {
         const updated = await access.setChannelFlags(channel.id, { reasoning: value as ReasoningEffort })
-        return interaction.reply({ content: `<#${channel.id}> reasoning effort set to ${updated.reasoning} (gpt-5.5/codex)`, ephemeral: true })
+        return interaction.reply({ content: `<#${channel.id}> reasoning effort set to ${updated.reasoning} (${updated.codexModel}/codex)`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
