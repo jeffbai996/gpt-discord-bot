@@ -674,7 +674,7 @@ async function handleUserMessage(
     // reply flows directly beneath it (one block). Persistence: trace+reasoning both
     // on → keep the thought line; else strip it after a 60s linger (edit the line
     // away, keep the reply). N = total turn time (codex has no per-item timing).
-    const thoughtLine = `💭 **thought for ${fmtDur(result.durationMs)}**`
+    const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
     const persist = flags.trace !== 'off' && flags.thinking !== 'off'
     const parts = chunk(body)
     const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
