@@ -71,6 +71,17 @@ export interface RespondResult extends ParsedResponse {
     // (lets you see how much the model spent reasoning vs replying).
     reasoningTokens: number
   } | null
+  // Per-turn MARGINAL token usage (this turn only), for the ↑/↓ counter display.
+  // On a resumed codex session usage above is the running session CUMULATIVE, so
+  // the counter must show the delta vs last turn instead (Jeff 2026-06-25). Same
+  // shape as `usage`; set by gpt.ts after deriving it per channel. Falls back to
+  // `usage` when absent (the API path, where usage is already per-turn).
+  usageDelta?: {
+    inputTokens: number
+    outputTokens: number
+    cachedInputTokens: number
+    reasoningTokens: number
+  } | null
   finishReason: string | null
   durationMs: number
   modelUsed: string

@@ -612,6 +612,27 @@ async function handleUserMessage(
           onEvent,
         })
         if (result.threadId) channelSessions.set(channelId, result.threadId)
+        // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
+        // on a RESUMED session is the running session CUMULATIVE, so showing it
+        // raw makes the counter climb every turn (Jeff 2026-06-25). Derive the
+        // marginal usage (this turn = cumulative − last turn's cumulative) and
+        // hand it to the footer. result.usage stays the cumulative — the rollover
+        // check below still keys on it. (Rollover's clear() also resets the usage
+        // baseline so the next fresh turn's delta is computed correctly.)
+        if (result.usage) {
+          const d = channelSessions.usageDelta(channelId, {
+            input: result.usage.inputTokens,
+            output: result.usage.outputTokens,
+            cachedInput: result.usage.cachedInputTokens,
+            reasoning: result.usage.reasoningTokens,
+          })
+          result.usageDelta = {
+            inputTokens: d.input,
+            outputTokens: d.output,
+            cachedInputTokens: d.cachedInput,
+            reasoningTokens: d.reasoning,
+          }
+        }
         // Session rollover: if Codex reported a turn-input above the ceiling, the
         // resumed session has bloated — drop the pointer so the NEXT turn starts
         // fresh. We keep THIS turn's session id set above (the reply already used
@@ -751,7 +772,10 @@ async function handleUserMessage(
     // render when nonzero so the footer stays compact for cheap turns.
     const verbose = (() => {
       if (flags.counter === 'off' || !result.usage) return ''
-      const u = result.usage
+      // Prefer the per-turn DELTA (codex resume reports cumulative usage; the
+      // delta is this turn's marginal cost). Falls back to usage on the API path
+      // where it's already per-turn. (Jeff 2026-06-25 "token up/down accurate")
+      const u = result.usageDelta ?? result.usage
       const n = (x: number) => x.toLocaleString('en-US')
       // Headline line: the TOTALS — input ↑, output ↓, elapsed ◷.
       const parts = [`↑ ${n(u.inputTokens)}`, `↓ ${n(u.outputTokens)}`,
