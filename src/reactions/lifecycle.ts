@@ -30,7 +30,8 @@ export const EMOJI = {
   received:   '👀',
   ingesting:  '📎',
   thinking:   '🤔',
-  reasoning:  '🧠',
+  reasoning:  '',   // was 🧠 — collapsed into 🤔 so thinking doesn't show two emojis
+
   searching:  '🌐',
   tooling:    '🔧',
   replied:    '✅',
