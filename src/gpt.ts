@@ -432,7 +432,10 @@ async function handleUserMessage(
   // text comes in via contentOverride; otherwise use the message's own content.
   const userText = contentOverride ?? message.content
   const flags = access.channelFlags(channelId)
-  const model = flags.model ?? DEFAULT_MODEL
+  // API-engine model is env-driven (DEFAULT_MODEL / GPT_MODEL), not per-channel —
+  // matches gemma's API model. The per-channel `model` override was removed
+  // 2026-06-29 (it had no slash setter — orphaned). /gpt model sets codexModel.
+  const model = DEFAULT_MODEL
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
   const selfId = client.user?.id ?? ''
 

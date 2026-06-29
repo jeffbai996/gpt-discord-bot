@@ -7,7 +7,6 @@ export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 export interface ChannelConfig {
   enabled: boolean
   requireMention: boolean
-  model?: string             // override default model per-channel (gpt-5.5 | gpt-5.4-mini | o3)
   reasoning?: ReasoningEffort  // for o-series; ignored by gpt-5.x
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
   thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
@@ -17,7 +16,10 @@ export interface ChannelConfig {
 }
 
 export interface ChannelFlags {
-  model: string | null
+  // NOTE: there is intentionally NO per-channel API `model` override. The API
+  // engine's model is env-driven (DEFAULT_MODEL / GPT_MODEL), matching gemma's
+  // API model. /gpt model sets codexModel (the codex engine). (Jeff 2026-06-29:
+  // removed the orphaned `model` field that had no slash setter.)
   reasoning: ReasoningEffort
   trace: 'off' | 'on' | 'collapse'
   thinking: 'off' | 'on' | 'collapse'
@@ -148,7 +150,6 @@ export class AccessManager {
     this.data.channels[channelId] = {
       enabled,
       requireMention,
-      ...(flags?.model != null ? { model: flags.model } : existing?.model ? { model: existing.model } : {}),
       reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
       thinking: normTri(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
@@ -172,8 +173,6 @@ export class AccessManager {
     }
     this.data.channels[channelId] = {
       ...existing,
-      // null sentinel = clear the per-channel override (back to global default).
-      ...(patch.model === null ? { model: undefined } : patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
@@ -189,7 +188,6 @@ export class AccessManager {
   channelFlags(channelId: string): ChannelFlags {
     const channel = this.data.channels[channelId]
     return {
-      model: channel?.model ?? null,
       reasoning: channel?.reasoning ?? DEFAULT_FLAGS.reasoning,
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       thinking: channel?.thinking ?? DEFAULT_FLAGS.thinking,

@@ -238,9 +238,8 @@ export async function executeGptCommand(
       const requireMention = interaction.options.getBoolean('require_mention', true)
       await access.setChannel(channel.id, enabled, requireMention)
       const flags = access.channelFlags(channel.id)
-      const modelDisplay = flags.model ?? '(default)'
       return interaction.reply({
-        content: `✅ <#${channel.id}> configured. enabled=${enabled}, requireMention=${requireMention}. flags: model=${modelDisplay}, reasoning=${flags.reasoning}, engine=${flags.engine}, counter=${flags.counter}, trace=${flags.trace}, thinking=${flags.thinking} — change via the \`/gpt\` subcommands.`,
+        content: `✅ <#${channel.id}> configured. enabled=${enabled}, requireMention=${requireMention}. flags: engine=${flags.engine}, codexModel=${flags.codexModel}, reasoning=${flags.reasoning}, counter=${flags.counter}, trace=${flags.trace}, thinking=${flags.thinking} — change via the \`/gpt\` subcommands.`,
         ephemeral: true
       })
     }
@@ -392,7 +391,7 @@ export async function executeGptCommand(
       const rows: Array<[string, string]> = [
         ['engine', `${f.engine} (default codex)`],
         ['codex model', `${f.codexModel} (default gpt-5.5)`],
-        ['api model', f.model ?? '(none — global default)'],
+        ['api model', `${process.env.GPT_MODEL || 'gpt-5.5'} (env, global)`],
         ['effort', `${f.reasoning} (default high)`],
         ['thinking', `${f.thinking} (default off)`],
         ['trace', `${f.trace} (default off)`],

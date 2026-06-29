@@ -40,20 +40,14 @@ test('access: setChannelFlags preserves enabled/requireMention', async () => {
   await a.load()
   await a.allowUser('u1')
   await a.setChannel('c1', true, true)
-  await a.setChannelFlags('c1', { model: 'o3', reasoning: 'high' })
+  await a.setChannelFlags('c1', { codexModel: 'gpt-5.4', reasoning: 'high' })
 
   const flags = a.channelFlags('c1')
-  assert.equal(flags.model, 'o3')
+  assert.equal(flags.codexModel, 'gpt-5.4')
   assert.equal(flags.reasoning, 'high')
   assert.equal(a.canHandle({ channelId: 'c1', userId: 'u1', isMention: true }), true)
 })
 
-test('access: model=null clears per-channel override', async () => {
-  const a = new AccessManager()
-  await a.load()
-  await a.setChannel('c1', true, false, { model: 'gpt-5.4-mini' })
-  assert.equal(a.channelFlags('c1').model, 'gpt-5.4-mini')
-
-  await a.setChannelFlags('c1', { model: null })
-  assert.equal(a.channelFlags('c1').model, null)
-})
+// NOTE: the per-channel API `model` override was removed 2026-06-29 (orphaned —
+// no slash setter; API model is env-driven via DEFAULT_MODEL, like gemma). The
+// old 'model=null clears override' test went with it.
