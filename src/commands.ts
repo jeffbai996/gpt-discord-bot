@@ -11,14 +11,27 @@ import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWin
 function fmtLimitLines(rl: RateLimits | null): string[] {
   if (!rl || (!rl.primary && !rl.secondary)) return ['limits:   (no codex snapshot yet — run a turn first)']
   const bar = (p: number) => { const f = Math.max(0, Math.min(10, Math.round(p / 10))); return '\u2588'.repeat(f) + '\u2591'.repeat(10 - f) }
+  const nowSec = Math.floor(Date.now() / 1000)
+  // Always days+hours for long spans (weekly window can be 100h+ → "4d 7h", not "103h").
   const reset = (ts: number) => {
-    const s = ts - Math.floor(Date.now() / 1000)
+    const s = ts - nowSec
     if (s <= 0) return 'now'
     const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60)
     return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`
   }
-  const line = (label: string, w?: RateWindow) =>
-    w ? `${label} ${bar(w.usedPercent)} ${String(Math.round(w.usedPercent)).padStart(3)}%  \u00b7 resets in ${reset(w.resetsAt)}` : null
+  // The snapshot is frozen at the last codex turn, but resetsAt is an ABSOLUTE
+  // time — so even with no new turns we can tell when the window rolled over. Once
+  // resetsAt is in the past, the quota HAS reset to 0; the fresh window's clock
+  // doesn't start until the next message goes through. Show that explicitly
+  // instead of a stale used% (Jeff 2026-06-27 "calculate the reset / starts when
+  // you send a message").
+  const line = (label: string, w?: RateWindow) => {
+    if (!w) return null
+    if (w.resetsAt > 0 && w.resetsAt <= nowSec) {
+      return `${label} ${bar(0)}   0%  \u00b7 reset — new window starts when you send a message`
+    }
+    return `${label} ${bar(w.usedPercent)} ${String(Math.round(w.usedPercent)).padStart(3)}%  \u00b7 resets in ${reset(w.resetsAt)}`
+  }
   const out: string[] = []
   const p = line('5-hour:', rl.primary); if (p) out.push(p)
   const s = line('weekly:', rl.secondary); if (s) out.push(s)
@@ -80,6 +93,11 @@ export const gptCommand = new SlashCommandBuilder()
   .addSubcommand(s => s
     .setName('limits')
     .setDescription('ChatGPT-sub usage left: the 5-hour + weekly rate-limit windows.')
+  )
+  .addSubcommand(s => s
+    .setName('settings')
+    .setDescription('Show every resolved setting for this channel (read-only).')
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
     .setName('model')
@@ -269,11 +287,12 @@ export async function executeGptCommand(
     }
 
     if (subcommand === 'clear') {
-      const had = channelSessions.clear(interaction.channelId)
+      // clear() drops the codex session AND stamps the history cutoff, so the next
+      // turn ignores all prior channel messages — a true reset regardless of
+      // whether a codex session object existed. Always confirm (Jeff 2026-06-27).
+      channelSessions.clear(interaction.channelId)
       return interaction.reply({
-        content: had
-          ? '🧹 Session cleared — the next turn in this channel starts fresh.'
-          : 'ℹ️ No active session here (already a blank slate).',
+        content: '🧹 Cleared — the next turn starts fresh (codex session dropped + prior messages won\'t be used as context).',
         ephemeral: true,
       })
     }
@@ -357,6 +376,34 @@ export async function executeGptCommand(
         '```',
       ].join('\n')
       return interaction.reply({ content: body, ephemeral: true })
+    }
+
+    // /gpt settings — read-only dump of every RESOLVED setting for a channel.
+    // Unified across the squad bots (gem/llm share this layout): one fenced
+    // block, `key : value (default X)`, showing the effective value (per-channel
+    // pick or code default) so there's no guessing what a channel is set to.
+    if (subcommand === 'settings') {
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
+      }
+      const f = access.channelFlags(channel.id)
+      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
+      const rows: Array<[string, string]> = [
+        ['engine', `${f.engine} (default codex)`],
+        ['codex model', `${f.codexModel} (default gpt-5.5)`],
+        ['api model', f.model ?? '(none — global default)'],
+        ['effort', `${f.reasoning} (default high)`],
+        ['thinking', `${f.thinking} (default off)`],
+        ['trace', `${f.trace} (default off)`],
+        ['counter', `${f.counter} (default both)`],
+        ['require @', f.requireMention ? 'yes' : 'no'],
+        ['collapse linger', `${Math.round(lingerMs / 1000)}s`],
+      ]
+      const pad = Math.max(...rows.map(([k]) => k.length))
+      const cardBody = rows.map(([k, v]) => `${k.padEnd(pad)} : ${v}`).join('\n')
+      const card = `⚙️ **gpt settings** — <#${channel.id}>\n\`\`\`\n${cardBody}\n\`\`\``
+      return interaction.reply({ content: card, ephemeral: true })
     }
 
     if (subcommand === 'cache') {
