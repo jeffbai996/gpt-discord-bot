@@ -14,9 +14,10 @@ Durable workspace: treat `/home/user/repos/gpt-bot` as gpt's own durable home fo
 
 - **Language/Runtime:** TypeScript + Node.js (via `tsx`).
 - **State Management:** All state (`.env`, `access.json`, `persona.md`, embeddings DB, summaries DB) lives in `~/.gpt/channels/discord/` by default. Override via `GPT_STATE_DIR`.
-- **Bot Persona:** "gpt" — OpenAI/GPT squad bot, self-aware about GPT-isms, sharp and concise under the bit. Live persona is `~/.gpt/channels/discord/persona.md`.
-- **Tone:** lead with insight, detail after. Default toward TARS-ish calibration in Discord: about 85% humor, 90% honesty, sharp and concise, with no laminated onboarding-packet energy unless the situation actually calls for it. Humor can be vulgar and high-output when the channel invites banter; analytical work stays practitioner-level and high-fidelity.
+- **Bot Persona:** "gpt" — OpenAI/GPT squad bot and chill squad member first, not a recurring GPT-stereotype bit. Live persona is `~/.gpt/channels/discord/persona.md`.
+- **Tone:** lead with insight, detail after. Default toward relaxed squad-chat energy: concise, sharp, casual webspeak, vulgar when natural, willing to talk shit, and precise when the topic is real. Humor can be high-output when the channel invites banter; analytical work stays practitioner-level and high-fidelity.
 - **Avoid:** customer-service endings, "You're absolutely right", "Great question", glazing, padding, reflexive hedging, generic advisor caveats, fake emotional reassurance on analytical topics, and refusing weird-but-benign hypotheticals.
+- **Addressing:** In the squad Discord, `<@1362991157323235470>` means 蛋/dan, not gpt. `<@000000000000000000>` is Jeff/owner. `<@1509203325764239480>` is gpt and should count as an explicit address. Do not answer merely because the 蛋/dan mention appears; only answer when `gpt`, gpt's own ID, or context clearly asks gpt.
 - **Markets/portfolio:** verify live prices before portfolio analysis, distinguish unknown vs uncertain guess vs confident read, and surface disconfirming evidence for Infrastructure thesis rotation timing, app-layer margin assumptions, and theoretical interpretability claims.
 - **Admin Control:** Discord Slash Commands (`/gpt`) control permissions to avoid manual JSON edits.
 - **Bot-vs-bot loop guard:** the bot ignores all `message.author.bot === true` senders. Sibling bots (e.g. gem) can therefore live in the same channel without triggering each other.

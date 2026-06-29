@@ -17,16 +17,24 @@ const FILE = path.join(STATE_DIR, 'channel-sessions.json')
 // accumulating"). We stash last turn's cumulative here so gpt.ts can show the
 // per-turn DELTA (current cumulative − previous) instead of the raw cumulative.
 const USAGE_FILE = path.join(STATE_DIR, 'channel-usage.json')
+// Per-channel /clear cutoff timestamps — persisted so the cutoff survives restarts.
+const CLEARED_FILE = path.join(STATE_DIR, 'channel-cleared.json')
 
 interface CumUsage { input: number; output: number; cachedInput: number; reasoning: number }
 
 class ChannelSessions {
   private map = new Map<string, string>()
   private usage = new Map<string, CumUsage>()
+  // Clear-cutoff: /clear stamps now; history fetch ignores messages at/before this.
+  // Persisted so it survives restarts.
+  private clearedAt = new Map<string, number>()
+  markCleared(channelId: string) { this.clearedAt.set(channelId, Date.now()); this.saveCleared() }
+  clearedSince(channelId: string): number { return this.clearedAt.get(channelId) ?? 0 }
 
   constructor() {
     this.load()
     this.loadUsage()
+    this.loadCleared()
   }
 
   private load(): void {
@@ -63,6 +71,7 @@ class ChannelSessions {
    *  baseline so the next (fresh) turn's delta isn't computed against a stale
    *  total. */
   clear(channelId: string): boolean {
+    this.markCleared(channelId)
     const had = this.map.delete(channelId)
     if (had) this.save()
     if (this.usage.delete(channelId)) this.saveUsage()
@@ -83,6 +92,21 @@ class ChannelSessions {
       fs.writeFileSync(USAGE_FILE, JSON.stringify(Object.fromEntries(this.usage)))
     } catch (e) {
       console.error('channel-usage save failed:', e instanceof Error ? e.message : e)
+    }
+  }
+
+  private loadCleared(): void {
+    try {
+      const raw = JSON.parse(fs.readFileSync(CLEARED_FILE, 'utf8')) as Record<string, number>
+      this.clearedAt = new Map(Object.entries(raw))
+    } catch { /* no file yet */ }
+  }
+
+  private saveCleared(): void {
+    try {
+      fs.writeFileSync(CLEARED_FILE, JSON.stringify(Object.fromEntries(this.clearedAt)))
+    } catch (e) {
+      console.error('channel-cleared save failed:', e instanceof Error ? e.message : e)
     }
   }
 
