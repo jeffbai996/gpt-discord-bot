@@ -92,17 +92,13 @@ const TRACE_MAX_LINES = 50
 // persistent Codex session every turn (codex exec resume <id>) so gpt keeps its
 // own prior reasoning/tool context. But Codex counts the WHOLE resumed session
 // as turn input, and `exec resume` has no compaction — so a long-lived session
-// bloats unboundedly. One channel hit 1.78M input/turn (12.5M cumulative / 39
-// turns). When a turn's reported input crosses this ceiling we drop the session
-// pointer so the NEXT turn cold-starts a fresh Codex session.
+// bloats unboundedly. When a turn's reported input crosses this ceiling, force a
+// durable channel summary first, then drop the Codex session pointer so the NEXT
+// turn cold-starts with compact older context + recent Discord history.
 //
-// Does this lose context? Largely NO: a cold start already RE-GROUNDS from recent
-// Discord history (codex-chat feeds input.history) AND the model can pull older
-// context on demand via `shared-memory recall` / `vecgrep search` (it calls those
-// itself). What's dropped is only gpt's own prior private reasoning chain — not
-// the conversation, which is recoverable. So rollover trades a bit of reasoning
-// continuity for bounded cost; the ceiling is set high enough (500k) that it only
-// fires on genuine bloat, not normal multi-turn chat. Tunable via env; 0 disables.
+// If summarization is unavailable/fails, rollover still drops only the session
+// pointer (not the Discord-history cutoff), so the next turn can re-ground from
+// recent channel history and squad memory instead of going fully amnesic.
 const SESSION_ROLLOVER_TOKENS = Number(process.env.GPT_SESSION_ROLLOVER_TOKENS ?? 500_000)
 // Match the Claude bots' tool_watcher.py caps byte-for-byte: tool-call header
 // rows <= 83 (HEADER_LINE_MAX), stdout/output lines <= 88 (Jeff 2026-06-25).
@@ -681,16 +677,23 @@ async function handleUserMessage(
           }
         }
         // Session rollover: if Codex reported a turn-input above the ceiling, the
-        // resumed session has bloated — drop the pointer so the NEXT turn starts
-        // fresh. We keep THIS turn's session id set above (the reply already used
-        // it); clearing after means the next turn cold-starts and re-grounds from
-        // Discord history instead of resuming the oversized context. (Jeff 2026-06-25)
+        // resumed session has bloated. Force a summary before dropping the pointer
+        // so the next cold-start gets compact older context via persona.buildSystemPrompt()
+        // plus the normal recent Discord history window. (Jeff 2026-06-29)
         if (SESSION_ROLLOVER_TOKENS > 0
             && (result.usage?.inputTokens ?? 0) >= SESSION_ROLLOVER_TOKENS) {
+          let compacted = false
+          try {
+            const summaryResult = await summarizer?.runForChannel(channelId)
+            compacted = !!summaryResult
+          } catch (e) {
+            console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
+          }
           channelSessions.dropSession(channelId)
           console.log(`[session-rollover] channel ${channelId}: input `
             + `${result.usage?.inputTokens} >= ${SESSION_ROLLOVER_TOKENS} — `
-            + `cleared session, next turn starts fresh`)
+            + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
+            + `dropped session; next turn starts fresh`)
         }
         setEnginePresence(false)
       } catch (e) {

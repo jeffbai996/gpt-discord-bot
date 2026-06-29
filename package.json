@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/gpt.ts",
-    "test": "node --test --import tsx 'tests/**/*.test.ts'"
+    "test": "node --test --import tsx tests/*.test.ts"
   },
   "dependencies": {
     "@discordjs/opus": "^0.10.0",

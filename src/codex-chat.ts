@@ -252,7 +252,20 @@ function cleanCmd(raw: string): string {
 // From a codex item.started event, derive BOTH a generic animated status for the
 // placeholder AND the real tool call (name + args) for the live trace — so the
 // placeholder stays clean ("running…") while the trace shows the actual command.
-function liveEvent(ev: any): { status: string; tool?: { name: string; args: string } } | null {
+function mcpToolEvent(invocation: any): { status: string; tool?: { name: string; args: string } } | null {
+  const toolName = String(invocation?.tool ?? invocation?.name ?? '').trim()
+  if (!toolName) return null
+  const server = String(invocation?.server ?? '').trim()
+  const name = server ? `${server}.${toolName}` : toolName
+  const args = invocation?.arguments ?? invocation?.args ?? {}
+  return { status: '🔌 plugin', tool: { name, args: typeof args === 'string' ? args : JSON.stringify(args) } }
+}
+
+export function liveEvent(ev: any): { status: string; tool?: { name: string; args: string } } | null {
+  if (ev?.type === 'event_msg' && ev.payload?.type === 'mcp_tool_call_begin') {
+    return mcpToolEvent(ev.payload.invocation)
+  }
+
   if (ev?.type !== 'item.started' || !ev.item) return null
   const it = ev.item
   switch (it.type) {
@@ -264,6 +277,8 @@ function liveEvent(ev: any): { status: string; tool?: { name: string; args: stri
       const paths = Array.isArray(it.changes) ? it.changes.map((c: any) => c.path).join(', ') : ''
       return { status: '✏️ editing', tool: { name: 'edit', args: paths } }
     }
+    case 'mcp_tool_call':
+      return mcpToolEvent(it.invocation ?? it)
     case 'reasoning':
       return { status: '🧠 thinking' }
     default:
