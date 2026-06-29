@@ -900,7 +900,7 @@ async function handleUserMessage(
     // as the first message so the thought line replaces "thinking…" in place AND the
     // reply flows directly beneath it (one block). Persistence: keep the thought
     // line indefinitely ONLY when trace='on'; for trace 'collapse'/'off' it's a
-    // transient duration tag, stripped after a 120s linger (Jeff 2026-06-24).
+    // transient duration tag, stripped after a 60s linger (Jeff 2026-06-24).
     // N = total turn time (codex has no per-item timing).
     const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
     const persist = flags.trace === 'on'
@@ -942,16 +942,16 @@ async function handleUserMessage(
     // Transient thought line: after the linger, strip just the thought prefix from
     // the merged message, leaving the reply body intact.
     if (!persist && mergedMsg) {
-      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 120_000
+      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
       deferredActions.schedule(client, { channelId: mergedMsg.channelId, messageId: mergedMsg.id, action: 'strip', content: parts[0] ?? '', dueAt: Date.now() + lingerMs })
     }
 
-    // Collapse: keep the trace/thinking card(s) up for a readable 120s linger (same
+    // Collapse: keep the trace/thinking card(s) up for a readable 60s linger (same
     // window as the thought-for line), THEN delete for a clean channel (Jeff 2026-06-24).
     const toCollapse: Message[] = [...collapseMsgs]
     if (flags.trace === 'collapse' && liveTraceMsg) toCollapse.push(liveTraceMsg as unknown as Message)
     if (toCollapse.length) {
-      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 120_000
+      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
       for (const m of toCollapse) deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + lingerMs })
     }
 
