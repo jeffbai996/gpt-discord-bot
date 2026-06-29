@@ -66,12 +66,21 @@ class ChannelSessions {
     this.save()
   }
 
-  /** Forget this channel's session → next turn starts a fresh codex session.
-   *  Returns true if there was one to clear. Also resets the cumulative-usage
-   *  baseline so the next (fresh) turn's delta isn't computed against a stale
-   *  total. */
+  /** USER-initiated clear (/clear): forget the codex session AND stamp the
+   *  history cutoff so the conversation truly starts fresh. */
   clear(channelId: string): boolean {
     this.markCleared(channelId)
+    return this.dropSession(channelId)
+  }
+
+  /** SESSION-only drop (rollover / codex error): forget the session pointer +
+   *  usage baseline so the next turn cold-starts — WITHOUT stamping the history
+   *  cutoff. The next turn re-grounds from Discord history, so hiding it would
+   *  be self-defeating. Bugfix 2026-06-29: rollover/error called clear(), whose
+   *  markCleared() stamped a cutoff that the history filter then used to drop
+   *  ALL history (full amnesia on the ollama path; masked here by session
+   *  resume but still wrong). Split the intents. */
+  dropSession(channelId: string): boolean {
     const had = this.map.delete(channelId)
     if (had) this.save()
     if (this.usage.delete(channelId)) this.saveUsage()

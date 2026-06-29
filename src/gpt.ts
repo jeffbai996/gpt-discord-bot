@@ -687,7 +687,7 @@ async function handleUserMessage(
         // Discord history instead of resuming the oversized context. (Jeff 2026-06-25)
         if (SESSION_ROLLOVER_TOKENS > 0
             && (result.usage?.inputTokens ?? 0) >= SESSION_ROLLOVER_TOKENS) {
-          channelSessions.clear(channelId)
+          channelSessions.dropSession(channelId)
           console.log(`[session-rollover] channel ${channelId}: input `
             + `${result.usage?.inputTokens} >= ${SESSION_ROLLOVER_TOKENS} — `
             + `cleared session, next turn starts fresh`)
@@ -704,7 +704,7 @@ async function handleUserMessage(
         // A codex turn failed — drop this channel's session pointer so the NEXT turn
         // starts a clean fresh session (a wedged/expired session would otherwise fail
         // every turn; the fresh turn re-grounds from Discord history).
-        channelSessions.clear(channelId)
+        channelSessions.dropSession(channelId)
         // Don't fail silently. If codex was interrupted by the backstop (or errored),
         // SHOW it — an ⏳ reaction + a short note on the placeholder — THEN fall back
         // to the API so the user still gets an answer, but knows what happened.
