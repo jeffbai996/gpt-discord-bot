@@ -24,18 +24,14 @@ export interface HistoryMessage {
 
 // Upper bound for the raw Discord fetch. Discord caps fetch at 100 per call.
 // We fetch this many, then trimToTokenBudget() drops the oldest until the
-// remaining content fits within GPT_HISTORY_TOKEN_BUDGET.
-const HISTORY_RAW_LIMIT = 30
+// remaining content fits within GPT_HISTORY_TOKEN_BUDGET. Matches gem-bot's
+// raw fetch depth for feature parity.
+const HISTORY_RAW_LIMIT = 100
 
-// Approximate token-budget cap on conversation history sent per turn. The
-// previous behavior was "fetch last 30, send them all" — a chatty channel
-// with 30 multi-paragraph messages would silently send 10k+ tokens of
-// history on every reply. With GPT-5.5 at $5/$30 per 1M tokens that's
-// nontrivial cost per turn before the model has even started reasoning.
-//
-// 8k tokens covers ~12-20 typical Discord turns of context, which is plenty
-// for chat. Override via GPT_HISTORY_TOKEN_BUDGET=<n>. Set to 0 to disable the
-// token cap (keeps a recency window of the last 20 messages instead).
+// Approximate token-budget cap on conversation history sent per turn.
+// Matches gem-bot's MAX_HISTORY_TOKENS for feature parity across bots.
+// Override via GPT_HISTORY_TOKEN_BUDGET=<n>. Set to 0 to disable the token
+// cap (keeps a recency window of the last 20 messages instead).
 //
 // The actual windowing now lives in token-budget.ts (gem-parity: dynamic
 // token-aware windowing as a reusable, testable module). It approximates token
@@ -43,7 +39,7 @@ const HISTORY_RAW_LIMIT = 30
 // — and the budget is intentionally generous (the trim is a fail-safe, not a
 // tight squeeze).
 const HISTORY_TOKEN_BUDGET = parseInt(
-  process.env.GPT_HISTORY_TOKEN_BUDGET ?? '8000',
+  process.env.GPT_HISTORY_TOKEN_BUDGET ?? '80000',
   10,
 )
 
