@@ -446,7 +446,11 @@ async function handleUserMessage(
       message.channel.type === 5 /* GuildAnnouncement */
     ) {
       const raw = await fetchHistory(message.channel as TextChannel | DMChannel | ThreadChannel, message.id)
-      history = await formatHistoryForOpenAI(raw, selfId)
+      // Respect /clear: drop anything at/before the channel's clear cutoff so a
+      // cleared conversation truly starts fresh (Jeff 2026-06-27).
+      const _cutoff = channelSessions.clearedSince(channelId)
+      const rawFiltered = _cutoff ? raw.filter((m: any) => (m.createdTimestamp ?? 0) > _cutoff) : raw
+      history = await formatHistoryForOpenAI(rawFiltered, selfId)
     }
   } catch (e) {
     console.error('history fetch failed:', e)
@@ -482,26 +486,31 @@ async function handleUserMessage(
     ? `thinking with ${flags.reasoning} effort` : 'thinking'
   let workMessage: Message | null = targetMessage
   let placeholderId: string | null = null
-  if (!workMessage) {
-    try {
-      workMessage = await message.reply(`💭 ✻ **${effortLabel}…**`)
-      placeholderId = workMessage.id
-      pendingPlaceholders.track(message.channel.id, workMessage.id, message.id)
-    } catch (e) {
-      console.error('placeholder reply failed:', e)
-    }
-  }
-
-  // Animate the placeholder ellipsis (. .. …) every 1.5s while we wait. Matters
-  // most for codex turns, which don't stream partials, so the placeholder would
-  // otherwise sit frozen. Cleared on the first streamed partial and before the
-  // final render (stopThinkingAnim).
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
   let currentStatus = `💭 ${effortLabel}`
-  if (workMessage && !targetMessage) {
-    // Claude-bot spinner in the ✓/✗ position (between the emoji and the word):
-    // glyph set + trailing dots both pulse each 1.5s tick, then settle to ✓.
+
+  // Typing-dots-first (Jeff 2026-06-29, ported from gem-bot): show the native
+  // "GPT is typing…" indicator immediately, and only post the 💭 placeholder
+  // bubble + spinner if the turn is STILL working after PLACEHOLDER_DELAY_MS.
+  // Fast turns then read clean — dots, then the answer, no transient bubble.
+  // Slow turns (esp. codex, which doesn't stream partials) still get the
+  // animated placeholder. The typing heartbeat re-fires every 9s because
+  // Discord auto-expires the indicator after ~10s.
+  const PLACEHOLDER_DELAY_MS = parseInt(process.env.GPT_PLACEHOLDER_DELAY_MS ?? '2500', 10)
+  let placeholderTimer: ReturnType<typeof setTimeout> | null = null
+  let typingInterval: ReturnType<typeof setInterval> | null = null
+  if (!targetMessage && message.channel.isSendable()) {
+    ;(message.channel as any).sendTyping?.().catch(() => {})
+    typingInterval = setInterval(() => {
+      ;(message.channel as any).sendTyping?.().catch(() => {})
+    }, 9000)
+  }
+
+  // Start the placeholder spinner (idempotent). Animates the ellipsis (. .. …)
+  // + glyph every 1.5s so a non-streaming (codex) turn doesn't sit frozen.
+  const startSpinner = () => {
+    if (thinkingAnim || !workMessage || targetMessage) return
     const GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸']
     const dots = ['.', '..', '…']
     let fi = 1
@@ -515,6 +524,30 @@ async function handleUserMessage(
       const text = i > 0 ? currentStatus.slice(i + 1) : ''
       workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
     }, 1500)
+  }
+
+  // Post the 💭 placeholder bubble + start its spinner, once. Called either by
+  // the deferred timer (slow path) or eagerly the instant streamed content
+  // needs a home before the timer fired. No-op if a workMessage already exists.
+  const postPlaceholder = async () => {
+    if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
+    if (workMessage) { startSpinner(); return }
+    try {
+      workMessage = await message.reply(`💭 ✻ **${effortLabel}…**`)
+      placeholderId = workMessage.id
+      pendingPlaceholders.track(message.channel.id, workMessage.id, message.id)
+    } catch (e) {
+      console.error('placeholder reply failed:', e)
+    }
+    startSpinner()
+  }
+
+  if (targetMessage) {
+    // Regenerate / edit: reuse the existing bot message immediately, spinner on.
+    startSpinner()
+  } else {
+    // Normal turn: dots now, placeholder only if still working after the delay.
+    placeholderTimer = setTimeout(() => { void postPlaceholder() }, PLACEHOLDER_DELAY_MS)
   }
 
   // Throttle Discord edits during streaming.
@@ -562,7 +595,12 @@ async function handleUserMessage(
       currentStatus = event.label
       return
     }
-    if (event.type === 'partial' && workMessage) {
+    if (event.type === 'partial') {
+      // Streamed content arrived before the placeholder timer fired (fast API
+      // turn). Create the bubble now so there's somewhere to render — fire the
+      // async post without blocking the event handler; the next partial
+      // (~700ms later) lands once workMessage exists. Also cancels the timer.
+      if (!workMessage) { void postPlaceholder(); return }
       stopThinkingAnim()
       const now = Date.now()
       if (now - lastEditAt < EDIT_INTERVAL_MS) return
@@ -677,8 +715,13 @@ async function handleUserMessage(
       result = await apiRespond()
     }
 
-    // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
+    // Result is in hand — stop all "still working" indicators before rendering.
+    // Cancel the deferred-placeholder timer (a fast turn beat the delay → no
+    // transient bubble) and the typing heartbeat, alongside the spinner.
+    if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
+    if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     stopThinkingAnim()
+    // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
 
     // @gpt can set its own Discord status: a [[presence: …]] directive in the reply
@@ -934,6 +977,9 @@ async function handleUserMessage(
       else await message.reply(errMsg)
     } catch {}
   } finally {
+    if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
+    if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
+    stopThinkingAnim()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
   }
 }
