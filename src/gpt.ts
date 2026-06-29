@@ -454,9 +454,15 @@ async function handleUserMessage(
       const _cutoff = channelSessions.clearedSince(channelId)
       const rawFiltered = _cutoff ? raw.filter((m: any) => (m.createdTimestamp ?? 0) > _cutoff) : raw
       history = await formatHistoryForOpenAI(rawFiltered, selfId)
+      // Observability (Jeff 2026-06-29): empty history = the bot loses context
+      // for the turn. Log the counts so a fetch hiccup / over-aggressive cutoff
+      // is visible instead of silently degrading (and burning tokens on a
+      // context-less reply the user then has to re-ask).
+      console.error(`[history] ch=${channelId} fetched=${raw.length} afterCutoff=${rawFiltered.length} sent=${history.length}${_cutoff ? ` cutoff=${_cutoff}` : ''}`)
     }
   } catch (e) {
-    console.error('history fetch failed:', e)
+    // A throw here = empty history = no context this turn. No longer silent.
+    console.error(`[history] FETCH FAILED for ch=${channelId} — replying with NO context:`, e)
   }
 
   await applyLifecycle(message, 'received')
