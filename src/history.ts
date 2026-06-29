@@ -14,6 +14,12 @@ export interface HistoryMessage {
   authorName: string
   content: string
   attachments: HistoryAttachment[]
+  // Discord message creation time (ms). The /clear cutoff filter in gpt.ts
+  // needs it — without it the filter read `undefined ?? 0` (0 > cutoff = false
+  // for every message), silently dropping ALL history whenever a clear cutoff
+  // existed. Masked here by codex session-resume, but the bug is real (fixed
+  // 2026-06-29 alongside llm-bot, where it caused full amnesia).
+  createdTimestamp: number
 }
 
 // Upper bound for the raw Discord fetch. Discord caps fetch at 100 per call.
@@ -58,6 +64,7 @@ export async function fetchHistory(
       authorId: m.author.id,
       authorName: m.author.username,
       content: m.content,
+      createdTimestamp: m.createdTimestamp,
       attachments: [...m.attachments.values()].map(a => ({
         name: a.name,
         url: a.url,

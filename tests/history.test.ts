@@ -5,10 +5,10 @@ import { formatHistoryForOpenAI, stripBotMetadata, type HistoryMessage } from '.
 const SELF = 'bot-id'
 
 function userMsg(id: string, name: string, content: string): HistoryMessage {
-  return { id, authorId: `u-${name}`, authorName: name, content, attachments: [] }
+  return { id, authorId: `u-${name}`, authorName: name, content, attachments: [], createdTimestamp: 0 }
 }
 function botMsg(id: string, content: string): HistoryMessage {
-  return { id, authorId: SELF, authorName: 'gpt', content, attachments: [] }
+  return { id, authorId: SELF, authorName: 'gpt', content, attachments: [], createdTimestamp: 0 }
 }
 
 test('stripBotMetadata: drops -# directive lines', () => {
@@ -43,6 +43,7 @@ test('formatHistoryForOpenAI: describes attachments as breadcrumbs', async () =>
   const msgs: HistoryMessage[] = [{
     id: '1', authorId: 'u-alice', authorName: 'alice', content: 'look',
     attachments: [{ name: 'pic.png', url: 'http://x/pic.png', mimeType: 'image/png' }],
+    createdTimestamp: 0,
   }]
   const out = await formatHistoryForOpenAI(msgs, SELF)
   assert.match(String(out[0].content), /\[previous image: pic\.png\]/)
