@@ -216,12 +216,11 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
 }
 
 function shortToolName(name: string): string {
-  const cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s
   if (name.startsWith('mcp__')) {
     const parts = name.split('__')
-    if (parts.length >= 3) return cap(parts[parts.length - 1])
+    if (parts.length >= 3) return parts[parts.length - 1]
   }
-  return cap(name)
+  return name
 }
 
 if (!process.env.DISCORD_BOT_TOKEN) {
