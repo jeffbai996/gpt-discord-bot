@@ -916,7 +916,8 @@ async function handleUserMessage(
     // N = total turn time (codex has no per-item timing).
     const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
     const persist = flags.trace === 'on'
-    const parts = chunk(body)
+    const firstChunkLimit = Math.max(1000, 2000 - thoughtLine.length - 16)
+    const parts = chunk(body, firstChunkLimit)
     const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
     let mergedMsg: Message | null = null
     // Cards (trace / thinking) post ABOVE the reply. The placeholder sat at the top
