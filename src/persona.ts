@@ -40,6 +40,8 @@ function stateDir(): string {
   return process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 }
 
+const AGENTS_MD_PATH = path.join(os.homedir(), 'local-projects', 'codex', 'AGENTS.md')
+
 export class PersonaLoader {
   private persona: string = DEFAULT_PERSONA
   private activePersonaFile: string = 'persona.md'
@@ -49,6 +51,7 @@ export class PersonaLoader {
   private guildPersonas: Map<string, string> = new Map()
   private pinnedFacts: PinnedFactsStore | null = null
   private summaryStore: SummaryStore | null = null
+  private agentsDoc: string = ''
 
   setPinnedFactsStore(store: PinnedFactsStore): void {
     this.pinnedFacts = store
@@ -62,6 +65,11 @@ export class PersonaLoader {
     if (filename) this.activePersonaFile = filename
     this.persona = await this.readPersona(this.activePersonaFile)
     await this.discoverGuildPersonas()
+    try {
+      this.agentsDoc = (await fs.readFile(AGENTS_MD_PATH, 'utf8')).trim()
+    } catch {
+      this.agentsDoc = ''
+    }
   }
 
   private async discoverGuildPersonas(): Promise<void> {
@@ -104,6 +112,9 @@ export class PersonaLoader {
     const now = new Date()
     const wallClock = `Current time: ${now.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`
     const sections: string[] = [persona, TOOL_USE_DIRECTIVE, wallClock]
+    if (this.agentsDoc) {
+      sections.push(`## Deep context (AGENTS.md)\n\n${this.agentsDoc}`)
+    }
     if (summary) {
       sections.push(`## Conversation summary (older context)\n\n${summary}`)
     }
