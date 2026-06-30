@@ -1117,6 +1117,18 @@ client.on('messageCreate', async (message: Message) => {
 
   if (!access.canHandle({ channelId, userId, isMention })) return
 
+  // Lone ❌ message: kill the in-flight turn, post 🛑 + 🔁, swallow the message.
+  if (message.content.trim().replace(/️/g, '') === '❌') {
+    message.delete().catch(() => {})
+    const killed = activeTurns.stop(channelId)
+    if (killed) {
+      const m = await (message.channel as any).send?.('🛑  Stopped. React 🔁 on my last message to retry.')
+        .catch(() => null)
+      if (m) m.react?.('🔁').catch(() => {})
+    }
+    return
+  }
+
   // Pending-edit consumer: if a prior bot message in this channel was marked
   // for edit (✏️), this user message edits it in place rather than spawning
   // a fresh reply. Resolves the marker either way.
