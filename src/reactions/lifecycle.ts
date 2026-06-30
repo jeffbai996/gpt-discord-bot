@@ -66,18 +66,38 @@ const PREDECESSORS: Record<LifecycleState, LifecycleState[]> = {
   silenced:   ALL_TRANSIENTS,
 }
 
+const TERMINAL: LifecycleState[] = [
+  'replied', 'truncated', 'blocked', 'errored', 'interrupted', 'denied', 'silenced',
+]
+
 export async function applyLifecycle(message: Message, state: LifecycleState): Promise<void> {
   const emoji = EMOJI[state]
 
   const me = message.client.user
   if (me) {
-    for (const prev of PREDECESSORS[state]) {
-      const prevEmoji = EMOJI[prev]
-      if (!prevEmoji || prevEmoji === emoji) continue
-      const r = message.reactions.cache.get(prevEmoji)
-      if (r) {
-        await r.users.remove(me.id).catch(() => { /* fire-and-forget */ })
+    // Remove this state's transient predecessors. The transients are added with
+    // fire-and-forget `void applyLifecycle(...)`, so a reaction's PUT can still be
+    // in flight when a terminal cleanup runs — cache.get() misses it, and once it
+    // lands it stays forever (Jeff 2026-06-27: emojis stacking, never cleared).
+    const removeTransients = async () => {
+      for (const prev of PREDECESSORS[state]) {
+        const prevEmoji = EMOJI[prev]
+        if (!prevEmoji || prevEmoji === emoji) continue
+        const r = message.reactions.cache.get(prevEmoji)
+        if (r) await r.users.remove(me.id).catch(() => { /* fire-and-forget */ })
       }
+    }
+    if (TERMINAL.includes(state)) {
+      // Two-pass settle-and-sweep: fetch+remove now, then after a short delay
+      // fetch+remove again to catch transient reactions whose PUT landed AFTER
+      // the first fetch (the race a single pass leaves behind).
+      try { await message.fetch() } catch { /* best-effort cache refresh */ }
+      await removeTransients()
+      await new Promise(r => setTimeout(r, 800))
+      try { await message.fetch() } catch { /* best-effort */ }
+      await removeTransients()
+    } else {
+      await removeTransients()
     }
   }
 
