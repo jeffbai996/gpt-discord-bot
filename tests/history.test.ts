@@ -16,6 +16,16 @@ test('stripBotMetadata: drops -# directive lines', () => {
   assert.equal(stripBotMetadata(text), 'real reply')
 })
 
+test('stripBotMetadata: drops trace and thinking cards', () => {
+  assert.equal(stripBotMetadata('🔧 **Tool trace 2/3**\n```diff\n+ ● shell(rg)\n```'), '')
+  assert.equal(stripBotMetadata('💭 **Thinking:**\n> checking the repo'), '')
+})
+
+test('stripBotMetadata: drops thought status line but keeps reply', () => {
+  const text = '💭 ✓ **thought for 12s**\nfixed the trace splitter'
+  assert.equal(stripBotMetadata(text), 'fixed the trace splitter')
+})
+
 test('stripBotMetadata: empty input returns empty', () => {
   assert.equal(stripBotMetadata(''), '')
 })

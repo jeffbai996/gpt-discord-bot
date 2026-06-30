@@ -43,3 +43,41 @@ test('liveEvent: surfaces MCP item.started events', () => {
     },
   })
 })
+
+test('liveEvent: surfaces Codex response_item function calls as live tools', () => {
+  const ev = liveEvent({
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      name: 'exec_command',
+      arguments: JSON.stringify({ cmd: '/bin/bash -lc \'rg -n "needle" src\'' }),
+    },
+  })
+
+  assert.deepEqual(ev, {
+    status: '🛠️ running',
+    tool: {
+      name: 'shell',
+      args: 'rg -n "needle" src',
+    },
+  })
+})
+
+test('liveEvent: surfaces generic Codex response_item function calls', () => {
+  const ev = liveEvent({
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      name: 'view_image',
+      arguments: { path: '/tmp/shot.jpg' },
+    },
+  })
+
+  assert.deepEqual(ev, {
+    status: '🔧 tooling',
+    tool: {
+      name: 'view_image',
+      args: '{"path":"/tmp/shot.jpg"}',
+    },
+  })
+})

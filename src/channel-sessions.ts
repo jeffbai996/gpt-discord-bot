@@ -59,6 +59,12 @@ class ChannelSessions {
     return this.map.get(channelId)
   }
 
+  /** Last cumulative Codex usage reported for this channel's resumed session. */
+  lastUsage(channelId: string): CumUsage | undefined {
+    const u = this.usage.get(channelId)
+    return u ? { ...u } : undefined
+  }
+
   /** Record the session id returned by the latest codex turn for this channel. */
   set(channelId: string, sessionId: string): void {
     if (this.map.get(channelId) === sessionId) return

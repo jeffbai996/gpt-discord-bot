@@ -88,10 +88,13 @@ function describeAttachment(att: HistoryAttachment): string {
 // is reserved for metadata in this bot, so any line starting with `-# ` drops.
 export function stripBotMetadata(text: string): string {
   if (!text) return text
+  if (/^🔧 \*\*Tool trace(?: \d+\/\d+)?\*\*/.test(text)) return ''
+  if (/^💭 \*\*Thinking:\*\*/.test(text)) return ''
   const lines = text.split('\n')
   const out: string[] = []
   for (const line of lines) {
     if (line.startsWith('-# ')) continue
+    if (/^💭 ✓ \*\*thought for .+\*\*$/.test(line)) continue
     out.push(line)
   }
   return out.join('\n').trim()

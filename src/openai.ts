@@ -280,10 +280,11 @@ export class OpenAIClient {
     // runs onto the end of the prior line ("…web search!**Discussing details**").
     let lastSummaryIndex = -1
     const toolCalls: ToolCall[] = []
-    // Tool-loop cap. 3 rounds covers realistic tool chains (e.g. fetch then
-    // summarize) without giving a misbehaving model room to spin expensive
-    // round-trips. Override with GPT_MAX_TOOL_LOOPS=<n>.
-    const MAX_LOOPS = parseInt(process.env.GPT_MAX_TOOL_LOOPS ?? '3', 10)
+    // Tool-loop cap. 8 rounds covers coding-agent fallback chains (inspect,
+    // patch, test, inspect failure, patch again, final) without giving a
+    // misbehaving model room to spin expensive round-trips. Override with
+    // GPT_MAX_TOOL_LOOPS=<n>.
+    const MAX_LOOPS = parseInt(process.env.GPT_MAX_TOOL_LOOPS ?? '8', 10)
 
     try {
       for (let iter = 0; iter < MAX_LOOPS; iter++) {

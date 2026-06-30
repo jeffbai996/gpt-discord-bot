@@ -86,20 +86,23 @@ function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<
 
 const MEGA_LINE_MAX = 300
 const TRACE_BODY_CHAR_BUDGET = 1800
-const TRACE_MAX_LINES = 50
 
 // Codex session rollover ceiling (Jeff 2026-06-25). Each channel resumes its
 // persistent Codex session every turn (codex exec resume <id>) so gpt keeps its
 // own prior reasoning/tool context. But Codex counts the WHOLE resumed session
-// as turn input, and `exec resume` has no compaction — so a long-lived session
-// bloats unboundedly. When a turn's reported input crosses this ceiling, force a
-// durable channel summary first, then drop the Codex session pointer so the NEXT
-// turn cold-starts with compact older context + recent Discord history.
+// as turn input, and `exec resume` has no compaction command — so a long-lived
+// session bloats unboundedly. When the last reported input crosses this ceiling,
+// force a durable channel summary first, then drop the Codex session pointer so
+// THIS turn cold-starts with compact older context + recent Discord history.
 //
 // If summarization is unavailable/fails, rollover still drops only the session
 // pointer (not the Discord-history cutoff), so the next turn can re-ground from
 // recent channel history and squad memory instead of going fully amnesic.
-const SESSION_ROLLOVER_TOKENS = Number(process.env.GPT_SESSION_ROLLOVER_TOKENS ?? 500_000)
+const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
+  process.env.GPT_CODEX_MAX_SESSION_INPUT_TOKENS
+  ?? process.env.GPT_SESSION_ROLLOVER_TOKENS
+  ?? 1_000_000
+)
 // Match the Claude bots' tool_watcher.py caps byte-for-byte: tool-call header
 // rows <= 83 (HEADER_LINE_MAX), stdout/output lines <= 88 (Jeff 2026-06-25).
 const ROW_W = 83
@@ -121,21 +124,47 @@ function padTraceLine(ln: string): string {
   return ' ' + ln
 }
 
-// Assemble the fenced trace card: pad + mega-cap each line, drop whole trailing
-// lines past the line/char budget (with a marker), redact secrets, then wrap.
-function renderTraceCard(rawLines: string[]): string {
+// Assemble fenced trace cards: pad + mega-cap each line, redact secrets, then
+// split into continuation blocks instead of replacing overflow with
+// "... (N more lines)". Keep each block under Discord's 2000-char limit with
+// headroom for headers/fences and message edits.
+function renderTraceCards(rawLines: string[]): string[] {
   const lines = rawLines.map(l => padTraceLine(capMegaLine(l)))
-  const fitted: string[] = []
+  const pages: string[][] = []
+  let page: string[] = []
   let running = 0
-  for (const ln of lines.slice(0, TRACE_MAX_LINES)) {
-    const cost = ln.length + (fitted.length ? 1 : 0)
-    if (running + cost > TRACE_BODY_CHAR_BUDGET) break
-    fitted.push(ln); running += cost
+  for (const ln of lines) {
+    const cost = ln.length + (page.length ? 1 : 0)
+    if (page.length && running + cost > TRACE_BODY_CHAR_BUDGET) {
+      pages.push(page)
+      page = []
+      running = 0
+    }
+    page.push(ln)
+    running += ln.length + (page.length > 1 ? 1 : 0)
   }
-  const dropped = rawLines.length - fitted.length
-  if (dropped > 0) fitted.push(`... (${dropped} more lines)`)
-  const body = redactSecrets(fitted.join('\n'))
-  return '🔧 **Tool trace**\n```diff\n' + body + '\n```'
+  if (page.length) pages.push(page)
+  if (!pages.length) pages.push([''])
+  return pages.map((p, i) => {
+    const label = pages.length > 1 ? ` ${i + 1}/${pages.length}` : ''
+    const body = redactSecrets(p.join('\n'))
+    return `🔧 **Tool trace${label}**\n\`\`\`diff\n${body}\n\`\`\``
+  })
+}
+
+function headingsToBold(t: string): string {
+  const lines = t.split('\n')
+  const out: string[] = []
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/)
+    if (m) {
+      out.push(`**${m[1]}**`)
+      while (i + 1 < lines.length && lines[i + 1].trim() === '') i++
+    } else {
+      out.push(lines[i])
+    }
+  }
+  return out.join('\n')
 }
 
 function formatDiff(unified: string): { badge: string; body: string[] } {
@@ -171,8 +200,7 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       // Bare ⎿ summary + body; renderTraceCard's padTraceLine adds the 1-cell indent.
       const { badge, body } = formatDiff(call.diff)
       lines.push(`⎿ ${badge}`)
-      for (const b of body.slice(0, 24)) lines.push(b)
-      if (body.length > 24) lines.push(`... (${body.length - 24} more lines)`)
+      for (const b of body) lines.push(b)
     } else if (call.resultPreview) {
       // Match the output's truncation budget to the command's (71 shell / 115 other);
       // append a same-line [N lines] tag when the raw output was multi-line (Jeff 2026-06-24).
@@ -188,11 +216,12 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
 }
 
 function shortToolName(name: string): string {
+  const cap = (s: string) => s ? s[0].toUpperCase() + s.slice(1) : s
   if (name.startsWith('mcp__')) {
     const parts = name.split('__')
-    if (parts.length >= 3) return parts[parts.length - 1]
+    if (parts.length >= 3) return cap(parts[parts.length - 1])
   }
-  return name
+  return cap(name)
 }
 
 if (!process.env.DISCORD_BOT_TOKEN) {
@@ -560,6 +589,22 @@ async function handleUserMessage(
   let lastEditedText = ''
   const EDIT_INTERVAL_MS = 700
 
+  const compactAndDropCodexSession = async (reason: string, inputTokens?: number) => {
+    let compacted = false
+    try {
+      const summaryResult = await summarizer?.runForChannel(channelId)
+      compacted = !!summaryResult
+    } catch (e) {
+      console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
+    }
+    channelSessions.dropSession(channelId)
+    console.log(`[session-rollover] channel ${channelId}: ${reason}`
+      + (inputTokens !== undefined ? ` input=${inputTokens}` : '')
+      + ` >= ${CODEX_SESSION_MAX_INPUT_TOKENS} — `
+      + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
+      + `dropped session; next turn starts fresh`)
+  }
+
   // Lifecycle reactions still fire live via onEvent; the tool trace itself is
   // now built post-hoc from result.toolCalls (see the trace card below), so we
   // no longer accumulate raw trace lines here.
@@ -567,15 +612,32 @@ async function handleUserMessage(
   // growing message AS it runs, instead of one blob at the end. API path gives rich
   // tool_start{name,args}; codex gives coarser status labels — both append a row.
   const liveToolRows: string[] = []
-  let liveTraceMsg: Message | null = null
+  let liveTraceMsgs: Message[] = []
   let liveTracePending = false
+  let liveTraceDirty = false
   const flushLiveTrace = () => {
     if (liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
+    const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
     liveTracePending = true
-    const card = renderTraceCard(liveToolRows)
-    const done = () => { liveTracePending = false }
-    if (liveTraceMsg) liveTraceMsg.edit(card).then(done, done)
-    else message.channel.send(card).then(m => { liveTraceMsg = m; done() }, done)
+    const cards = renderTraceCards(liveToolRows)
+    ;(async () => {
+      for (let i = 0; i < cards.length; i++) {
+        if (liveTraceMsgs[i]) await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
+        else liveTraceMsgs[i] = await traceChannel.send(cards[i])
+      }
+      for (const stale of liveTraceMsgs.slice(cards.length)) {
+        await stale.delete().catch(() => {})
+      }
+      liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
+    })().catch(() => {
+      // Trace display is diagnostic only; never fail the user turn over Discord.
+    }).finally(() => {
+      liveTracePending = false
+      if (liveTraceDirty) {
+        liveTraceDirty = false
+        flushLiveTrace()
+      }
+    })
   }
 
   const onEvent = (event: LifecycleEvent) => {
@@ -589,7 +651,8 @@ async function handleUserMessage(
         const cap = Math.max(20, ROW_W - (4 + nm.length + 2))
         const dig = String(event.args ?? '').replace(/\s+/g, ' ').slice(0, cap)
         liveToolRows.push(`+ ● ${nm}(${dig})`)
-        flushLiveTrace()
+        if (liveTracePending) liveTraceDirty = true
+        else flushLiveTrace()
       }
       return
     }
@@ -642,6 +705,13 @@ async function handleUserMessage(
     let result: RespondResult
     if (flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0' && imageParts.length === 0) {
       try {
+        let resumeSessionId = channelSessions.get(channelId)
+        const lastInput = channelSessions.lastUsage(channelId)?.input ?? 0
+        if (resumeSessionId && CODEX_SESSION_MAX_INPUT_TOKENS > 0 && lastInput >= CODEX_SESSION_MAX_INPUT_TOKENS) {
+          currentStatus = '🧹 compacting'
+          await compactAndDropCodexSession('preflight', lastInput)
+          resumeSessionId = undefined
+        }
         result = await respondViaCodex({
           systemPrompt,
           history,
@@ -651,7 +721,7 @@ async function handleUserMessage(
           codexModel: flags.codexModel,
           extraText,
           channelId,
-          resumeSessionId: channelSessions.get(channelId),
+          resumeSessionId,
           onEvent,
         })
         if (result.threadId) channelSessions.set(channelId, result.threadId)
@@ -676,24 +746,12 @@ async function handleUserMessage(
             reasoningTokens: d.reasoning,
           }
         }
-        // Session rollover: if Codex reported a turn-input above the ceiling, the
-        // resumed session has bloated. Force a summary before dropping the pointer
-        // so the next cold-start gets compact older context via persona.buildSystemPrompt()
-        // plus the normal recent Discord history window. (Jeff 2026-06-29)
-        if (SESSION_ROLLOVER_TOKENS > 0
-            && (result.usage?.inputTokens ?? 0) >= SESSION_ROLLOVER_TOKENS) {
-          let compacted = false
-          try {
-            const summaryResult = await summarizer?.runForChannel(channelId)
-            compacted = !!summaryResult
-          } catch (e) {
-            console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
-          }
-          channelSessions.dropSession(channelId)
-          console.log(`[session-rollover] channel ${channelId}: input `
-            + `${result.usage?.inputTokens} >= ${SESSION_ROLLOVER_TOKENS} — `
-            + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
-            + `dropped session; next turn starts fresh`)
+        // Post-turn rollover still matters for the first turn that crosses the
+        // cap: we cannot know that until Codex reports usage, so compact/drop
+        // immediately after the answer and the following turn starts fresh.
+        if (CODEX_SESSION_MAX_INPUT_TOKENS > 0
+            && (result.usage?.inputTokens ?? 0) >= CODEX_SESSION_MAX_INPUT_TOKENS) {
+          await compactAndDropCodexSession('post-turn', result.usage?.inputTokens)
         }
         setEnginePresence(false)
       } catch (e) {
@@ -851,11 +909,8 @@ async function handleUserMessage(
     })()
 
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
-    // literal '#### text'. Convert heading lines to bold before sending so
-    // they read as headings. Inline '#' and '#tags' (no following space) are
-    // left alone. Applied to the reply only, not the verbose footer.
-    const headingsToBold = (t: string): string =>
-      t.replace(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*$/gm, '**$1**')
+    // literal '#### text'. Convert heading lines to bold and swallow the blank
+    // line after them so `**Heading**` sits directly above its body.
     const body = headingsToBold((result.reply ?? '').trim()) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim()) {
@@ -892,18 +947,29 @@ async function handleUserMessage(
 
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
-    if (willTrace && !liveTraceMsg) {
-      const card = renderTraceCard(buildTraceLines(result.toolCalls))
-      try { const sm = await message.channel.send(card); if (flags.trace === 'collapse') collapseMsgs.push(sm) } catch {}
+    if (willTrace && !liveTraceMsgs.length) {
+      const cards = renderTraceCards(buildTraceLines(result.toolCalls))
+      for (const card of cards) {
+        try { const sm = await message.channel.send(card); if (flags.trace === 'collapse') collapseMsgs.push(sm) } catch {}
+      }
     }
 
     // If we streamed the trace live, replace it with the final canonical version
     // (full names + per-call timings from result.toolCalls).
-    const ltm = liveTraceMsg as unknown as (Message | null)
-    if (ltm && willTrace && result.toolCalls.length) {
+    if (liveTraceMsgs.length && willTrace && result.toolCalls.length) {
       const lines = buildTraceLines(result.toolCalls)
-      const card = renderTraceCard(lines)
-      try { await ltm.edit(card) } catch {}
+      const cards = renderTraceCards(lines)
+      for (let i = 0; i < cards.length; i++) {
+        if (liveTraceMsgs[i]) {
+          try { await liveTraceMsgs[i].edit(cards[i]) } catch {}
+        } else {
+          try { liveTraceMsgs[i] = await message.channel.send(cards[i]) } catch {}
+        }
+      }
+      for (const stale of liveTraceMsgs.slice(cards.length)) {
+        try { await stale.delete() } catch {}
+      }
+      liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
     }
 
     stopThinkingAnim()
@@ -962,7 +1028,7 @@ async function handleUserMessage(
     // Collapse: keep the trace/thinking card(s) up for a readable 60s linger (same
     // window as the thought-for line), THEN delete for a clean channel (Jeff 2026-06-24).
     const toCollapse: Message[] = [...collapseMsgs]
-    if (flags.trace === 'collapse' && liveTraceMsg) toCollapse.push(liveTraceMsg as unknown as Message)
+    if (flags.trace === 'collapse' && liveTraceMsgs.length) toCollapse.push(...liveTraceMsgs)
     if (toCollapse.length) {
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
       for (const m of toCollapse) deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + lingerMs })

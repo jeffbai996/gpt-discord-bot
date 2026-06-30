@@ -249,6 +249,33 @@ function cleanCmd(raw: string): string {
   return cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
 }
 
+function parseFunctionCallArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>
+  if (typeof raw !== 'string' || !raw.trim()) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {}
+  } catch {
+    return { arguments: raw }
+  }
+}
+
+function responseFunctionCallEvent(payload: any): { status: string; tool?: { name: string; args: string } } | null {
+  const name = String(payload?.name ?? '').trim()
+  if (!name) return null
+  const args = parseFunctionCallArgs(payload?.arguments)
+  if (name === 'exec_command') {
+    return { status: '🛠️ running', tool: { name: 'shell', args: cleanCmd(String(args.cmd ?? args.command ?? '')) } }
+  }
+  if (name === 'apply_patch') {
+    return { status: '✏️ editing', tool: { name: 'edit', args: String(args.patch ?? args.arguments ?? '') } }
+  }
+  if (name === 'web_search' || name === 'web.run') {
+    return { status: '🌐 searching', tool: { name, args: JSON.stringify(args) } }
+  }
+  return { status: '🔧 tooling', tool: { name, args: JSON.stringify(args) } }
+}
+
 // From a codex item.started event, derive BOTH a generic animated status for the
 // placeholder AND the real tool call (name + args) for the live trace — so the
 // placeholder stays clean ("running…") while the trace shows the actual command.
@@ -264,6 +291,12 @@ function mcpToolEvent(invocation: any): { status: string; tool?: { name: string;
 export function liveEvent(ev: any): { status: string; tool?: { name: string; args: string } } | null {
   if (ev?.type === 'event_msg' && ev.payload?.type === 'mcp_tool_call_begin') {
     return mcpToolEvent(ev.payload.invocation)
+  }
+  if (ev?.type === 'event_msg' && ev.payload?.type === 'function_call') {
+    return responseFunctionCallEvent(ev.payload)
+  }
+  if (ev?.type === 'response_item' && ev.payload?.type === 'function_call') {
+    return responseFunctionCallEvent(ev.payload)
   }
 
   if (ev?.type !== 'item.started' || !ev.item) return null

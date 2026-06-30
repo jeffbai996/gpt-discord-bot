@@ -74,7 +74,7 @@ test('ToolRegistry: toRealtimeTools is flat shape, no strict, order preserved', 
   r.register(makeTool('beta'))
   const rt = r.toRealtimeTools()
   assert.deepEqual(rt.map(t => t.name), ['alpha', 'beta'])
-  const t0 = rt[0] as Record<string, unknown>
+  const t0 = rt[0] as unknown as Record<string, unknown>
   assert.equal(t0.type, 'function')
   assert.equal(t0.name, 'alpha')
   assert.equal(t0.description, 'desc for alpha')
