@@ -29,6 +29,7 @@ import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
+import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -757,8 +758,8 @@ async function handleUserMessage(
         if (e instanceof CodexStoppedError) {
           // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
           stopThinkingAnim()
-          if (workMessage) { await workMessage.edit('\U0001F6D1 **Stopped.**').catch(() => {}) }
-          try { await message.react('\U0001F6D1') } catch {}
+          if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
+          try { await message.react('✗') } catch {}
           return
         }
         // A codex turn failed — drop this channel's session pointer so the NEXT turn
@@ -1117,12 +1118,12 @@ client.on('messageCreate', async (message: Message) => {
 
   if (!access.canHandle({ channelId, userId, isMention })) return
 
-  // Lone ❌ message: kill the in-flight turn, post 🛑 + 🔁, swallow the message.
+  // Lone ❌ message: kill the in-flight turn, post canonical interrupted marker + 🔁.
   if (message.content.trim().replace(/️/g, '') === '❌') {
     message.delete().catch(() => {})
     const killed = activeTurns.stop(channelId)
     if (killed) {
-      const m = await (message.channel as any).send?.('🛑  Stopped. React 🔁 on my last message to retry.')
+      const m = await (message.channel as any).send?.(`${INTERRUPTED_MARKER}\nReact 🔁 on my last message to retry.`)
         .catch(() => null)
       if (m) m.react?.('🔁').catch(() => {})
     }

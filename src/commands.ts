@@ -5,6 +5,7 @@ import { AccessManager, CODEX_MODELS, type ReasoningEffort, type CodexModel } fr
 import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
+import { INTERRUPTED_MARKER } from './interruption-label.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -280,7 +281,7 @@ export async function executeGptCommand(
     if (subcommand === 'stop') {
       const killed = activeTurns.stop(interaction.channelId)
       return interaction.reply({
-        content: killed ? '\U0001F6D1 Aborted the in-flight turn in this channel.' : 'ℹ️ Nothing is running in this channel right now.',
+        content: killed ? INTERRUPTED_MARKER : 'ℹ️ Nothing is running in this channel right now.',
         ephemeral: true,
       })
     }
