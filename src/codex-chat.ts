@@ -474,6 +474,19 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     try {
       const obj = JSON.parse(line)
       if (obj?.type === 'thread.started' && obj.thread_id) threadId = String(obj.thread_id)
+      // Barge-safety: track whether codex is mid a DESTRUCTIVE tool (shell/file-edit)
+      // so canBarge() blocks a barge that would SIGKILL a half-written file. Set on
+      // the item.started, cleared on the matching item.completed. web_search/reasoning
+      // are non-destructive → not tracked (safe to barge through). (Jeff 2026-07-01)
+      if (input.channelId) {
+        if (obj?.type === 'item.started' && obj.item) {
+          if (obj.item.type === 'command_execution') activeTurns.setBusy(input.channelId, 'shell')
+          else if (obj.item.type === 'file_change') activeTurns.setBusy(input.channelId, 'edit')
+        } else if (obj?.type === 'item.completed' && obj.item &&
+                   (obj.item.type === 'command_execution' || obj.item.type === 'file_change')) {
+          activeTurns.clearBusy(input.channelId)
+        }
+      }
       const ev = liveEvent(obj)
       if (ev) {
         input.onEvent?.({ type: 'status', label: ev.status })

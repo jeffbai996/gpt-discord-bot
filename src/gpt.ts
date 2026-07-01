@@ -1129,6 +1129,23 @@ client.on('messageCreate', async (message: Message) => {
     return
   }
 
+  // Barge-in (Jeff 2026-07-01): a new message cuts off the in-flight turn and takes
+  // over — but ONLY when safe (canBarge: past the grace window AND not mid a
+  // destructive shell/file-edit; see active-turns.ts). When it barges we kill the
+  // running turn WITHOUT clearing the queue, then unshift this message to the FRONT
+  // so the existing runChannelTurn's drain loop picks it up first as it unwinds — no
+  // re-entrancy, reusing the queue machinery. If NOT safe to barge, fall through to
+  // the normal path where runChannelTurn just queues it (today's coalescing behavior).
+  {
+    const st = channelTurns.get(channelId)
+    if (st?.running && activeTurns.canBarge(channelId)) {
+      activeTurns.stopFor(channelId, { clearQueue: false })
+      st.queue.unshift(message)
+      void message.react('\u{23ED}\u{FE0F}').catch(() => {})  // ⏭️ "barging — cutting in"
+      return
+    }
+  }
+
   // Pending-edit consumer: if a prior bot message in this channel was marked
   // for edit (✏️), this user message edits it in place rather than spawning
   // a fresh reply. Resolves the marker either way.
