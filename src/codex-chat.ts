@@ -34,7 +34,8 @@ const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v2
 // long turns). This only exists so a genuinely hung codex process can't live
 // forever. When it DOES fire, we surface an explicit "interrupted" signal rather
 // than silently swapping to the API (Jeff 2026-06-24).
-const TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 600_000
+const DEFAULT_TASK_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 600_000
+const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 120_000
 
 // Squad-memory in the codex path: rather than an MCP server, we lean on codex's
 // agentic shell — it can run the shared-memory CLI directly (verified: works under
@@ -72,6 +73,16 @@ function mapEffort(effort?: string): string {
     case 'minimal': return 'low' // legacy alias
     default: return 'medium'
   }
+}
+
+export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): number {
+  const text = `${input.userMessage}\n${input.extraText ?? ''}`.toLowerCase()
+  // Recovery/meta pings should fail fast into the API fallback instead of tying
+  // up the channel behind a 10-minute Codex leash.
+  if (text.length < 400 && /\b(where'?d ya go|where did you go|pooping out|hung|stuck|choked|timeout|token limit|response time|alive|ping)\b/.test(text)) {
+    return DEFAULT_QUICK_TIMEOUT_MS
+  }
+  return DEFAULT_TASK_TIMEOUT_MS
 }
 
 // Codex exec is single-shot (no conversation memory), so we bridge the whole
@@ -130,6 +141,59 @@ interface ParsedEvents {
   lastAgentMessage: string
 }
 
+const clip2 = (x: unknown, n: number) => String(x ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
+const countOutputLines = (x: unknown) => {
+  const t = String(x ?? '').replace(/\n+$/, '')
+  return t ? t.split('\n').length : 0
+}
+
+// Strip codex's `/bin/bash -lc '<inner>'` wrapper + basename the leading path.
+function cleanCmd(raw: string): string {
+  const m = raw.match(/-l?c\s+'([\s\S]*)'\s*$/)
+  const cmd = (m ? m[1] : raw).trim().replace(/\s+/g, ' ')
+  return cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
+}
+
+export function toolCallsFromCompletedItem(it: any): ToolCall[] {
+  switch (it?.type) {
+    case 'command_execution':
+      return [{
+        name: 'shell',
+        args: { command: clip2(cleanCmd(String(it.command ?? '')), 80) },
+        durationMs: 0,
+        resultPreview: clip2(it.aggregated_output, 200),
+        resultLines: countOutputLines(it.aggregated_output),
+        failed: typeof it.exit_code === 'number' ? it.exit_code !== 0 : false,
+      }]
+    case 'file_change':
+      return (Array.isArray(it.changes) ? it.changes : []).map((ch: any) => ({
+        name: 'edit',
+        args: { file_path: String(ch.path ?? '') },
+        durationMs: 0,
+        resultPreview: String(ch.kind ?? 'update'),
+        failed: false,
+      }))
+    case 'web_search':
+      return [{
+        name: 'web_search',
+        args: { query: clip2(it.query, 140) },
+        durationMs: 0,
+        resultPreview: clip2(it.result ?? it.aggregated_output, 200),
+        failed: false,
+      }]
+    case 'mcp_tool_call':
+      return [{
+        name: clip2(it.tool ?? it.name ?? 'mcp', 40) || 'mcp',
+        args: typeof it.arguments === 'object' && it.arguments ? it.arguments : {},
+        durationMs: 0,
+        resultPreview: clip2(it.result, 200),
+        failed: it.status ? it.status !== 'completed' : false,
+      }]
+    default:
+      return []
+  }
+}
+
 // Parse codex's `--json` JSONL event stream so the codex path can populate the
 // SAME RespondResult fields the API path does — keeping the per-channel `trace`,
 // `thinking`, and `verbose` flags working on codex turns. Event shapes (codex
@@ -141,13 +205,6 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
   const reasoningParts: string[] = []
   let usage: RespondResult['usage'] = null
   let lastAgentMessage = ''
-
-  const clip = (s: unknown, n: number) =>
-    String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
-  const countLines = (s: unknown) => {
-    const t = String(s ?? '').replace(/\n+$/, '')
-    return t ? t.split('\n').length : 0
-  }
 
   for (const line of jsonl.split('\n')) {
     const s = line.trim()
@@ -179,54 +236,20 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
         if (it.text) reasoningParts.push(String(it.text))
         break
       case 'command_execution': {
-        // codex wraps shell cmds as `/bin/bash -lc '<inner>'`. Unwrap + basename the
-        // leading path so the trace header reads `shared-memory recall "x"` (short, like
-        // Claude's) instead of the full /home/... path that wraps in Discord.
-        const rawCmd = String(it.command ?? '')
-        const inner = rawCmd.match(/-l?c\s+'([\s\S]*)'\s*$/)
-        let cmd = (inner ? inner[1] : rawCmd).trim()
-        cmd = cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
-        toolCalls.push({
-          name: 'shell',
-          args: { command: clip(cmd, 80) },
-          durationMs: 0, // codex JSONL carries no per-item timing
-          resultPreview: clip(it.aggregated_output, 200),
-          resultLines: countLines(it.aggregated_output),
-          failed: typeof it.exit_code === 'number' ? it.exit_code !== 0 : false,
-        })
+        toolCalls.push(...toolCallsFromCompletedItem(it))
         break
       }
       case 'file_change':
         // codex now writes/edits files (workspace-write). The --json file_change item
         // carries the changed paths + kind (add/update/delete) but NOT the hunk text,
         // so we surface the edited files (these can wrap — they're the "diffs").
-        for (const ch of (Array.isArray(it.changes) ? it.changes : [])) {
-          toolCalls.push({
-            name: 'edit',
-            args: { file_path: String(ch.path ?? '') },
-            durationMs: 0,
-            resultPreview: String(ch.kind ?? 'update'),
-            failed: false,
-          })
-        }
+        toolCalls.push(...toolCallsFromCompletedItem(it))
         break
       case 'web_search':
-        toolCalls.push({
-          name: 'web_search',
-          args: { query: clip(it.query, 140) },
-          durationMs: 0,
-          resultPreview: clip(it.result ?? it.aggregated_output, 200),
-          failed: false,
-        })
+        toolCalls.push(...toolCallsFromCompletedItem(it))
         break
       case 'mcp_tool_call':
-        toolCalls.push({
-          name: clip(it.tool ?? it.name ?? 'mcp', 40) || 'mcp',
-          args: typeof it.arguments === 'object' && it.arguments ? it.arguments : {},
-          durationMs: 0,
-          resultPreview: clip(it.result, 200),
-          failed: it.status ? it.status !== 'completed' : false,
-        })
+        toolCalls.push(...toolCallsFromCompletedItem(it))
         break
       default:
         break
@@ -240,14 +263,6 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
 // RespondResult shaped exactly like openai.respond(), so gpt.ts can use it
 // interchangeably. THROWS on any failure (timeout, empty answer, exec error)
 // so the caller can fall back to the API — this never silently returns junk.
-const clip2 = (x: unknown, n: number) => String(x ?? '').replace(/\s+/g, ' ').trim().slice(0, n)
-
-// Strip codex's `/bin/bash -lc '<inner>'` wrapper + basename the leading path.
-function cleanCmd(raw: string): string {
-  const m = raw.match(/-l?c\s+'([\s\S]*)'\s*$/)
-  const cmd = (m ? m[1] : raw).trim().replace(/\s+/g, ' ')
-  return cmd.replace(/^\/\S*\/([^/\s]+)/, '$1')
-}
 
 function parseFunctionCallArgs(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
@@ -434,7 +449,8 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const prompt = resuming ? buildResumePrompt(input) : buildPrompt(input)
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
-  const secs = Math.floor(TIMEOUT_MS / 1000)
+  const timeoutMs = codexTimeoutMs(input)
+  const secs = Math.floor(timeoutMs / 1000)
   const model = input.codexModel || 'gpt-5.5'
 
   // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
@@ -492,13 +508,34 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
         input.onEvent?.({ type: 'status', label: ev.status })
         if (ev.tool) input.onEvent?.({ type: 'tool_start', name: ev.tool.name, args: ev.tool.args })
       }
+      if (obj?.type === 'item.completed' && obj.item) {
+        const completed = toolCallsFromCompletedItem(obj.item)
+        for (const call of completed) input.onEvent?.({ type: 'tool_end', ...call })
+        // Codex only exposes edit hunks in the rollout file. The write is close
+        // behind the JSONL stream, so give it a beat and enrich the live row if
+        // the diff is already available. Final rendering still does the same
+        // enrichment after the process exits.
+        if (threadId && completed.some(c => c.name === 'edit')) {
+          setTimeout(() => {
+            readRolloutDiffs(threadId)
+              .then((diffs) => {
+                for (const call of completed.filter(c => c.name === 'edit')) {
+                  const p = String(call.args.file_path ?? '')
+                  const d = diffs.find(x => x.path === p)
+                  if (d) input.onEvent?.({ type: 'tool_end', ...call, diff: d.diff })
+                }
+              })
+              .catch(() => {})
+          }, 250)
+        }
+      }
     } catch { /* non-JSON line */ }
   })
   let replyFromFile = ''
   let timedOut = false
   try {
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { timedOut = true; killTree(); resolve() }, TIMEOUT_MS + 8_000)
+      const timer = setTimeout(() => { timedOut = true; killTree(); resolve() }, timeoutMs + 8_000)
       child.on('error', (e) => { clearTimeout(timer); reject(e) })
       child.on('close', () => { clearTimeout(timer); resolve() })
     })
