@@ -4,6 +4,9 @@
   "description": "OpenAI-backed Discord bot",
   "main": "src/gpt.ts",
   "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "start": "tsx src/gpt.ts",
     "test": "node --test --import tsx tests/*.test.ts"
