@@ -29,6 +29,7 @@ import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
+import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -40,7 +41,7 @@ dotenv.config({ path: path.join(STATE_DIR, '.env') })
 // call uses `- ● ... FAILED` (RED). The `●` dot marks "this is a tool call".
 const ARG_DIGEST_PREFERENCE = [
   'file_path', 'notebook_path', 'pattern', 'command', 'url',
-  'symbols', 'symbol', 'ticker', 'query',
+  'symbols', 'symbol', 'ticker', 'query', 'arguments',
 ]
 
 // Single-line, ID-shaped arg digest, <= maxLen chars.
@@ -101,7 +102,7 @@ const TRACE_BODY_CHAR_BUDGET = 1800
 const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
   process.env.GPT_CODEX_MAX_SESSION_INPUT_TOKENS
   ?? process.env.GPT_SESSION_ROLLOVER_TOKENS
-  ?? 1_000_000
+  ?? 750_000
 )
 // Match the Claude bots' tool_watcher.py caps byte-for-byte: tool-call header
 // rows <= 83 (HEADER_LINE_MAX), stdout/output lines <= 88 (Jeff 2026-06-25).
@@ -124,24 +125,81 @@ function padTraceLine(ln: string): string {
   return ' ' + ln
 }
 
+function isTraceHeaderLine(ln: string): boolean {
+  return /^[+-] ● /.test(ln)
+}
+
+function lineCost(lines: string[]): number {
+  return lines.reduce((n, ln, i) => n + ln.length + (i ? 1 : 0), 0)
+}
+
+function blockCost(page: string[], block: string[]): number {
+  return lineCost(block) + (page.length ? 2 : 0)
+}
+
+function appendTraceBlock(page: string[], block: string[]): void {
+  if (page.length) page.push('')
+  page.push(...block)
+}
+
+function splitTraceBlocks(rawLines: string[]): string[][] {
+  const blocks: string[][] = []
+  let block: string[] = []
+  for (const ln of rawLines) {
+    if (isTraceHeaderLine(ln) && block.length) {
+      blocks.push(block)
+      block = []
+    }
+    block.push(ln)
+  }
+  if (block.length) blocks.push(block)
+  return blocks.length ? blocks : [['']]
+}
+
 // Assemble fenced trace cards: pad + mega-cap each line, redact secrets, then
 // split into continuation blocks instead of replacing overflow with
-// "... (N more lines)". Keep each block under Discord's 2000-char limit with
-// headroom for headers/fences and message edits.
+// "... (N more lines)". Tool rows are paged as logical blocks so `⎿ preview`
+// cannot be separated from its `[N lines]` continuation. Keep each card under
+// Discord's 2000-char limit with headroom for headers/fences and message edits.
 function renderTraceCards(rawLines: string[]): string[] {
   const lines = rawLines.map(l => padTraceLine(capMegaLine(l)))
+  const blocks = splitTraceBlocks(lines)
   const pages: string[][] = []
   let page: string[] = []
   let running = 0
-  for (const ln of lines) {
-    const cost = ln.length + (page.length ? 1 : 0)
+  const pushPage = () => {
+    if (!page.length) return
+    pages.push(page)
+    page = []
+    running = 0
+  }
+  for (const block of blocks) {
+    const cost = blockCost(page, block)
     if (page.length && running + cost > TRACE_BODY_CHAR_BUDGET) {
+      pushPage()
+    }
+    if (lineCost(block) <= TRACE_BODY_CHAR_BUDGET) {
+      appendTraceBlock(page, block)
+      running = lineCost(page)
+      continue
+    }
+
+    // Oversized diffs still have to fit in Discord messages. Split them only
+    // after giving the trace header its own page context; compact output blocks
+    // never hit this branch.
+    for (const ln of block) {
+      const cost = ln.length + (page.length ? 1 : 0)
+      if (page.length && running + cost > TRACE_BODY_CHAR_BUDGET) {
+        pushPage()
+      }
+      page.push(ln)
+      running += ln.length + (page.length > 1 ? 1 : 0)
+    }
+    if (page.length && running >= TRACE_BODY_CHAR_BUDGET) {
       pages.push(page)
       page = []
       running = 0
     }
-    page.push(ln)
-    running += ln.length + (page.length > 1 ? 1 : 0)
   }
   if (page.length) pages.push(page)
   if (!pages.length) pages.push([''])
@@ -169,13 +227,40 @@ function headingsToBold(t: string): string {
 
 function formatDiff(unified: string): { badge: string; body: string[] } {
   let adds = 0, dels = 0
-  const body: string[] = []
+  const rows: Array<{ marker: '+' | '-' | ' '; lineNo: number | null; text: string }> = []
+  let oldLine = 0
+  let newLine = 0
   for (const l of unified.replace(/\n+$/, '').split('\n')) {
-    if (l.startsWith('@@') || l.startsWith('+++') || l.startsWith('---')) continue
-    if (l.startsWith('+')) adds++
-    else if (l.startsWith('-')) dels++
-    body.push(l)
+    if (l.startsWith('+++') || l.startsWith('---')) continue
+    if (l.startsWith('@@')) {
+      const m = l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+      if (m) {
+        oldLine = Number(m[1])
+        newLine = Number(m[2])
+      }
+      continue
+    }
+    if (l.startsWith('\\')) continue
+    if (l.startsWith('+')) {
+      adds++
+      rows.push({ marker: '+', lineNo: newLine || null, text: l.slice(1) })
+      if (newLine) newLine++
+    } else if (l.startsWith('-')) {
+      dels++
+      rows.push({ marker: '-', lineNo: oldLine || null, text: l.slice(1) })
+      if (oldLine) oldLine++
+    } else {
+      const text = l.startsWith(' ') ? l.slice(1) : l
+      rows.push({ marker: ' ', lineNo: newLine || oldLine || null, text })
+      if (oldLine) oldLine++
+      if (newLine) newLine++
+    }
   }
+  const width = Math.max(2, ...rows.map(r => r.lineNo ? String(r.lineNo).length : 0))
+  const body = rows.map((r) => {
+    if (!r.lineNo) return `${r.marker} ${' '.repeat(width)} ${r.text}`
+    return `${r.marker} ${String(r.lineNo).padStart(width)} ${r.text}`
+  })
   return { badge: `[+${adds}, -${dels}]`, body }
 }
 
@@ -203,13 +288,14 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       for (const b of body) lines.push(b)
     } else if (call.resultPreview) {
       // Match the output's truncation budget to the command's (71 shell / 115 other);
-      // append a same-line [N lines] tag when the raw output was multi-line (Jeff 2026-06-24).
+      // keep the [N lines] tag on its own continuation row so it does not make
+      // the output preview wrap.
       const n = call.resultLines ?? 0
-      const suffix = n > 1 ? ` [${n} lines]` : ''
       let rp = call.resultPreview.replace(/\n/g, ' ')
-      const cap = Math.max(20, OUT_W - suffix.length)
+      const cap = OUT_W
       if (rp.length > cap) rp = rp.slice(0, cap - 1) + '…'
-      lines.push(`⎿ ${rp}${suffix}`)
+      lines.push(`⎿ ${rp}`)
+      if (n > 1) lines.push(`   [${n} lines]`)
     }
   }
   return lines
@@ -221,6 +307,22 @@ function shortToolName(name: string): string {
     if (parts.length >= 3) return parts[parts.length - 1]
   }
   return name
+}
+
+function liveStartArgs(name: string, raw?: string): Record<string, unknown> {
+  const s = String(raw ?? '').trim()
+  if (!s) return {}
+  try {
+    const parsed = JSON.parse(s)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch { /* not JSON */ }
+  const short = shortToolName(name)
+  if (short === 'shell') return { command: s }
+  if (short === 'edit') return { file_path: s }
+  if (short === 'web_search' || short === 'web.run') return { query: s }
+  return { arguments: s }
 }
 
 if (!process.env.DISCORD_BOT_TOKEN) {
@@ -604,13 +706,10 @@ async function handleUserMessage(
       + `dropped session; next turn starts fresh`)
   }
 
-  // Lifecycle reactions still fire live via onEvent; the tool trace itself is
-  // now built post-hoc from result.toolCalls (see the trace card below), so we
-  // no longer accumulate raw trace lines here.
-  // Live tool trace (Jeff 2026-06-24): when `trace` is on, stream each tool into a
-  // growing message AS it runs, instead of one blob at the end. API path gives rich
-  // tool_start{name,args}; codex gives coarser status labels — both append a row.
-  const liveToolRows: string[] = []
+  // Live tool trace: start a row as soon as a tool fires, then enrich that same
+  // row with output/failure/diff when the tool completes. The final render still
+  // replaces this with canonical result.toolCalls after the turn.
+  const liveToolRows: ToolCall[] = []
   let liveTraceMsgs: Message[] = []
   let liveTracePending = false
   let liveTraceDirty = false
@@ -618,7 +717,7 @@ async function handleUserMessage(
     if (liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
     const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
     liveTracePending = true
-    const cards = renderTraceCards(liveToolRows)
+    const cards = renderTraceCards(buildTraceLines(liveToolRows))
     ;(async () => {
       for (let i = 0; i < cards.length; i++) {
         if (liveTraceMsgs[i]) await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
@@ -639,6 +738,30 @@ async function handleUserMessage(
     })
   }
 
+  const markLiveTraceDirty = () => {
+    if (liveTracePending) liveTraceDirty = true
+    else flushLiveTrace()
+  }
+
+  const findLiveToolRow = (name: string, args?: Record<string, unknown>): ToolCall | null => {
+    const short = shortToolName(name)
+    const wantedPath = typeof args?.file_path === 'string' ? args.file_path : ''
+    for (let i = liveToolRows.length - 1; i >= 0; i--) {
+      const row = liveToolRows[i]
+      if (shortToolName(row.name) !== short) continue
+      if (wantedPath) {
+        const rowPath = typeof row.args.file_path === 'string' ? row.args.file_path : ''
+        if (rowPath && rowPath !== wantedPath) continue
+      }
+      if (!row.resultPreview && !row.diff) return row
+    }
+    for (let i = liveToolRows.length - 1; i >= 0; i--) {
+      const row = liveToolRows[i]
+      if (shortToolName(row.name) === short) return row
+    }
+    return null
+  }
+
   const onEvent = (event: LifecycleEvent) => {
     if (event.type === 'thinking_start') { void applyLifecycle(message, 'thinking'); return }
     if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
@@ -646,12 +769,35 @@ async function handleUserMessage(
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
       if (flags.trace !== 'off') {
-        const nm = shortToolName(event.name)
-        const cap = Math.max(20, ROW_W - (4 + nm.length + 2))
-        const dig = String(event.args ?? '').replace(/\s+/g, ' ').slice(0, cap)
-        liveToolRows.push(`+ ● ${nm}(${dig})`)
-        if (liveTracePending) liveTraceDirty = true
-        else flushLiveTrace()
+        liveToolRows.push({
+          name: event.name,
+          args: liveStartArgs(event.name, event.args),
+          durationMs: 0,
+          resultPreview: '',
+          failed: false,
+        })
+        markLiveTraceDirty()
+      }
+      return
+    }
+    if (event.type === 'tool_end') {
+      if (flags.trace !== 'off') {
+        const row = findLiveToolRow(event.name, event.args)
+        const target = row ?? {
+          name: event.name,
+          args: event.args ?? {},
+          durationMs: 0,
+          resultPreview: '',
+          failed: false,
+        }
+        target.args = event.args ?? target.args
+        target.durationMs = event.durationMs ?? target.durationMs
+        target.resultPreview = event.resultPreview ?? target.resultPreview
+        target.resultLines = event.resultLines ?? target.resultLines
+        target.failed = event.failed ?? target.failed
+        target.diff = event.diff ?? target.diff
+        if (!row) liveToolRows.push(target)
+        markLiveTraceDirty()
       }
       return
     }
@@ -757,8 +903,8 @@ async function handleUserMessage(
         if (e instanceof CodexStoppedError) {
           // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
           stopThinkingAnim()
-          if (workMessage) { await workMessage.edit('\U0001F6D1 **Stopped.**').catch(() => {}) }
-          try { await message.react('\U0001F6D1') } catch {}
+          if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
+          try { await message.react('✗') } catch {}
           return
         }
         // A codex turn failed — drop this channel's session pointer so the NEXT turn
@@ -1117,16 +1263,33 @@ client.on('messageCreate', async (message: Message) => {
 
   if (!access.canHandle({ channelId, userId, isMention })) return
 
-  // Lone ❌ message: kill the in-flight turn, post 🛑 + 🔁, swallow the message.
+  // Lone ❌ message: kill the in-flight turn, post canonical interrupted marker + 🔁.
   if (message.content.trim().replace(/️/g, '') === '❌') {
     message.delete().catch(() => {})
     const killed = activeTurns.stop(channelId)
     if (killed) {
-      const m = await (message.channel as any).send?.('🛑  Stopped. React 🔁 on my last message to retry.')
+      const m = await (message.channel as any).send?.(`${INTERRUPTED_MARKER}\nReact 🔁 on my last message to retry.`)
         .catch(() => null)
       if (m) m.react?.('🔁').catch(() => {})
     }
     return
+  }
+
+  // Barge-in (Jeff 2026-07-01): a new message cuts off the in-flight turn and takes
+  // over — but ONLY when safe (canBarge: past the grace window AND not mid a
+  // destructive shell/file-edit; see active-turns.ts). When it barges we kill the
+  // running turn WITHOUT clearing the queue, then unshift this message to the FRONT
+  // so the existing runChannelTurn's drain loop picks it up first as it unwinds — no
+  // re-entrancy, reusing the queue machinery. If NOT safe to barge, fall through to
+  // the normal path where runChannelTurn just queues it (today's coalescing behavior).
+  {
+    const st = channelTurns.get(channelId)
+    if (st?.running && activeTurns.canBarge(channelId)) {
+      activeTurns.stopFor(channelId, { clearQueue: false })
+      st.queue.unshift(message)
+      void message.react('\u{23ED}\u{FE0F}').catch(() => {})  // ⏭️ "barging — cutting in"
+      return
+    }
   }
 
   // Pending-edit consumer: if a prior bot message in this channel was marked

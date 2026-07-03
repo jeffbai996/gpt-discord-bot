@@ -24,7 +24,16 @@ export type LifecycleEvent =
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
   | { type: 'status', label: string }  // live activity status (codex tool events)
   | { type: 'tool_start', name: string, args?: string }
-  | { type: 'tool_end', name: string }
+  | {
+      type: 'tool_end'
+      name: string
+      args?: Record<string, unknown>
+      resultPreview?: string
+      resultLines?: number
+      failed?: boolean
+      durationMs?: number
+      diff?: string
+    }
   | { type: 'searching' }         // web_search in flight (special-cased)
   | { type: 'done' }
 
@@ -530,14 +539,15 @@ export class OpenAIClient {
             resultStr = `Error in ${c.name}: ${e?.message ?? String(e)}`
           }
           const durationMs = Date.now() - t0
-          onEvent?.({ type: 'tool_end', name: c.name })
-          toolCalls.push({
+          const call = {
             name: c.name,
             args: parsedArgs,
             durationMs,
             resultPreview: previewToolResult(resultStr),
             failed,
-          })
+          }
+          onEvent?.({ type: 'tool_end', ...call })
+          toolCalls.push(call)
           inputItems.push({
             type: 'function_call_output',
             call_id: c.call_id,

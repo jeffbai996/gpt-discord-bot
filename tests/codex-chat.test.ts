@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { liveEvent } from '../src/codex-chat.ts'
+import { codexTimeoutMs, liveEvent, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('liveEvent: surfaces MCP begin events from codex rollout-style JSON', () => {
   const ev = liveEvent({
@@ -80,4 +80,75 @@ test('liveEvent: surfaces generic Codex response_item function calls', () => {
       args: '{"path":"/tmp/shot.jpg"}',
     },
   })
+})
+
+test('toolCallsFromCompletedItem: maps shell completions with output preview', () => {
+  const calls = toolCallsFromCompletedItem({
+    type: 'command_execution',
+    command: "/bin/bash -lc 'rg -n needle src'",
+    aggregated_output: 'src/a.ts:1:needle\nsrc/b.ts:2:needle\n',
+    exit_code: 0,
+  })
+
+  assert.deepEqual(calls, [{
+    name: 'shell',
+    args: { command: 'rg -n needle src' },
+    durationMs: 0,
+    resultPreview: 'src/a.ts:1:needle src/b.ts:2:needle',
+    resultLines: 2,
+    failed: false,
+  }])
+})
+
+test('toolCallsFromCompletedItem: marks failed shell completions', () => {
+  const calls = toolCallsFromCompletedItem({
+    type: 'command_execution',
+    command: "bash -lc 'npm test'",
+    aggregated_output: 'boom',
+    exit_code: 1,
+  })
+
+  assert.equal(calls[0].failed, true)
+  assert.equal(calls[0].resultPreview, 'boom')
+})
+
+test('toolCallsFromCompletedItem: maps file changes per path', () => {
+  const calls = toolCallsFromCompletedItem({
+    type: 'file_change',
+    changes: [
+      { path: '/tmp/a.ts', kind: 'update' },
+      { path: '/tmp/b.ts', kind: 'add' },
+    ],
+  })
+
+  assert.deepEqual(calls, [
+    {
+      name: 'edit',
+      args: { file_path: '/tmp/a.ts' },
+      durationMs: 0,
+      resultPreview: 'update',
+      failed: false,
+    },
+    {
+      name: 'edit',
+      args: { file_path: '/tmp/b.ts' },
+      durationMs: 0,
+      resultPreview: 'add',
+      failed: false,
+    },
+  ])
+})
+
+test('codexTimeoutMs: uses quick timeout for recovery/meta pings', () => {
+  assert.equal(
+    codexTimeoutMs({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
+    120_000,
+  )
+})
+
+test('codexTimeoutMs: keeps long timeout for ordinary task turns', () => {
+  assert.equal(
+    codexTimeoutMs({ userMessage: 'implement live tool trace output and run the tests', extraText: '' }),
+    600_000,
+  )
 })
