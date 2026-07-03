@@ -4,14 +4,13 @@
 // fires the killer. A separate `stopped` flag lets the queue runner (runChannelTurn)
 // know a turn was user-aborted so it drops any queued follow-ups too. (Jeff 2026-06-25)
 //
-// Barge-in (Jeff 2026-07-01): a new in-flight message can cut off the current turn
-// and take over — but only when it's SAFE. Two guards: a grace window (don't murder
-// a turn that just started / is about to finish) and a tool-safety check (never barge
-// while codex is mid shell/file-edit — SIGKILL there could leave a half-written file).
-// `startedAt` + `busyTool` feed `canBarge()`; `stopFor()` kills without clearing the
-// rest of the queue (a barge only replaces the killer, not the other queued messages).
+// Barge-in (Jeff 2026-07-01/03): a new in-flight message can cut off the current
+// turn and take over, but normal message barge-ins are deferred until a Codex
+// lifecycle boundary. That avoids killing the model mid-thought/output while still
+// stopping before the next tool action, where the queued replacement can run.
 type Killer = () => void
 type BusyTool = 'shell' | 'edit' | null
+type PendingStop = { clearQueue: boolean }
 
 // Grace period (ms): a turn younger than this is never barged. Protects both a
 // just-started turn (no useful work to preserve yet is a wash — but avoids thrash on
@@ -23,6 +22,7 @@ class ActiveTurns {
   private stopped = new Set<string>()
   private startedAt = new Map<string, number>()
   private busyTool = new Map<string, BusyTool>()
+  private pendingStops = new Map<string, PendingStop>()
 
   /** respondViaCodex: record how to kill this channel's running turn. */
   register(channelId: string, kill: Killer): void {
@@ -35,6 +35,7 @@ class ActiveTurns {
     this.killers.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
+    this.pendingStops.delete(channelId)
   }
 
   /** codex-chat live loop: codex just STARTED a destructive tool (shell/file-edit) —
@@ -62,11 +63,27 @@ class ActiveTurns {
     const k = this.killers.get(channelId)
     if (!k) return false
     if (opts.clearQueue) this.stopped.add(channelId)
+    this.pendingStops.delete(channelId)
     try { k() } catch { /* best-effort */ }
     this.killers.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
     return true
+  }
+
+  /** Normal message barge-in: mark the running turn to be killed at the next
+   *  safe lifecycle boundary instead of SIGKILLing mid-output. */
+  deferStopFor(channelId: string, opts: { clearQueue: boolean }): boolean {
+    if (!this.killers.has(channelId)) return false
+    this.pendingStops.set(channelId, opts)
+    return true
+  }
+
+  /** codex-chat live loop: execute a pending deferred stop at a tool boundary. */
+  stopIfPending(channelId: string): boolean {
+    const pending = this.pendingStops.get(channelId)
+    if (!pending) return false
+    return this.stopFor(channelId, pending)
   }
 
   /** runChannelTurn: was this channel just stopped? Consumes the flag. */
@@ -84,6 +101,15 @@ class ActiveTurns {
   canBarge(channelId: string, now: number = Date.now()): boolean {
     if (!this.killers.has(channelId)) return false
     if (this.busyTool.get(channelId)) return false
+    const started = this.startedAt.get(channelId)
+    if (started === undefined) return false
+    return now - started >= BARGE_GRACE_MS
+  }
+
+  /** A normal message is allowed to request a deferred barge once the grace
+   *  window has passed, even if Codex is currently inside a destructive tool. */
+  canRequestBarge(channelId: string, now: number = Date.now()): boolean {
+    if (!this.killers.has(channelId)) return false
     const started = this.startedAt.get(channelId)
     if (started === undefined) return false
     return now - started >= BARGE_GRACE_MS

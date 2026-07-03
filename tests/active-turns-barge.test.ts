@@ -34,8 +34,10 @@ test('canBarge: false while mid a destructive tool call, even past grace', () =>
   const started = Date.now()
   activeTurns.setBusy(c, 'shell')
   assert.equal(activeTurns.canBarge(c, started + BARGE_GRACE_MS + 10_000), false, 'mid-shell blocks barge')
+  assert.equal(activeTurns.canRequestBarge(c, started + BARGE_GRACE_MS + 10_000), true, 'mid-shell can request deferred barge')
   activeTurns.setBusy(c, 'edit')
   assert.equal(activeTurns.canBarge(c, started + BARGE_GRACE_MS + 10_000), false, 'mid-edit blocks barge')
+  assert.equal(activeTurns.canRequestBarge(c, started + BARGE_GRACE_MS + 10_000), true, 'mid-edit can request deferred barge')
   activeTurns.clearBusy(c)
   assert.equal(activeTurns.canBarge(c, started + BARGE_GRACE_MS + 10_000), true, 'clears after tool done')
   activeTurns.done(c)
@@ -60,9 +62,39 @@ test('stopFor: false when no turn is running', () => {
   assert.equal(activeTurns.stopFor(c, { clearQueue: false }), false)
 })
 
+test('deferStopFor: records a pending barge without killing until boundary', () => {
+  const c = cid()
+  let killed = false
+  activeTurns.register(c, () => { killed = true })
+  assert.equal(activeTurns.deferStopFor(c, { clearQueue: false }), true, 'deferred stop was recorded')
+  assert.equal(killed, false, 'deferred stop does not kill immediately')
+  assert.equal(activeTurns.isActive(c), true, 'turn remains active until boundary')
+  assert.equal(activeTurns.stopIfPending(c), true, 'boundary consumes pending stop')
+  assert.equal(killed, true, 'killer fired at boundary')
+  assert.equal(activeTurns.isActive(c), false, 'turn is no longer active after boundary stop')
+  assert.equal(activeTurns.consumeStopped(c), false, 'barge does not clear queued follow-ups')
+})
+
+test('deferStopFor(clearQueue:true): pending user stop clears queue at boundary', () => {
+  const c = cid()
+  activeTurns.register(c, () => {})
+  assert.equal(activeTurns.deferStopFor(c, { clearQueue: true }), true)
+  assert.equal(activeTurns.consumeStopped(c), false, 'not stopped until boundary')
+  assert.equal(activeTurns.stopIfPending(c), true)
+  assert.equal(activeTurns.consumeStopped(c), true, 'clearQueue propagates when pending stop fires')
+})
+
+test('deferStopFor and stopIfPending: false when no turn is running or pending', () => {
+  const c = cid()
+  assert.equal(activeTurns.deferStopFor(c, { clearQueue: false }), false)
+  assert.equal(activeTurns.stopIfPending(c), false)
+})
+
 test('done() clears liveness so a finished turn can never be barged', () => {
   const c = cid()
   activeTurns.register(c, () => {})
+  activeTurns.deferStopFor(c, { clearQueue: false })
   activeTurns.done(c)
   assert.equal(activeTurns.canBarge(c, Date.now() + 999_999), false)
+  assert.equal(activeTurns.stopIfPending(c), false)
 })

@@ -134,11 +134,10 @@ function lineCost(lines: string[]): number {
 }
 
 function blockCost(page: string[], block: string[]): number {
-  return lineCost(block) + (page.length ? 2 : 0)
+  return lineCost(block) + (page.length ? 1 : 0)
 }
 
 function appendTraceBlock(page: string[], block: string[]): void {
-  if (page.length) page.push('')
   page.push(...block)
 }
 
@@ -225,6 +224,32 @@ function headingsToBold(t: string): string {
   return out.join('\n')
 }
 
+function formatThinkingText(text: string): string {
+  const lines = text.trim().split('\n')
+  const out: string[] = []
+  let previousWasHeading = false
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].replace(/^>\s?/, '')
+    const heading = raw.match(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/)
+      ?? raw.match(/^[ \t]*\*\*(.+?)\*\*[ \t]*$/)
+    if (heading) {
+      if (out.length && out[out.length - 1] !== '') out.push('')
+      out.push(`> **${heading[1]}**`)
+      previousWasHeading = true
+      while (i + 1 < lines.length && lines[i + 1].trim() === '') i++
+      continue
+    }
+    if (raw.trim() === '') {
+      if (!previousWasHeading && out.length && out[out.length - 1] !== '') out.push('')
+      previousWasHeading = false
+      continue
+    }
+    out.push(`> ${raw}`)
+    previousWasHeading = false
+  }
+  return out.join('\n')
+}
+
 function formatDiff(unified: string): { badge: string; body: string[] } {
   let adds = 0, dels = 0
   const rows: Array<{ marker: '+' | '-' | ' '; lineNo: number | null; text: string }> = []
@@ -258,8 +283,9 @@ function formatDiff(unified: string): { badge: string; body: string[] } {
   }
   const width = Math.max(2, ...rows.map(r => r.lineNo ? String(r.lineNo).length : 0))
   const body = rows.map((r) => {
-    if (!r.lineNo) return `${r.marker} ${' '.repeat(width)} ${r.text}`
-    return `${r.marker} ${String(r.lineNo).padStart(width)} ${r.text}`
+    const gap = r.marker === ' ' ? ' ' : '  '
+    if (!r.lineNo) return `${r.marker}${gap}${' '.repeat(width)} ${r.text}`
+    return `${r.marker}${gap}${String(r.lineNo).padStart(width)} ${r.text}`
   })
   return { badge: `[+${adds}, -${dels}]`, body }
 }
@@ -295,7 +321,7 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       const cap = OUT_W
       if (rp.length > cap) rp = rp.slice(0, cap - 1) + '…'
       lines.push(`⎿ ${rp}`)
-      if (n > 1) lines.push(`   [${n} lines]`)
+      if (n > 1) lines.push(`     [${n} lines]`)
     }
   }
   return lines
@@ -1084,8 +1110,8 @@ async function handleUserMessage(
     // Cards posted in 'collapse' mode are shown live then deleted once the reply lands.
     const collapseMsgs: Message[] = []
     if (willThinking) {
-      const quoted = result.reasoning!.trim().split('\n').map(l => `> ${l}`).join('\n')
-      for (const piece of chunk(`💭 **Thinking:**\n${quoted}`)) {
+      const formatted = formatThinkingText(result.reasoning!)
+      for (const piece of chunk(`💭 **Thinking:**\n${formatted}`)) {
         try { const tm = await message.channel.send(piece); if (flags.thinking === 'collapse') collapseMsgs.push(tm) } catch {}
       }
     }
@@ -1275,17 +1301,13 @@ client.on('messageCreate', async (message: Message) => {
     return
   }
 
-  // Barge-in (Jeff 2026-07-01): a new message cuts off the in-flight turn and takes
-  // over — but ONLY when safe (canBarge: past the grace window AND not mid a
-  // destructive shell/file-edit; see active-turns.ts). When it barges we kill the
-  // running turn WITHOUT clearing the queue, then unshift this message to the FRONT
-  // so the existing runChannelTurn's drain loop picks it up first as it unwinds — no
-  // re-entrancy, reusing the queue machinery. If NOT safe to barge, fall through to
-  // the normal path where runChannelTurn just queues it (today's coalescing behavior).
+  // Barge-in (Jeff 2026-07-01/03): a new message takes over, but normal messages
+  // defer the stop until Codex reaches the next tool lifecycle boundary. That
+  // prevents mid-output death while still letting the queued message cut in.
   {
     const st = channelTurns.get(channelId)
-    if (st?.running && activeTurns.canBarge(channelId)) {
-      activeTurns.stopFor(channelId, { clearQueue: false })
+    if (st?.running && activeTurns.canRequestBarge(channelId)) {
+      activeTurns.deferStopFor(channelId, { clearQueue: false })
       st.queue.unshift(message)
       void message.react('\u{23ED}\u{FE0F}').catch(() => {})  // ⏭️ "barging — cutting in"
       return

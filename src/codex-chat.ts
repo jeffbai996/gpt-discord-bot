@@ -303,6 +303,13 @@ function mcpToolEvent(invocation: any): { status: string; tool?: { name: string;
   return { status: '🔌 plugin', tool: { name, args: typeof args === 'string' ? args : JSON.stringify(args) } }
 }
 
+function isToolItemType(type: unknown): boolean {
+  return type === 'command_execution'
+    || type === 'file_change'
+    || type === 'web_search'
+    || type === 'mcp_tool_call'
+}
+
 export function liveEvent(ev: any): { status: string; tool?: { name: string; args: string } } | null {
   if (ev?.type === 'event_msg' && ev.payload?.type === 'mcp_tool_call_begin') {
     return mcpToolEvent(ev.payload.invocation)
@@ -496,6 +503,10 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       // are non-destructive → not tracked (safe to barge through). (Jeff 2026-07-01)
       if (input.channelId) {
         if (obj?.type === 'item.started' && obj.item) {
+          // Normal message barge-in is deferred until a tool boundary so we do
+          // not kill Codex mid-thought/output. Stop before surfacing the next
+          // tool row; the queued replacement message will run as this turn exits.
+          if (isToolItemType(obj.item.type) && activeTurns.stopIfPending(input.channelId)) return
           if (obj.item.type === 'command_execution') activeTurns.setBusy(input.channelId, 'shell')
           else if (obj.item.type === 'file_change') activeTurns.setBusy(input.channelId, 'edit')
         } else if (obj?.type === 'item.completed' && obj.item &&
