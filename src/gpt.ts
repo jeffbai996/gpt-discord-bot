@@ -652,7 +652,14 @@ async function handleUserMessage(
   let workMessage: Message | null = targetMessage
   let placeholderId: string | null = null
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
-  const stopThinkingAnim = () => { if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null } }
+  let spinnerEditPromise: Promise<unknown> | null = null
+  const stopThinkingAnim = async () => {
+    if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null }
+    if (spinnerEditPromise) { await spinnerEditPromise; spinnerEditPromise = null }
+  }
+  const throwIfStopped = () => {
+    if (stopController.signal.aborted) throw new CodexStoppedError(0)
+  }
   let currentStatus = `💭 ${effortLabel}`
 
   // Typing-dots-first (Jeff 2026-06-29, ported from gem-bot): show the native
@@ -687,7 +694,7 @@ async function handleUserMessage(
       const i = currentStatus.indexOf(' ')
       const emoji = i > 0 ? currentStatus.slice(0, i) : currentStatus
       const text = i > 0 ? currentStatus.slice(i + 1) : ''
-      workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
+      spinnerEditPromise = workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
     }, 1500)
   }
 
@@ -743,17 +750,21 @@ async function handleUserMessage(
   let liveTraceMsgs: Message[] = []
   let liveTracePending = false
   let liveTraceDirty = false
+  let liveTraceClosed = false
   const flushLiveTrace = () => {
-    if (liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
+    if (liveTraceClosed || liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
     const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
     liveTracePending = true
     const cards = renderTraceCards(buildTraceLines(liveToolRows))
     ;(async () => {
+      if (liveTraceClosed) return
       for (let i = 0; i < cards.length; i++) {
+        if (liveTraceClosed) return
         if (liveTraceMsgs[i]) await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
         else liveTraceMsgs[i] = await traceChannel.send(cards[i])
       }
       for (const stale of liveTraceMsgs.slice(cards.length)) {
+        if (liveTraceClosed) return
         await stale.delete().catch(() => {})
       }
       liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
@@ -773,6 +784,7 @@ async function handleUserMessage(
     else flushLiveTrace()
   }
   const deleteLiveTrace = async () => {
+    liveTraceClosed = true
     const msgs = liveTraceMsgs
     liveTraceMsgs = []
     liveTraceDirty = false
@@ -850,7 +862,7 @@ async function handleUserMessage(
       // async post without blocking the event handler; the next partial
       // (~700ms later) lands once workMessage exists. Also cancels the timer.
       if (!workMessage) { void postPlaceholder(); return }
-      stopThinkingAnim()
+      void stopThinkingAnim()
       const now = Date.now()
       if (now - lastEditAt < EDIT_INTERVAL_MS) return
       const display = event.reply.trim()
@@ -864,6 +876,7 @@ async function handleUserMessage(
   }
 
   try {
+    throwIfStopped()
     // Codex-as-default-chat: route text turns through the Codex CLI (flat-sub,
     // self-web-searching) instead of the metered API. Falls back to the API on
     // any codex error, and skips codex when there are images (the CLI can't take
@@ -891,6 +904,7 @@ async function handleUserMessage(
         if (resumeSessionId && CODEX_SESSION_MAX_INPUT_TOKENS > 0 && lastInput >= CODEX_SESSION_MAX_INPUT_TOKENS) {
           currentStatus = '🧹 compacting'
           await compactAndDropCodexSession('preflight', lastInput)
+          throwIfStopped()
           resumeSessionId = undefined
         }
         result = await respondViaCodex({
@@ -934,12 +948,13 @@ async function handleUserMessage(
         if (CODEX_SESSION_MAX_INPUT_TOKENS > 0
             && (result.usage?.inputTokens ?? 0) >= CODEX_SESSION_MAX_INPUT_TOKENS) {
           await compactAndDropCodexSession('post-turn', result.usage?.inputTokens)
+          throwIfStopped()
         }
         setEnginePresence(false)
       } catch (e) {
         if (e instanceof CodexStoppedError) {
           // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
-          stopThinkingAnim()
+          await stopThinkingAnim()
           await deleteLiveTrace()
           if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
           try { await message.react('✗') } catch {}
@@ -961,10 +976,12 @@ async function handleUserMessage(
           void applyLifecycle(message, 'errored')
           if (workMessage) { await workMessage.edit('⚠️ **codex hit an error — retrying on the API…**').catch(() => {}) }
         }
+        throwIfStopped()
         result = await apiRespond()
         setEnginePresence(true)
       }
     } else {
+      throwIfStopped()
       result = await apiRespond()
     }
 
@@ -973,7 +990,7 @@ async function handleUserMessage(
     // transient bubble) and the typing heartbeat, alongside the spinner.
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
-    stopThinkingAnim()
+    await stopThinkingAnim()
     if (stopController.signal.aborted) throw new CodexStoppedError(result.durationMs)
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
@@ -1157,7 +1174,7 @@ async function handleUserMessage(
       liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
     }
 
-    stopThinkingAnim()
+    await stopThinkingAnim()
     // "thought for Ns" sits ON TOP of the reply, in the SAME message block (Jeff
     // 2026-06-24) — small-text first line, then the answer. We reuse the placeholder
     // as the first message so the thought line replaces "thinking…" in place AND the
@@ -1227,7 +1244,7 @@ async function handleUserMessage(
   } catch (e: any) {
     if (e instanceof CodexStoppedError) {
       await applyLifecycle(message, 'interrupted')
-      stopThinkingAnim()
+      await stopThinkingAnim()
       await deleteLiveTrace()
       try {
         if (workMessage) await workMessage.edit(INTERRUPTED_MARKER)
@@ -1244,7 +1261,7 @@ async function handleUserMessage(
       await applyLifecycle(message, 'errored')
     }
     const errMsg = isRejected ? `⚠️ ${e.reason}` : `❌ error: ${e?.message ?? String(e)}`
-    stopThinkingAnim()
+    await stopThinkingAnim()
     console.error('respond failed:', e)
     await deleteLiveTrace()
     try {
@@ -1254,7 +1271,7 @@ async function handleUserMessage(
   } finally {
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
-    stopThinkingAnim()
+    await stopThinkingAnim()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
     activeTurns.done(channelId)
   }

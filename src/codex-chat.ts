@@ -493,7 +493,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const killTree = () => { try { process.kill(-(child.pid as number), 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
   let stoppedByUser = false
   const stopRunningTurn = () => { stoppedByUser = true; killTree() }
-  if (input.channelId) activeTurns.register(input.channelId, stopRunningTurn)
   if (input.signal) {
     if (input.signal.aborted) stopRunningTurn()
     else input.signal.addEventListener('abort', stopRunningTurn, { once: true })
@@ -563,7 +562,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
   } finally {
     if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
-    if (input.channelId) activeTurns.done(input.channelId)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})
   }
