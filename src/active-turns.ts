@@ -23,6 +23,7 @@ class ActiveTurns {
   private startedAt = new Map<string, number>()
   private busyTool = new Map<string, BusyTool>()
   private pendingStops = new Map<string, PendingStop>()
+  private idleWaiters = new Set<() => void>()
 
   /** respondViaCodex: record how to kill this channel's running turn. */
   register(channelId: string, kill: Killer): void {
@@ -36,6 +37,7 @@ class ActiveTurns {
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
     this.pendingStops.delete(channelId)
+    this.resolveIdleIfNeeded()
   }
 
   /** codex-chat live loop: codex just STARTED a destructive tool (shell/file-edit) —
@@ -68,6 +70,7 @@ class ActiveTurns {
     this.killers.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
+    this.resolveIdleIfNeeded()
     return true
   }
 
@@ -96,6 +99,15 @@ class ActiveTurns {
     return this.killers.has(channelId)
   }
 
+  isIdle(): boolean {
+    return this.killers.size === 0
+  }
+
+  waitForIdle(): Promise<void> {
+    if (this.isIdle()) return Promise.resolve()
+    return new Promise(resolve => this.idleWaiters.add(resolve))
+  }
+
   /** Barge guard: safe to cut off this channel's in-flight turn iff a turn is
    *  running, it's past the grace window, and it's NOT mid a destructive tool call. */
   canBarge(channelId: string, now: number = Date.now()): boolean {
@@ -113,6 +125,13 @@ class ActiveTurns {
     const started = this.startedAt.get(channelId)
     if (started === undefined) return false
     return now - started >= BARGE_GRACE_MS
+  }
+
+  private resolveIdleIfNeeded(): void {
+    if (!this.isIdle()) return
+    const waiters = [...this.idleWaiters]
+    this.idleWaiters.clear()
+    for (const resolve of waiters) resolve()
   }
 }
 

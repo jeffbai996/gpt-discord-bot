@@ -510,6 +510,35 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.User, Partials.Reaction]
 })
 
+let shuttingDown = false
+function installGracefulShutdown(): void {
+  const timeoutMs = Number(process.env.GPT_GRACEFUL_SHUTDOWN_MS) || 30 * 60_000
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return
+    shuttingDown = true
+    console.error(`[shutdown] ${signal} received; waiting for active turns to finish`)
+    const timer = new Promise<'timeout'>(resolve => {
+      const t = setTimeout(() => resolve('timeout'), timeoutMs)
+      t.unref?.()
+    })
+    const idle = activeTurns.waitForIdle().then(() => 'idle' as const)
+    Promise.race([idle, timer])
+      .then(reason => {
+        console.error(`[shutdown] exiting after ${reason}`)
+        client.destroy()
+        process.exit(0)
+      })
+      .catch(err => {
+        console.error('[shutdown] graceful shutdown failed:', err)
+        process.exit(1)
+      })
+  }
+  process.once('SIGTERM', () => shutdown('SIGTERM'))
+  process.once('SIGINT', () => shutdown('SIGINT'))
+}
+
+installGracefulShutdown()
+
 client.once('ready', async () => {
   console.error(`gpt online as ${client.user?.tag} (${client.user?.id})`)
   client.user?.setPresence({
@@ -536,6 +565,10 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return
+  if (shuttingDown) {
+    await interaction.reply({ content: '⚠️ restarting after the current turn finishes', ephemeral: true }).catch(() => {})
+    return
+  }
   if (interaction.commandName !== 'gpt') return
   // /gpt voice … is a subcommand group; route it to the voice handler.
   if (interaction.options.getSubcommandGroup(false) === 'voice') {
@@ -1317,6 +1350,7 @@ async function runChannelTurn(message: Message, target: Message | null): Promise
 
 client.on('messageCreate', async (message: Message) => {
   if (message.author.bot) return
+  if (shuttingDown) return
 
   const channelId = message.channel.id
   const userId = message.author.id

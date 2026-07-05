@@ -98,3 +98,22 @@ test('done() clears liveness so a finished turn can never be barged', () => {
   assert.equal(activeTurns.canBarge(c, Date.now() + 999_999), false)
   assert.equal(activeTurns.stopIfPending(c), false)
 })
+
+test('waitForIdle: resolves only after the last active turn ends', async () => {
+  const c1 = cid()
+  const c2 = cid()
+  activeTurns.register(c1, () => {})
+  activeTurns.register(c2, () => {})
+  let resolved = false
+  const p = activeTurns.waitForIdle().then(() => { resolved = true })
+  activeTurns.done(c1)
+  await Promise.resolve()
+  assert.equal(resolved, false)
+  activeTurns.done(c2)
+  await p
+  assert.equal(resolved, true)
+})
+
+test('waitForIdle: resolves immediately when already idle', async () => {
+  await activeTurns.waitForIdle()
+})
