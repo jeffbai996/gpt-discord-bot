@@ -7,6 +7,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { activeTurns } from './active-turns.ts'
 import { killProcessTree } from './kill-tree.ts'
+import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 
@@ -85,7 +86,13 @@ export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extr
   // the full task window; otherwise debugging the hang self-sabotages at 120s.
   const isRecoveryPing = /\b(where'?d ya go|where did you go|pooping out|hung|stuck|choked|timeout|token limit|response time|alive|ping)\b/.test(text)
   const asksForWork = /\b(fix|solve|squash|patch|debug|diagnose|diagnosis|investigate|figure out|prevent|repair|implement)\b/.test(text)
-  if (text.length < 400 && isRecoveryPing && !asksForWork) {
+  // A message that ASKS FOR AN EXPLANATION ("why are you stuck", "what made you
+  // time out", "how come you hung") is a real diagnostic question, not a throwaway
+  // status poke — it needs the full window or the answer self-sabotages at 120s.
+  // Bare pokes ("you alive?", "where'd ya go?") have no why/what/how, so they still
+  // fail fast. (Jeff 2026-07-05 — real questions were getting killed mid-work.)
+  const asksForExplanation = /\b(why|what made|what caused|what happened|how come|how'?d|how did)\b/.test(text)
+  if (text.length < 400 && isRecoveryPing && !asksForWork && !asksForExplanation) {
     return DEFAULT_QUICK_TIMEOUT_MS
   }
   return DEFAULT_TASK_TIMEOUT_MS
@@ -484,7 +491,11 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const execPart = resuming
     ? `exec resume --skip-git-repo-check ${BYPASS} ${common} "${input.resumeSessionId}" "$CODEX_PROMPT"`
     : `exec --skip-git-repo-check ${BYPASS} ${common} "$CODEX_PROMPT"`
-  const script = `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" ${execPart} </dev/null 2>/dev/null`
+  // Codex stderr used to go to /dev/null — a mid-turn crash left no trace ("for
+  // some reason"). Capture it per-turn so a failure is inspectable; the file is
+  // small and overwritten each turn. (Jeff 2026-07-05)
+  const errfile = `/tmp/gpt_codexerr_${randomBytes(6).toString('hex')}.log`
+  const script = `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" ${execPart} </dev/null 2>"${errfile}"`
 
   // Stream codex's JSONL events line-by-line so we can surface what it's doing
   // LIVE (running cmd / searching / editing) to the placeholder via onEvent, while
@@ -558,6 +569,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     } catch { /* non-JSON line */ }
   })
   let replyFromFile = ''
+  let codexStderr = ''
   let timedOut = false
   try {
     await new Promise<void>((resolve, reject) => {
@@ -566,10 +578,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       child.on('close', () => { clearTimeout(timer); resolve() })
     })
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
+    codexStderr = (await readFile(errfile, 'utf8').catch(() => '')).trim()
   } finally {
     if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})
+    await rm(errfile, { force: true }).catch(() => {})
   }
 
   const parsed = parseCodexEvents(lines.join('\n'))
@@ -589,11 +603,25 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // Prefer the -o file (the clean final message); fall back to the last
   // agent_message in the event stream if the file came back empty.
   const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()
-  if (stoppedByUser) throw new CodexStoppedError(Date.now() - t0)
+
+  // One scannable outcome line per turn (the codex path was silent before, so a
+  // mid-turn death left no trace). stderr tail rides along on a failure. (Jeff 2026-07-05)
+  const logOutcome = (outcome: TurnOutcome, detail?: string) => {
+    const errTail = codexStderr ? ` stderr: ${codexStderr.replace(/\s+/g, ' ').slice(-300)}` : ''
+    console.error(formatTurnOutcome({
+      outcome, durationMs: Date.now() - t0, lines: lines.length,
+      replyChars: reply.length, timedOut, stoppedByUser,
+      detail: (detail ?? '') + errTail || undefined,
+    }))
+  }
+
+  if (stoppedByUser) { logOutcome('stopped'); throw new CodexStoppedError(Date.now() - t0) }
   if (!reply) {
-    if (timedOut) throw new CodexInterruptedError(Date.now() - t0)
+    if (timedOut) { logOutcome('timeout'); throw new CodexInterruptedError(Date.now() - t0) }
+    logOutcome('empty', `no answer (lines=${lines.length})`)
     throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
   }
+  logOutcome('completed')
 
   input.onEvent?.({ type: 'done' })
 

@@ -163,3 +163,30 @@ test('codexTimeoutMs: keeps long timeout for ordinary task turns', () => {
     600_000,
   )
 })
+
+test('codexTimeoutMs: a genuine QUESTION about a hang is not a throwaway ping', () => {
+  // These mention hang/stuck words but are real diagnostic requests — they need
+  // the full window, else debugging the hang self-sabotages at 120s. (Jeff 2026-07-05)
+  assert.equal(
+    codexTimeoutMs({ userMessage: 'gpt is hung, can you tell me why?', extraText: '' }),
+    600_000,
+    'question form with "?" should get the full window',
+  )
+  assert.equal(
+    codexTimeoutMs({ userMessage: 'why do you keep getting stuck mid-turn', extraText: '' }),
+    600_000,
+    '"why …" is a real question, not a status poke',
+  )
+  assert.equal(
+    codexTimeoutMs({ userMessage: 'what made you time out on that last one', extraText: '' }),
+    600_000,
+    '"what …" question needs the real window',
+  )
+})
+
+test('codexTimeoutMs: bare status pokes still fail fast', () => {
+  // No question, no work verb — just "are you alive" noise. Keep these quick.
+  for (const m of ['you alive?', 'ping', 'where did you go', 'you pooping out again lol']) {
+    assert.equal(codexTimeoutMs({ userMessage: m, extraText: '' }), 120_000, `bare poke: ${m}`)
+  }
+})
