@@ -57,6 +57,7 @@ export interface CodexChatInput {
   extraText?: string
   channelId?: string
   resumeSessionId?: string
+  signal?: AbortSignal
   onEvent?: (event: LifecycleEvent) => void
 }
 
@@ -447,6 +448,10 @@ function buildResumePrompt(input: CodexChatInput): string {
 
 export async function respondViaCodex(input: CodexChatInput): Promise<RespondResult> {
   const t0 = Date.now()
+  const throwIfStopped = () => {
+    if (input.signal?.aborted) throw new CodexStoppedError(Date.now() - t0)
+  }
+  throwIfStopped()
   input.onEvent?.({ type: 'thinking_start' })
 
   const resuming = !!input.resumeSessionId
@@ -487,7 +492,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // tool-loop actually dies; falls back to a plain kill if the group send fails.
   const killTree = () => { try { process.kill(-(child.pid as number), 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
   let stoppedByUser = false
-  if (input.channelId) activeTurns.register(input.channelId, () => { stoppedByUser = true; killTree() })
+  const stopRunningTurn = () => { stoppedByUser = true; killTree() }
+  if (input.channelId) activeTurns.register(input.channelId, stopRunningTurn)
+  if (input.signal) {
+    if (input.signal.aborted) stopRunningTurn()
+    else input.signal.addEventListener('abort', stopRunningTurn, { once: true })
+  }
   const lines: string[] = []
   let threadId = ''
   const rl = createInterface({ input: child.stdout! })
@@ -552,6 +562,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     })
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
   } finally {
+    if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
     if (input.channelId) activeTurns.done(input.channelId)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})

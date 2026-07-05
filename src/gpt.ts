@@ -30,6 +30,8 @@ import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
+import { stripToolTraceCard } from './render-cleanup.ts'
+import { isHardStopMessage } from './stop-command.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -590,6 +592,8 @@ async function handleUserMessage(
   const model = DEFAULT_MODEL
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
   const selfId = client.user?.id ?? ''
+  const stopController = new AbortController()
+  activeTurns.register(channelId, () => stopController.abort())
 
   let history: Awaited<ReturnType<typeof formatHistoryForOpenAI>> = []
   try {
@@ -768,6 +772,12 @@ async function handleUserMessage(
     if (liveTracePending) liveTraceDirty = true
     else flushLiveTrace()
   }
+  const deleteLiveTrace = async () => {
+    const msgs = liveTraceMsgs
+    liveTraceMsgs = []
+    liveTraceDirty = false
+    for (const m of msgs) await m.delete().catch(() => {})
+  }
 
   const findLiveToolRow = (name: string, args?: Record<string, unknown>): ToolCall | null => {
     const short = shortToolName(name)
@@ -893,6 +903,7 @@ async function handleUserMessage(
           extraText,
           channelId,
           resumeSessionId,
+          signal: stopController.signal,
           onEvent,
         })
         if (result.threadId) channelSessions.set(channelId, result.threadId)
@@ -929,6 +940,7 @@ async function handleUserMessage(
         if (e instanceof CodexStoppedError) {
           // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
           stopThinkingAnim()
+          await deleteLiveTrace()
           if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
           try { await message.react('✗') } catch {}
           return
@@ -962,8 +974,10 @@ async function handleUserMessage(
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     stopThinkingAnim()
+    if (stopController.signal.aborted) throw new CodexStoppedError(result.durationMs)
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
+    result.reply = stripToolTraceCard(result.reply ?? '')
 
     // @gpt can set its own Discord status: a [[presence: …]] directive in the reply
     // is applied to the bot presence + stripped from the message.
@@ -1082,7 +1096,7 @@ async function handleUserMessage(
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
     // literal '#### text'. Convert heading lines to bold and swallow the blank
     // line after them so `**Heading**` sits directly above its body.
-    const body = headingsToBold((result.reply ?? '').trim()) + verbose + (verbose ? '\n\u200b' : '')
+    const body = stripToolTraceCard(headingsToBold((result.reply ?? '').trim())) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim()) {
       await applyLifecycle(message, 'silenced')
@@ -1211,6 +1225,16 @@ async function handleUserMessage(
       await applyLifecycle(message, 'replied')
     }
   } catch (e: any) {
+    if (e instanceof CodexStoppedError) {
+      await applyLifecycle(message, 'interrupted')
+      stopThinkingAnim()
+      await deleteLiveTrace()
+      try {
+        if (workMessage) await workMessage.edit(INTERRUPTED_MARKER)
+        else await message.react('✗')
+      } catch {}
+      return
+    }
     const isRejected = e instanceof OpenAIRequestRejected
     if (isRejected && e.reason === 'content_policy') {
       await applyLifecycle(message, 'blocked')
@@ -1222,6 +1246,7 @@ async function handleUserMessage(
     const errMsg = isRejected ? `⚠️ ${e.reason}` : `❌ error: ${e?.message ?? String(e)}`
     stopThinkingAnim()
     console.error('respond failed:', e)
+    await deleteLiveTrace()
     try {
       if (workMessage) await workMessage.edit(errMsg)
       else await message.reply(errMsg)
@@ -1231,6 +1256,7 @@ async function handleUserMessage(
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     stopThinkingAnim()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
+    activeTurns.done(channelId)
   }
 }
 
@@ -1289,8 +1315,8 @@ client.on('messageCreate', async (message: Message) => {
 
   if (!access.canHandle({ channelId, userId, isMention })) return
 
-  // Lone ❌ message: kill the in-flight turn, post canonical interrupted marker + 🔁.
-  if (message.content.trim().replace(/️/g, '') === '❌') {
+  // Lone ❌ / X message: hard-kill the in-flight turn before queue/barge logic.
+  if (isHardStopMessage(message.content)) {
     message.delete().catch(() => {})
     const killed = activeTurns.stop(channelId)
     if (killed) {

@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { formatHistoryForOpenAI, stripBotMetadata, type HistoryMessage } from '../src/history.ts'
+import { stripToolTraceCard } from '../src/render-cleanup.ts'
 
 const SELF = 'bot-id'
 
@@ -19,6 +20,72 @@ test('stripBotMetadata: drops -# directive lines', () => {
 test('stripBotMetadata: drops trace and thinking cards', () => {
   assert.equal(stripBotMetadata('🔧 **Tool trace 2/3**\n```diff\n+ ● shell(rg)\n```'), '')
   assert.equal(stripBotMetadata('💭 **Thinking:**\n> checking the repo'), '')
+})
+
+test('stripToolTraceCard: strips leading trace card from reply text', () => {
+  const input = `🔧 **Tool trace**
+\`\`\`diff
++ ● search_squad_memory
++ ● shell
+\`\`\`
+
+actual answer`
+
+  assert.equal(stripToolTraceCard(input), 'actual answer')
+})
+
+test('stripToolTraceCard: strips numbered and quoted trace cards', () => {
+  const input = `> 🔧 **Tool trace 2/2**
+> \`\`\`diff
+> + ● Edit
+> - ● Bash FAILED
+> \`\`\`
+
+actual answer`
+
+  assert.equal(stripToolTraceCard(input), 'actual answer')
+})
+
+test('stripToolTraceCard: strips embedded card without eating surrounding prose', () => {
+  const input = `first chunk
+
+🔧 **Tool trace**
+\`\`\`diff
++ ● Search
+\`\`\`
+
+second chunk`
+
+  assert.equal(stripToolTraceCard(input), `first chunk
+
+second chunk`)
+})
+
+test('stripToolTraceCard: strips malformed leaked diff body', () => {
+  const input = `actual answer
+
+Tool trace 2/2
+diff
++ ● apply_patch(src/gpt.ts)
++ ● tsc
+  ⎿ passed
+
+next answer line`
+
+  assert.equal(stripToolTraceCard(input), `actual answer
+
+next answer line`)
+})
+
+test('stripToolTraceCard: handles repeated trace headers without hanging', () => {
+  const input = `Tool trace
+Tool trace 2/2
+diff
++ ● shell
+
+reply`
+
+  assert.equal(stripToolTraceCard(input), 'reply')
 })
 
 test('stripBotMetadata: drops thought status line but keeps reply', () => {

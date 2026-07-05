@@ -1,6 +1,7 @@
 import type { TextChannel, DMChannel, ThreadChannel } from 'discord.js'
 import type OpenAI from 'openai'
 import { selectWithinBudget, defaultCountTokens, type CountTokens } from './token-budget.ts'
+import { stripToolTraceCard } from './render-cleanup.ts'
 
 export interface HistoryAttachment {
   name: string
@@ -88,6 +89,7 @@ function describeAttachment(att: HistoryAttachment): string {
 // is reserved for metadata in this bot, so any line starting with `-# ` drops.
 export function stripBotMetadata(text: string): string {
   if (!text) return text
+  text = stripToolTraceCard(text)
   if (/^🔧 \*\*Tool trace(?: \d+\/\d+)?\*\*/.test(text)) return ''
   if (/^💭 \*\*Thinking:\*\*/.test(text)) return ''
   const lines = text.split('\n')
