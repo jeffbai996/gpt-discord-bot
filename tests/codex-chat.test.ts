@@ -146,6 +146,17 @@ test('codexTimeoutMs: uses quick timeout for recovery/meta pings', () => {
   )
 })
 
+test('codexTimeoutMs: keeps long timeout for actionable hang repairs', () => {
+  assert.equal(
+    codexTimeoutMs({ userMessage: 'gpt keeps pooping out mid-turn for some reason, squash that bug', extraText: '' }),
+    600_000,
+  )
+  assert.equal(
+    codexTimeoutMs({ userMessage: 'you got hung again, solve the mid-flight death first', extraText: '' }),
+    600_000,
+  )
+})
+
 test('codexTimeoutMs: keeps long timeout for ordinary task turns', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: 'implement live tool trace output and run the tests', extraText: '' }),

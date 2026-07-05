@@ -79,8 +79,12 @@ function mapEffort(effort?: string): string {
 export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): number {
   const text = `${input.userMessage}\n${input.extraText ?? ''}`.toLowerCase()
   // Recovery/meta pings should fail fast into the API fallback instead of tying
-  // up the channel behind a 10-minute Codex leash.
-  if (text.length < 400 && /\b(where'?d ya go|where did you go|pooping out|hung|stuck|choked|timeout|token limit|response time|alive|ping)\b/.test(text)) {
+  // up the channel behind a 10-minute Codex leash. But an actionable repair
+  // request can contain the same words ("fix why gpt is hung") and still needs
+  // the full task window; otherwise debugging the hang self-sabotages at 120s.
+  const isRecoveryPing = /\b(where'?d ya go|where did you go|pooping out|hung|stuck|choked|timeout|token limit|response time|alive|ping)\b/.test(text)
+  const asksForWork = /\b(fix|solve|squash|patch|debug|diagnose|diagnosis|investigate|figure out|prevent|repair|implement)\b/.test(text)
+  if (text.length < 400 && isRecoveryPing && !asksForWork) {
     return DEFAULT_QUICK_TIMEOUT_MS
   }
   return DEFAULT_TASK_TIMEOUT_MS
