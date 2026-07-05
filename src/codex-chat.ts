@@ -6,6 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { activeTurns } from './active-turns.ts'
+import { killProcessTree } from './kill-tree.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 
@@ -492,9 +493,10 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     detached: true,  // own process group so /gpt stop can SIGKILL the whole codex tree
     env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
   })
-  // Kill the whole group (bash + timeout + codex), not just bash, so a stuck
-  // tool-loop actually dies; falls back to a plain kill if the group send fails.
-  const killTree = () => { try { process.kill(-(child.pid as number), 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} } }
+  // Kill the whole tree (bash + timeout + codex), not just bash's process group.
+  // GNU `timeout` re-groups codex via setpgid(), so a plain `kill(-bashPid)` misses
+  // it — killProcessTree walks descendants by PPID to reach every node. (Jeff 2026-07-05)
+  const killTree = () => { try { killProcessTree(child.pid as number) } catch { try { child.kill('SIGKILL') } catch {} } }
   let stoppedByUser = false
   const stopRunningTurn = () => { stoppedByUser = true; killTree() }
   if (input.signal) {
