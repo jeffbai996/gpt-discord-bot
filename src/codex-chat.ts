@@ -31,12 +31,12 @@ const execFileAsync = promisify(execFile)
 
 // Same binary the codex *tool* uses — Codex (OpenAI gpt-5.5) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
-// Runaway-process BACKSTOP, not a turn timer. Legitimate reasoning turns can run
-// for minutes, so we do NOT cap on a guessed duration (the old 75s killed real
-// long turns). This only exists so a genuinely hung codex process can't live
-// forever. When it DOES fire, we surface an explicit "interrupted" signal rather
-// than silently swapping to the API (Jeff 2026-06-24).
-const DEFAULT_TASK_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 600_000
+// Watchdog policy, not a guessed "turn should be done by now" timer.
+// Real repo work can run for a long time as long as Codex is still emitting JSONL
+// progress. The idle watchdog kills only a silent/wedged child; the hard timeout is
+// a final runaway fuse so a broken process cannot live forever.
+const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 10 * 60_000
+const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 45 * 60_000
 const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 120_000
 
 // Squad-memory in the codex path: rather than an MCP server, we lean on codex's
@@ -78,7 +78,13 @@ function mapEffort(effort?: string): string {
   }
 }
 
-export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): number {
+export interface CodexWatchdogPolicy {
+  idleTimeoutMs: number
+  hardTimeoutMs: number
+  quick: boolean
+}
+
+export function codexWatchdogPolicy(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): CodexWatchdogPolicy {
   const text = `${input.userMessage}\n${input.extraText ?? ''}`.toLowerCase()
   // Recovery/meta pings should fail fast into the API fallback instead of tying
   // up the channel behind a 10-minute Codex leash. But an actionable repair
@@ -93,9 +99,17 @@ export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extr
   // fail fast. (Jeff 2026-07-05 — real questions were getting killed mid-work.)
   const asksForExplanation = /\b(why|what made|what caused|what happened|how come|how'?d|how did)\b/.test(text)
   if (text.length < 400 && isRecoveryPing && !asksForWork && !asksForExplanation) {
-    return DEFAULT_QUICK_TIMEOUT_MS
+    return { idleTimeoutMs: DEFAULT_QUICK_TIMEOUT_MS, hardTimeoutMs: DEFAULT_QUICK_TIMEOUT_MS, quick: true }
   }
-  return DEFAULT_TASK_TIMEOUT_MS
+  return {
+    idleTimeoutMs: DEFAULT_TASK_IDLE_TIMEOUT_MS,
+    hardTimeoutMs: Math.max(DEFAULT_TASK_HARD_TIMEOUT_MS, DEFAULT_TASK_IDLE_TIMEOUT_MS + 60_000),
+    quick: false,
+  }
+}
+
+export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): number {
+  return codexWatchdogPolicy(input).hardTimeoutMs
 }
 
 // Codex exec is single-shot (no conversation memory), so we bridge the whole
@@ -473,8 +487,8 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const prompt = resuming ? buildResumePrompt(input) : buildPrompt(input)
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
-  const timeoutMs = codexTimeoutMs(input)
-  const secs = Math.floor(timeoutMs / 1000)
+  const watchdog = codexWatchdogPolicy(input)
+  const secs = Math.floor(watchdog.hardTimeoutMs / 1000)
   const model = input.codexModel || 'gpt-5.5'
 
   // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
@@ -516,9 +530,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
   const lines: string[] = []
   let threadId = ''
+  let lastActivityAt = Date.now()
+  const markActivity = () => { lastActivityAt = Date.now() }
   const rl = createInterface({ input: child.stdout! })
   rl.on('line', (line) => {
     if (!line.trim()) return
+    markActivity()
     lines.push(line)
     try {
       const obj = JSON.parse(line)
@@ -571,11 +588,23 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   let replyFromFile = ''
   let codexStderr = ''
   let timedOut = false
+  let timeoutKind: 'idle' | 'hard' | null = null
   try {
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { timedOut = true; killTree(); resolve() }, timeoutMs + 8_000)
-      child.on('error', (e) => { clearTimeout(timer); reject(e) })
-      child.on('close', () => { clearTimeout(timer); resolve() })
+      const hardTimer = setTimeout(() => {
+        timedOut = true
+        timeoutKind = 'hard'
+        killTree()
+      }, watchdog.hardTimeoutMs + 8_000)
+      const idleTimer = setInterval(() => {
+        if (timedOut) return
+        if (Date.now() - lastActivityAt < watchdog.idleTimeoutMs) return
+        timedOut = true
+        timeoutKind = 'idle'
+        killTree()
+      }, Math.min(30_000, Math.max(1000, Math.floor(watchdog.idleTimeoutMs / 4))))
+      child.on('error', (e) => { clearTimeout(hardTimer); clearInterval(idleTimer); reject(e) })
+      child.on('close', () => { clearTimeout(hardTimer); clearInterval(idleTimer); resolve() })
     })
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
     codexStderr = (await readFile(errfile, 'utf8').catch(() => '')).trim()
@@ -617,7 +646,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
 
   if (stoppedByUser) { logOutcome('stopped'); throw new CodexStoppedError(Date.now() - t0) }
   if (!reply) {
-    if (timedOut) { logOutcome('timeout'); throw new CodexInterruptedError(Date.now() - t0) }
+    if (timedOut) { logOutcome('timeout', timeoutKind ? `${timeoutKind} watchdog fired` : undefined); throw new CodexInterruptedError(Date.now() - t0) }
     logOutcome('empty', `no answer (lines=${lines.length})`)
     throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
   }

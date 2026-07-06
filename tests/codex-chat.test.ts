@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { codexTimeoutMs, liveEvent, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { codexTimeoutMs, codexWatchdogPolicy, liveEvent, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('liveEvent: surfaces MCP begin events from codex rollout-style JSON', () => {
   const ev = liveEvent({
@@ -144,23 +144,31 @@ test('codexTimeoutMs: uses quick timeout for recovery/meta pings', () => {
     codexTimeoutMs({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
     120_000,
   )
+  assert.deepEqual(
+    codexWatchdogPolicy({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
+    { idleTimeoutMs: 120_000, hardTimeoutMs: 120_000, quick: true },
+  )
 })
 
 test('codexTimeoutMs: keeps long timeout for actionable hang repairs', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: 'gpt keeps pooping out mid-turn for some reason, squash that bug', extraText: '' }),
-    600_000,
+    2_700_000,
   )
   assert.equal(
     codexTimeoutMs({ userMessage: 'you got hung again, solve the mid-flight death first', extraText: '' }),
-    600_000,
+    2_700_000,
+  )
+  assert.deepEqual(
+    codexWatchdogPolicy({ userMessage: 'gpt keeps pooping out mid-turn for some reason, squash that bug', extraText: '' }),
+    { idleTimeoutMs: 600_000, hardTimeoutMs: 2_700_000, quick: false },
   )
 })
 
 test('codexTimeoutMs: keeps long timeout for ordinary task turns', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: 'implement live tool trace output and run the tests', extraText: '' }),
-    600_000,
+    2_700_000,
   )
 })
 
@@ -169,17 +177,17 @@ test('codexTimeoutMs: a genuine QUESTION about a hang is not a throwaway ping', 
   // the full window, else debugging the hang self-sabotages at 120s. (Jeff 2026-07-05)
   assert.equal(
     codexTimeoutMs({ userMessage: 'gpt is hung, can you tell me why?', extraText: '' }),
-    600_000,
+    2_700_000,
     'question form with "?" should get the full window',
   )
   assert.equal(
     codexTimeoutMs({ userMessage: 'why do you keep getting stuck mid-turn', extraText: '' }),
-    600_000,
+    2_700_000,
     '"why …" is a real question, not a status poke',
   )
   assert.equal(
     codexTimeoutMs({ userMessage: 'what made you time out on that last one', extraText: '' }),
-    600_000,
+    2_700_000,
     '"what …" question needs the real window',
   )
 })
