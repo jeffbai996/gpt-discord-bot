@@ -91,6 +91,9 @@ export function stripBotMetadata(text: string): string {
   if (!text) return text
   text = stripToolTraceCard(text)
   if (/^🔧 \*\*Tool trace(?: \d+\/\d+)?\*\*/.test(text)) return ''
+  // Headerless trace continuation card: a whole message that is just a ```diff
+  // fence of trace rows (Jeff 2026-07-05 pagination change). Drop it from history.
+  if (/^```diff\n[+-]\s*●\s/.test(text) || /^```diff\n\s*⎿\s/.test(text)) return ''
   if (/^💭 \*\*Thinking:\*\*/.test(text)) return ''
   const lines = text.split('\n')
   const out: string[] = []

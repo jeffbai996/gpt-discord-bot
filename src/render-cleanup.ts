@@ -22,8 +22,18 @@ export function stripToolTraceCard(t: string): string {
   let i = 0
 
   while (i < lines.length) {
-    if (isTraceHeader(lines[i])) {
-      i++
+    // Continuation cards have no "Tool trace" header — they open straight on a
+    // ```diff fence whose body is trace rows (Jeff 2026-07-05 pagination change).
+    // Treat a bare trace fence as a headerless trace card so history still drops it.
+    const isTraceRow = (line: string): boolean => {
+      const bare = unquote(line).trimEnd()
+      return /^[+-]\s*●\s+/.test(bare) || /^\s*⎿\s+/.test(bare)
+    }
+    const bareTraceFence = isFence(lines[i])
+      && i + 1 < lines.length
+      && isTraceRow(lines[i + 1])
+    if (isTraceHeader(lines[i]) || bareTraceFence) {
+      if (isTraceHeader(lines[i])) i++
       while (i < lines.length) {
         if (isFence(lines[i])) {
           i++

@@ -46,6 +46,34 @@ actual answer`
   assert.equal(stripToolTraceCard(input), 'actual answer')
 })
 
+test('stripBotMetadata: drops headerless trace continuation card', () => {
+  // Post-2026-07-05 pagination: only card 1 has the "Tool trace" header; the
+  // continuation cards are bare ```diff fences of trace rows. History must still
+  // drop them, or the model re-ingests its own trace and mimics the format.
+  assert.equal(stripBotMetadata('```diff\n+ ● shell(rg -n foo)\n⎿ match\n```'), '')
+  assert.equal(stripBotMetadata('```diff\n ⎿ [+3, -1]\n+  12 new line\n```'), '')
+})
+
+test('stripBotMetadata: keeps a real answer that happens to contain a diff block', () => {
+  // A genuine reply with a fenced diff (no ● / ⎿ trace rows) must survive.
+  const reply = 'here is the patch:\n```diff\n+ added a line\n- removed a line\n```'
+  assert.equal(stripBotMetadata(reply), reply)
+})
+
+test('stripToolTraceCard: strips a headerless trace continuation between prose', () => {
+  const input = `first chunk
+
+\`\`\`diff
++ ● Bash(ls)
+⎿ output
+\`\`\`
+
+second chunk`
+  assert.equal(stripToolTraceCard(input), `first chunk
+
+second chunk`)
+})
+
 test('stripToolTraceCard: strips embedded card without eating surrounding prose', () => {
   const input = `first chunk
 

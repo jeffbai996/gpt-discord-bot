@@ -89,6 +89,15 @@ function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<
 
 const MEGA_LINE_MAX = 300
 const TRACE_BODY_CHAR_BUDGET = 1800
+// Only the most recent tool calls are worth showing — a turn with 30 shell reads
+// used to spill into 15 trace cards, and editing all of them every stream tick
+// 429'd/crashed the bot (Jeff 2026-07-05: "reduce it around 10 cells"). Keep the
+// last N calls (most relevant); a header line owns up to how many were dropped.
+const MAX_TRACE_CALLS = Number(process.env.GPT_MAX_TRACE_CALLS ?? 10)
+// Collapse long edit diffs to a preview like the Claude bots — keep the first N
+// body lines, drop the rest with a "... (K more lines)" marker (Jeff 2026-07-05:
+// "have it in a collapsed view like claude bots"). Matches tool_watcher's cap.
+const MAX_DIFF_BODY_LINES = Number(process.env.GPT_MAX_DIFF_BODY_LINES ?? 12)
 
 // Codex session rollover ceiling (Jeff 2026-06-25). Each channel resumes its
 // persistent Codex session every turn (codex exec resume <id>) so gpt keeps its
@@ -205,10 +214,14 @@ function renderTraceCards(rawLines: string[]): string[] {
   }
   if (page.length) pages.push(page)
   if (!pages.length) pages.push([''])
+  // Only the first card carries the "Tool trace" header; continuations are bare
+  // fenced diffs (Jeff 2026-07-05: "after the first Tool trace you don't need to
+  // show anything, just paginate into the next code block"). Dropping the N/N
+  // label also stops every continuation re-rendering its "x/y" on each edit tick.
   return pages.map((p, i) => {
-    const label = pages.length > 1 ? ` ${i + 1}/${pages.length}` : ''
     const body = redactSecrets(p.join('\n'))
-    return `🔧 **Tool trace${label}**\n\`\`\`diff\n${body}\n\`\`\``
+    const header = i === 0 ? '🔧 **Tool trace**\n' : ''
+    return `${header}\`\`\`diff\n${body}\n\`\`\``
   })
 }
 
@@ -297,10 +310,16 @@ function formatDiff(unified: string): { badge: string; body: string[] } {
 // File edits show the [+N, -M] badge and the diff body; other tools keep [Nms].
 function buildTraceLines(toolCalls: ToolCall[]): string[] {
   const lines: string[] = []
+  // Cap at the most recent MAX_TRACE_CALLS (a long turn otherwise sprawls into many
+  // cards that 429 the edit loop). Slice on the chronological list BEFORE reordering
+  // so "recent" means recent in time, then note how many earlier calls were dropped.
+  const dropped = Math.max(0, toolCalls.length - MAX_TRACE_CALLS)
+  const kept = dropped ? toolCalls.slice(-MAX_TRACE_CALLS) : toolCalls
+  if (dropped) lines.push(`+ ● …(+${dropped} earlier call${dropped === 1 ? '' : 's'})`)
   // Edits (with diffs) first: the diff is the payload and must not get starved by a
   // long list of shell rows below it, which the card's length cap then truncates to
   // a couple lines (Jeff 2026-06-24). Order within edits / within non-edits preserved.
-  const ordered = [...toolCalls.filter(c => c.diff), ...toolCalls.filter(c => !c.diff)]
+  const ordered = [...kept.filter(c => c.diff), ...kept.filter(c => !c.diff)]
   for (const call of ordered) {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
@@ -314,7 +333,11 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       // Bare ⎿ summary + body; renderTraceCard's padTraceLine adds the 1-cell indent.
       const { badge, body } = formatDiff(call.diff)
       lines.push(`⎿ ${badge}`)
-      for (const b of body) lines.push(b)
+      // Collapse to a preview so a big edit doesn't wall the card (Claude-bot style).
+      const shown = body.length > MAX_DIFF_BODY_LINES ? body.slice(0, MAX_DIFF_BODY_LINES) : body
+      for (const b of shown) lines.push(b)
+      const moreLines = body.length - shown.length
+      if (moreLines > 0) lines.push(`     … (${moreLines} more line${moreLines === 1 ? '' : 's'})`)
     } else if (call.resultPreview) {
       // Keep the [N lines] tag on its own continuation row so it does not make
       // the tiny output preview wrap.
