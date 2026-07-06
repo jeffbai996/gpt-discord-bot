@@ -112,6 +112,10 @@ export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extr
   return codexWatchdogPolicy(input).hardTimeoutMs
 }
 
+export function buildCodexShellScriptForTest(codexBin: string, execPart: string, errfile: string): string {
+  return `cd /tmp && "${codexBin}" ${execPart} </dev/null 2>"${errfile}"`
+}
+
 // Codex exec is single-shot (no conversation memory), so we bridge the whole
 // turn — persona + recent history + the new message — into one prompt, the same
 // way gpt.ts hands persona+history to the API. Codex web-searches on its own,
@@ -488,7 +492,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
   const watchdog = codexWatchdogPolicy(input)
-  const secs = Math.floor(watchdog.hardTimeoutMs / 1000)
   const model = input.codexModel || 'gpt-5.5'
 
   // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
@@ -509,7 +512,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // some reason"). Capture it per-turn so a failure is inspectable; the file is
   // small and overwritten each turn. (Jeff 2026-07-05)
   const errfile = `/tmp/gpt_codexerr_${randomBytes(6).toString('hex')}.log`
-  const script = `cd /tmp && timeout -k 5 ${secs} "${CODEX_BIN}" ${execPart} </dev/null 2>"${errfile}"`
+  const script = buildCodexShellScriptForTest(CODEX_BIN, execPart, errfile)
 
   // Stream codex's JSONL events line-by-line so we can surface what it's doing
   // LIVE (running cmd / searching / editing) to the placeholder via onEvent, while

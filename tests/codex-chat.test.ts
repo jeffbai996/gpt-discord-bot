@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { codexTimeoutMs, codexWatchdogPolicy, liveEvent, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexShellScriptForTest, codexTimeoutMs, codexWatchdogPolicy, liveEvent, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('liveEvent: surfaces MCP begin events from codex rollout-style JSON', () => {
   const ev = liveEvent({
@@ -190,6 +190,12 @@ test('codexTimeoutMs: a genuine QUESTION about a hang is not a throwaway ping', 
     2_700_000,
     '"what …" question needs the real window',
   )
+})
+
+test('codex shell script does not add a nested GNU timeout', () => {
+  const script = buildCodexShellScriptForTest('/bin/codex', 'exec "$CODEX_PROMPT"', '/tmp/err.log')
+  assert.equal(script.includes('timeout -k'), false)
+  assert.equal(script, 'cd /tmp && "/bin/codex" exec "$CODEX_PROMPT" </dev/null 2>"/tmp/err.log"')
 })
 
 test('codexTimeoutMs: bare status pokes still fail fast', () => {
