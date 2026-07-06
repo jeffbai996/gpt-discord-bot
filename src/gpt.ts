@@ -106,10 +106,11 @@ const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
   ?? process.env.GPT_SESSION_ROLLOVER_TOKENS
   ?? 750_000
 )
-// Match the Claude bots' tool_watcher.py caps byte-for-byte: tool-call header
-// rows <= 83 (HEADER_LINE_MAX), stdout/output lines <= 88 (Jeff 2026-06-25).
+// Match the Claude bots' tool_watcher.py caps for tool-call header rows, but keep
+// stdout/result continuation rows tiny so the second trace line doesn't sprawl
+// across Discord (Jeff 2026-07-05: "call it 10 cells").
 const ROW_W = 83
-const OUT_W = 88
+const OUT_W = 10
 
 function capMegaLine(ln: string): string {
   return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
@@ -315,9 +316,8 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       lines.push(`⎿ ${badge}`)
       for (const b of body) lines.push(b)
     } else if (call.resultPreview) {
-      // Match the output's truncation budget to the command's (71 shell / 115 other);
-      // keep the [N lines] tag on its own continuation row so it does not make
-      // the output preview wrap.
+      // Keep the [N lines] tag on its own continuation row so it does not make
+      // the tiny output preview wrap.
       const n = call.resultLines ?? 0
       let rp = call.resultPreview.replace(/\n/g, ' ')
       const cap = OUT_W
