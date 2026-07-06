@@ -93,7 +93,7 @@ const TRACE_BODY_CHAR_BUDGET = 1800
 // used to spill into 15 trace cards, and editing all of them every stream tick
 // 429'd/crashed the bot (Jeff 2026-07-05: "reduce it around 10 cells"). Keep the
 // last N calls (most relevant); a header line owns up to how many were dropped.
-const MAX_TRACE_CALLS = Number(process.env.GPT_MAX_TRACE_CALLS ?? 10)
+const MAX_TRACE_CALLS = Number(process.env.GPT_MAX_TRACE_CALLS ?? 11)
 // Collapse long edit diffs to a preview like the Claude bots — keep the first N
 // body lines, drop the rest with a "... (K more lines)" marker (Jeff 2026-07-05:
 // "have it in a collapsed view like claude bots"). Matches tool_watcher's cap.
