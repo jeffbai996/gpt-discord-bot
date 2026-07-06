@@ -115,11 +115,13 @@ const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
   ?? process.env.GPT_SESSION_ROLLOVER_TOKENS
   ?? 750_000
 )
-// Match the Claude bots' tool_watcher.py caps for tool-call header rows, but keep
-// stdout/result continuation rows tiny so the second trace line doesn't sprawl
-// across Discord (Jeff 2026-07-05: "call it 10 cells").
+// Match the Claude bots' tool_watcher.py caps: tool-call header rows <= 83, and
+// stdout/result preview rows a touch narrower so the second trace line doesn't
+// wrap. NOTE: OUT_W is the preview WIDTH in chars, not a call count — a prior fix
+// misread "reduce ~10" and chopped this to 10, which made every ⎿ preview useless
+// ([{"channe…). Restored to a readable width (Jeff 2026-07-05: trim ~10 off 88).
 const ROW_W = 83
-const OUT_W = 10
+const OUT_W = Number(process.env.GPT_OUT_W ?? 78)
 
 function capMegaLine(ln: string): string {
   return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
