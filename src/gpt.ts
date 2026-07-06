@@ -807,6 +807,20 @@ async function handleUserMessage(
   let liveTracePending = false
   let liveTraceDirty = false
   let liveTraceClosed = false
+  // Failsafe cleanup for collapse mode: the normal 60s-linger delete is only
+  // scheduled at END of turn. If the process dies mid-turn (e.g. a restart) the
+  // live cards would be orphaned forever (Jeff 2026-07-05: "tool trace failed to
+  // clear"). So the moment a card is first POSTED in collapse mode, we register a
+  // durable, generous-TTL delete on disk — DeferredActions.rearm() fires it after a
+  // restart. The end-of-turn 60s delete for the same message id is a harmless
+  // duplicate (run() no-ops when the message is already gone).
+  const failsafeArmed = new Set<string>()
+  const armTraceFailsafe = (m: Message) => {
+    if (flags.trace !== 'collapse' || failsafeArmed.has(m.id)) return
+    failsafeArmed.add(m.id)
+    const ttl = Number(process.env.GPT_TRACE_FAILSAFE_MS) || 180_000
+    deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + ttl })
+  }
   const flushLiveTrace = () => {
     if (liveTraceClosed || liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
     const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
@@ -817,7 +831,7 @@ async function handleUserMessage(
       for (let i = 0; i < cards.length; i++) {
         if (liveTraceClosed) return
         if (liveTraceMsgs[i]) await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
-        else liveTraceMsgs[i] = await traceChannel.send(cards[i])
+        else { liveTraceMsgs[i] = await traceChannel.send(cards[i]); armTraceFailsafe(liveTraceMsgs[i]) }
       }
       for (const stale of liveTraceMsgs.slice(cards.length)) {
         if (liveTraceClosed) return
@@ -1221,7 +1235,7 @@ async function handleUserMessage(
         if (liveTraceMsgs[i]) {
           try { await liveTraceMsgs[i].edit(cards[i]) } catch {}
         } else {
-          try { liveTraceMsgs[i] = await message.channel.send(cards[i]) } catch {}
+          try { liveTraceMsgs[i] = await message.channel.send(cards[i]); armTraceFailsafe(liveTraceMsgs[i]) } catch {}
         }
       }
       for (const stale of liveTraceMsgs.slice(cards.length)) {
