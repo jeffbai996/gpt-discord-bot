@@ -40,7 +40,13 @@ function stateDir(): string {
   return process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 }
 
-const AGENTS_MD_PATH = path.join(os.homedir(), 'local-projects', 'codex', 'AGENTS.md')
+const AGENTS_MD_PATHS = [
+  path.join(process.cwd(), 'AGENTS.md'),
+  path.join(os.homedir(), 'repos', 'gpt-bot', 'AGENTS.md'),
+  // Legacy fallback from the first Codex port. Keep it last only so unusual
+  // launch cwd setups still get *some* deep context instead of none.
+  path.join(os.homedir(), 'local-projects', 'codex', 'AGENTS.md'),
+]
 
 export class PersonaLoader {
   private persona: string = DEFAULT_PERSONA
@@ -65,10 +71,14 @@ export class PersonaLoader {
     if (filename) this.activePersonaFile = filename
     this.persona = await this.readPersona(this.activePersonaFile)
     await this.discoverGuildPersonas()
-    try {
-      this.agentsDoc = (await fs.readFile(AGENTS_MD_PATH, 'utf8')).trim()
-    } catch {
-      this.agentsDoc = ''
+    this.agentsDoc = ''
+    for (const file of AGENTS_MD_PATHS) {
+      try {
+        this.agentsDoc = (await fs.readFile(file, 'utf8')).trim()
+        if (this.agentsDoc) break
+      } catch {
+        // try the next candidate
+      }
     }
   }
 

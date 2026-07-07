@@ -37,6 +37,33 @@ import OpenAI from 'openai'
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 dotenv.config({ path: path.join(STATE_DIR, '.env') })
 
+function isBadReplyReference(err: unknown): boolean {
+  const e = err as any
+  const text = `${e?.message ?? ''} ${JSON.stringify(e?.rawError ?? {})}`
+  return e?.code === 50035 && (
+    text.includes('REPLIES_CANNOT_REPLY_TO_SYSTEM_MESSAGE') ||
+    text.includes('Cannot reply to a system message') ||
+    text.includes('message_reference')
+  )
+}
+
+async function replyOrSend(message: Message, content: string): Promise<Message | null> {
+  try {
+    return await message.reply({ content, allowedMentions: { repliedUser: false } })
+  } catch (err) {
+    if (!isBadReplyReference(err)) {
+      console.error('[discord] reply failed:', err)
+    }
+    if (!message.channel.isSendable()) return null
+    try {
+      return await message.channel.send(content)
+    } catch (sendErr) {
+      console.error('[discord] fallback send failed:', sendErr)
+      return null
+    }
+  }
+}
+
 // --- Tool-trace card helpers (ported from gem-bot/src/gemma.ts) -------------
 // Tool calls render inside a ```diff``` fence as `+ ● ToolName(digest) [Nms]`
 // — the `+` makes Discord's diff highlighter color the line GREEN; a failed
@@ -763,9 +790,11 @@ async function handleUserMessage(
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (workMessage) { startSpinner(); return }
     try {
-      workMessage = await message.reply(`💭 ✻ **${effortLabel}…**`)
-      placeholderId = workMessage.id
-      pendingPlaceholders.track(message.channel.id, workMessage.id, message.id)
+      workMessage = await replyOrSend(message, `💭 ✻ **${effortLabel}…**`)
+      if (workMessage) {
+        placeholderId = workMessage.id
+        pendingPlaceholders.track(message.channel.id, workMessage.id, message.id)
+      }
     } catch (e) {
       console.error('placeholder reply failed:', e)
     }
@@ -1275,7 +1304,7 @@ async function handleUserMessage(
           mergedMsg = workMessage
           workMessage = null
         } else {
-          mergedMsg = await message.reply(firstWithThought)
+          mergedMsg = await replyOrSend(message, firstWithThought)
         }
       } else if (message.channel.isSendable()) {
         await message.channel.send(parts[i])
@@ -1338,7 +1367,7 @@ async function handleUserMessage(
     await deleteLiveTrace()
     try {
       if (workMessage) await workMessage.edit(errMsg)
-      else await message.reply(errMsg)
+      else await replyOrSend(message, errMsg)
     } catch {}
   } finally {
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
