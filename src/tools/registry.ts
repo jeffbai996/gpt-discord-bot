@@ -15,7 +15,7 @@ export interface ToolContext {
 // JSONSchema fragment describing the tool's args. Using a loose `unknown`
 // instead of importing OpenAI's full schema type keeps the surface portable
 // (e.g. for re-emitting via the MCP bridge in v0.10).
-export type ToolParameters = {
+type ToolParameters = {
   type: 'object'
   properties: Record<string, unknown>
   required?: string[]

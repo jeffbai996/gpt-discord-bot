@@ -2,7 +2,7 @@ export type ReactionAction =
   | 'regenerate' | 'expand' | 'pin' | 'delete'
   | 'mute' | 'unmute' | 'markForEdit'
 
-export const REACTION_ACTIONS: Record<string, ReactionAction> = {
+const REACTION_ACTIONS: Record<string, ReactionAction> = {
   '🔁': 'regenerate',
   '🔍': 'expand',
   '📌': 'pin',

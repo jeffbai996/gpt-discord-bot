@@ -30,13 +30,13 @@ const TEXT_MIMES = new Set([
 ])
 const TEXT_INLINE_BYTE_CAP = 100 * 1024
 
-export type SkipReason =
+type SkipReason =
   | 'too_large'
   | 'unsupported_type'
   | 'download_failed'
   | 'transcription_failed'
 
-export interface SkippedAttachment {
+interface SkippedAttachment {
   name: string
   reason: SkipReason
 }

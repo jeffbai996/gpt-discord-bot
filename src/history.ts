@@ -3,7 +3,7 @@ import type OpenAI from 'openai'
 import { selectWithinBudget, defaultCountTokens, type CountTokens } from './token-budget.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 
-export interface HistoryAttachment {
+interface HistoryAttachment {
   name: string
   url: string
   mimeType: string | null

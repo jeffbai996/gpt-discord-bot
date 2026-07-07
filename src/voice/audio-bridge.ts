@@ -13,10 +13,10 @@
  * part most likely to be subtly wrong, made the part that's easiest to prove.
  */
 
-export const DISCORD_RATE = 48000;
-export const DISCORD_CHANNELS = 2;
-export const OPENAI_RATE = 24000;
-export const OPENAI_CHANNELS = 1;
+const DISCORD_RATE = 48000;
+const DISCORD_CHANNELS = 2;
+const OPENAI_RATE = 24000;
+const OPENAI_CHANNELS = 1;
 
 const BYTES_PER_SAMPLE = 2; // PCM16
 

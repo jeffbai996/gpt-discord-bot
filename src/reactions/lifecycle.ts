@@ -26,7 +26,7 @@
  */
 import type { Message } from 'discord.js'
 
-export const EMOJI = {
+const EMOJI = {
   received:   '👀',
   ingesting:  '📎',
   thinking:   '🤔',
@@ -106,15 +106,4 @@ export async function applyLifecycle(message: Message, state: LifecycleState): P
   await message.react(emoji).catch(e => {
     console.error(`[lifecycle] react ${emoji} (${state}) failed:`, e)
   })
-}
-
-export async function dropLifecycle(message: Message, state: LifecycleState): Promise<void> {
-  const emoji = EMOJI[state]
-  if (!emoji) return
-  const me = message.client.user
-  if (!me) return
-  const r = message.reactions.cache.get(emoji)
-  if (r) {
-    await r.users.remove(me.id).catch(() => { /* fire-and-forget */ })
-  }
 }

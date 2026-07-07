@@ -13,7 +13,6 @@ import { makeUnreachableStub } from './mcp-unreachable-stub.ts'
 import type { MemoryStore } from '../memory.ts'
 
 export { ToolRegistry } from './registry.ts'
-export type { Tool, ToolContext } from './registry.ts'
 
 // Async because MCP autoload makes a streamable-HTTP connection at boot.
 export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore | null = null): Promise<ToolRegistry> {
