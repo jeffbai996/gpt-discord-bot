@@ -44,10 +44,9 @@ export async function runSummarization(
 
   const userText = `PREVIOUS SUMMARY:\n${oldSummary ?? '(none)'}\n\nNEW MESSAGES SINCE PREVIOUS SUMMARY:\n${formatted}`
 
-  // gpt-5.x rejects custom temperature + max_tokens; o-series same.
+  // gpt-5.x rejects custom temperature + max_tokens.
   const isGpt5 = deps.model.startsWith('gpt-5')
-  const isO = /^o[134]/.test(deps.model)
-  const params = isGpt5 || isO
+  const params = isGpt5
     ? { max_completion_tokens: 1500 }
     : { temperature: 0.3, max_tokens: 1500 }
 

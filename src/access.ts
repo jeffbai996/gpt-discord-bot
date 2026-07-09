@@ -1,17 +1,18 @@
 import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
+import { DEFAULT_OPENAI_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
 
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 
 export interface ChannelConfig {
   enabled: boolean
   requireMention: boolean
-  reasoning?: ReasoningEffort  // for o-series; ignored by gpt-5.x
+  reasoning?: ReasoningEffort
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
   thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
-  codexModel?: CodexModel  // default gpt-5.5 — codex engine model only
+  codexModel?: CodexModel  // default gpt-5.6 — codex engine model only
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
 }
 
@@ -55,18 +56,24 @@ function normTri(v: unknown): TriState {
   return (v === 'on' || v === 'collapse') ? v : 'off'
 }
 
-// Codex-engine models available on the flat ChatGPT sub (verified live 2026-06-25).
-// gpt-5-pro errors ("model metadata not found") and o3 is being retired — both excluded.
-// The -codex variants are OpenAI's agentic/tool-use-tuned line.
-export const CODEX_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'] as const  // -codex variants 400 on a ChatGPT account (API-only); pro/o3 also unsupported
-export type CodexModel = typeof CODEX_MODELS[number]
+function normCodexModel(v: unknown): CodexModel {
+  return (typeof v === 'string' && (CODEX_MODELS as readonly string[]).includes(v))
+    ? v as CodexModel
+    : DEFAULT_FLAGS.codexModel
+}
+
+// Keep codex/API model choices aligned: GPT-5.6 is Sol by alias, with Terra/Luna
+// available for lower-cost channels. Retired choices are intentionally excluded
+// so old saved channel config normalizes back to the default.
+export const CODEX_MODELS = OPENAI_MODELS
+export type CodexModel = OpenAIModel
 
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
   trace: 'off' as 'off' | 'on' | 'collapse',
   thinking: 'off' as 'off' | 'on' | 'collapse',
   engine: 'codex' as 'codex' | 'api',
-  codexModel: 'gpt-5.5' as CodexModel,
+  codexModel: DEFAULT_OPENAI_MODEL as CodexModel,
   counter: 'both' as 'off' | 'token' | 'both',
 }
 
@@ -154,7 +161,7 @@ export class AccessManager {
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
       thinking: normTri(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
-      codexModel: flags?.codexModel ?? existing?.codexModel ?? DEFAULT_FLAGS.codexModel,
+      codexModel: normCodexModel(flags?.codexModel ?? existing?.codexModel),
       counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,
     }
     await this.save()
@@ -171,13 +178,16 @@ export class AccessManager {
     if (patch.reasoning !== undefined && !VALID_REASONING.includes(patch.reasoning)) {
       throw new Error(`invalid reasoning effort "${patch.reasoning}" — must be one of: ${VALID_REASONING.join(', ')}`)
     }
+    if (patch.codexModel !== undefined && !(CODEX_MODELS as readonly string[]).includes(patch.codexModel)) {
+      throw new Error(`invalid codex model "${patch.codexModel}" — must be one of: ${CODEX_MODELS.join(', ')}`)
+    }
     this.data.channels[channelId] = {
       ...existing,
       ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
       ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
-      ...(patch.codexModel !== undefined ? { codexModel: patch.codexModel } : {}),
+      ...(patch.codexModel !== undefined ? { codexModel: normCodexModel(patch.codexModel) } : {}),
       ...(patch.counter !== undefined ? { counter: patch.counter } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }
@@ -192,7 +202,7 @@ export class AccessManager {
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
       thinking: channel?.thinking ?? DEFAULT_FLAGS.thinking,
       engine: channel?.engine ?? DEFAULT_FLAGS.engine,
-      codexModel: channel?.codexModel ?? DEFAULT_FLAGS.codexModel,
+      codexModel: normCodexModel(channel?.codexModel),
       counter: channel?.counter ?? DEFAULT_FLAGS.counter,
       requireMention: channel?.requireMention,
     }

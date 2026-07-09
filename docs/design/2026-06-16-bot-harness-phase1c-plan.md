@@ -36,7 +36,7 @@ import { test } from 'node:test'; import assert from 'node:assert/strict'
 
 test('createProvider returns the provider named by config', () => {
   const base: BotConfig = {
-    id: 'gpt', provider: 'openai', model: 'gpt-5.4-mini', apiKey: 'k',
+    id: 'gpt', provider: 'openai', model: 'gpt-5.6-luna', apiKey: 'k',
     stateDir: '/tmp/x', personaPath: '/tmp/p.md', mcpServers: [], voice: false
   }
   assert.equal(createProvider(base).id, 'openai')
@@ -127,7 +127,7 @@ import path from 'path'; import os from 'os'
 const config: BotConfig = {
   id: 'gpt',
   provider: 'openai',
-  model: process.env.GPT_MODEL || 'gpt-5.4-mini',
+  model: process.env.GPT_MODEL || 'gpt-5.6',
   apiKey: process.env.OPENAI_API_KEY!,
   stateDir: process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord'),
   personaPath: /* existing persona path */ '',

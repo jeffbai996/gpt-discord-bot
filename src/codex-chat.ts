@@ -29,7 +29,7 @@ export class CodexStoppedError extends Error {
 
 const execFileAsync = promisify(execFile)
 
-// Same binary the codex *tool* uses — Codex (OpenAI gpt-5.5) under nvm v22.
+// Same binary the codex *tool* uses — Codex (OpenAI GPT-5.6) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
 // Watchdog policy, not a guessed "turn should be done by now" timer.
 // Real repo work can run for a long time as long as Codex is still emitting JSONL
@@ -492,7 +492,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
   const watchdog = codexWatchdogPolicy(input)
-  const model = input.codexModel || 'gpt-5.5'
+  const model = input.codexModel || 'gpt-5.6'
 
   // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
   // env (CODEX_PROMPT) so user text can't break out of the shell. `exec resume` is

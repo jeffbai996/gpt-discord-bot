@@ -19,7 +19,7 @@ export interface ToolCall {
 
 export type LifecycleEvent =
   | { type: 'thinking_start' }
-  | { type: 'reasoning_start' }   // first reasoning_summary token (o-series / gpt-5 reasoning)
+  | { type: 'reasoning_start' }   // first reasoning_summary token (gpt-5 reasoning)
   | { type: 'first_token' }       // first reply content token observed
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
   | { type: 'status', label: string }  // live activity status (codex tool events)
@@ -70,11 +70,11 @@ export interface RespondResult extends ParsedResponse {
     totalTokens: number
     // OpenAI's automatic prompt-prefix caching credits hits as
     // usage.input_tokens_details.cached_tokens in the Responses usage block.
-    // gpt-4o, gpt-5, and the o-series all support it; cached input tokens
+    // gpt-4o and gpt-5 support it; cached input tokens
     // bill at ~50% of the normal rate. Surface here so callers can log
     // cache health without re-parsing the upstream payload.
     cachedInputTokens: number
-    // reasoning_tokens are billed separately on o-series + gpt-5 (internal
+    // reasoning_tokens are billed separately on gpt-5 (internal
     // chain-of-thought), reported via output_tokens_details.reasoning_tokens.
     // Already counted toward outputTokens but worth surfacing for telemetry
     // (lets you see how much the model spent reasoning vs replying).
@@ -144,23 +144,18 @@ const REPLY_JSON_SCHEMA = {
   additionalProperties: false,
 } as const
 
-// o-series models accept `reasoning` and reject `temperature`.
-function isReasoningModel(model: string): boolean {
-  return model.startsWith('o1') || model.startsWith('o3') || model.startsWith('o4')
-}
-
 // gpt-5.x rejects custom `temperature` (only the default is supported). On the
-// Responses API the o-series and gpt-5 reasoning families take the `reasoning`
+// Responses API the gpt-5 reasoning family takes the `reasoning`
 // block; legacy gpt-4.x still accepts `temperature`. We don't expose 4.x in the
 // channel flag, so keying off the model prefix is sufficient.
 function isGpt5Family(model: string): boolean {
   return model.startsWith('gpt-5')
 }
 
-// gpt-5.x are reasoning models too — they accept the Responses `reasoning`
-// block (effort + summary). The o-series obviously do. gpt-4.x do not.
+// gpt-5.x accepts the Responses `reasoning` block (effort + summary).
+// Legacy gpt-4.x does not.
 function supportsReasoning(model: string): boolean {
-  return isReasoningModel(model) || isGpt5Family(model)
+  return isGpt5Family(model)
 }
 
 // Compact, capped preview of a tool result string for the trace card. Mirrors

@@ -11,7 +11,7 @@ const TIMEOUT_MS = 230_000 // ~4 min — this runs in the bot's own process, so 
 // no Claude-Code 60s hook ceiling (unlike the shared-context /code passthrough).
 const OUT_CAP = 6000
 
-// Codex — OpenAI's agentic CLI (gpt-5.5) — exposed as a function tool. The bot
+// Codex — OpenAI's agentic CLI (GPT-5.6) — exposed as a function tool. The bot
 // runs on the same host as the repos and the codex binary, so we exec it locally
 // and async. Read-only: it inspects code, never modifies it. The MODEL decides
 // when to reach for it (repo-aware questions), so the user never types a prefix.
@@ -19,7 +19,7 @@ export function makeCodexTool(): Tool {
   return {
     name: 'codex',
     description:
-      'Run Codex — an agentic CLI (OpenAI gpt-5.5) that READS a repository on this host and answers deeply about its code: explain a flow, find where something is implemented, audit for bugs, or reason across multiple files. Use this whenever a question is about THIS host\'s codebases instead of guessing. Read-only — never modifies files. Slower than answering directly (~15-60s), so reserve it for questions that genuinely need to inspect the code.',
+      'Run Codex — an agentic CLI (OpenAI GPT-5.6) that READS a repository on this host and answers deeply about its code: explain a flow, find where something is implemented, audit for bugs, or reason across multiple files. Use this whenever a question is about THIS host\'s codebases instead of guessing. Read-only — never modifies files. Slower than answering directly (~15-60s), so reserve it for questions that genuinely need to inspect the code.',
     parameters: {
       type: 'object',
       properties: {

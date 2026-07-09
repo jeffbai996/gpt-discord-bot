@@ -32,6 +32,7 @@ import { SummarizationScheduler } from './summarization/scheduler.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
+import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -421,10 +422,7 @@ if (!process.env.OPENAI_API_KEY) {
 const DISCORD_TOKEN: string = process.env.DISCORD_BOT_TOKEN
 const APP_ID: string = process.env.DISCORD_APP_ID
 const OPENAI_KEY: string = process.env.OPENAI_API_KEY
-// Default to the cheap model. gpt-5.5 is $5/$30 per 1M tokens — 6x the cost
-// of gpt-5.4-mini ($0.75/$4.50). Channels can still override via
-// /gpt set model gpt-5.5 (see commands.ts ALLOWED_MODELS).
-const DEFAULT_MODEL: string = process.env.GPT_MODEL || 'gpt-5.5'
+const DEFAULT_MODEL: string = process.env.GPT_MODEL || DEFAULT_OPENAI_MODEL
 const ADMIN_USER_ID: string | undefined = process.env.DISCORD_ADMIN_USER_ID
 const DEFAULT_PRESENCE_TEXT = '📎 actually, on reflection—'
 
@@ -484,7 +482,7 @@ const toolRegistry = await buildDefaultRegistry(openaiRaw, memoryStore)
 // available — summaries persist into the same conversation_summaries table.
 const SUMMARIZATION_THRESHOLD = parseInt(process.env.GPT_SUMMARIZATION_THRESHOLD ?? '50', 10)
 const SUMMARIZATION_BATCH_LIMIT = parseInt(process.env.GPT_SUMMARIZATION_BATCH_LIMIT ?? '500', 10)
-const SUMMARIZATION_MODEL = process.env.GPT_SUMMARIZATION_MODEL ?? 'gpt-5.4-mini'
+const SUMMARIZATION_MODEL = process.env.GPT_SUMMARIZATION_MODEL ?? DEFAULT_SUMMARIZATION_MODEL
 const summaryStore = memoryStore ? SummaryStore.fromMemory(memoryStore) : null
 if (summaryStore) persona.setSummaryStore(summaryStore)
 const summarizer: SummarizationScheduler | null = (memoryStore && summaryStore)
@@ -1227,8 +1225,8 @@ async function handleUserMessage(
     // Thinking + trace cards belong ABOVE the reply (the intended "here's my
     // reasoning / what I ran, then the answer" order). The reply normally reuses
     // the streaming placeholder, which was posted at TURN START and so sits at
-    // the top — editing it there would push these cards below the reply (the o3
-    // "reasoning under the output" report; it's not o3-specific, it's every
+    // the top — editing it there would push these cards below the reply (the
+    // old "reasoning under the output" report; it affects every
     // model that emits a reasoning summary or runs a tool). Fix: when a card
     // will post and the placeholder is ours, drop it and let the reply repost as
     // a fresh message BELOW the cards. (Expansion flow edits an existing message

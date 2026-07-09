@@ -9,7 +9,7 @@
  *   👀 received   — message accepted, before any work
  *   📎 ingesting  — processing attachments before generate (v0.5+)
  *   🤔 thinking   — model call in flight
- *   🧠 reasoning  — o-series reasoning summary or gpt-5.x thought signal (v0.4+)
+ *   🧠 reasoning  — gpt-5.x reasoning summary / thought signal (v0.4+)
  *   🌐 searching  — web_search grounding fired this turn (v0.6+)
  *   🔧 tooling    — function-call (fetch_url, search_memory, …) running (v0.6+)
  *

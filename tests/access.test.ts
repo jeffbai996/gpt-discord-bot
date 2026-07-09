@@ -40,12 +40,27 @@ test('access: setChannelFlags preserves enabled/requireMention', async () => {
   await a.load()
   await a.allowUser('u1')
   await a.setChannel('c1', true, true)
-  await a.setChannelFlags('c1', { codexModel: 'gpt-5.4', reasoning: 'high' })
+  await a.setChannelFlags('c1', { codexModel: 'gpt-5.6-terra', reasoning: 'high' })
 
   const flags = a.channelFlags('c1')
-  assert.equal(flags.codexModel, 'gpt-5.4')
+  assert.equal(flags.codexModel, 'gpt-5.6-terra')
   assert.equal(flags.reasoning, 'high')
   assert.equal(a.canHandle({ channelId: 'c1', userId: 'u1', isMention: true }), true)
+})
+
+test('access: retired saved codexModel normalizes to current default', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c1', true, false)
+
+  const file = path.join(tmpDir, 'access.json')
+  const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+  raw.channels.c1.codexModel = 'retired-model'
+  await fs.writeFile(file, JSON.stringify(raw, null, 2))
+
+  await a.load()
+  const flags = a.channelFlags('c1')
+  assert.equal(flags.codexModel, 'gpt-5.6')
 })
 
 // NOTE: the per-channel API `model` override was removed 2026-06-29 (orphaned —

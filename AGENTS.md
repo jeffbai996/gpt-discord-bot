@@ -4,7 +4,7 @@ This document provides context for agents working on `gpt-bot`.
 
 ## Project Overview
 
-A standalone Discord bot using Discord.js and the OpenAI API (default `gpt-5.5`, with `gpt-5.4-mini` and `o3` available as manual switches per channel). Acts as an intelligent assistant with full multimodal input (Images, Audio, Documents) and tool-use (web_search, fetch_url, RAG over channel history, optional MCP integrations).
+A standalone Discord bot using Discord.js and the OpenAI API (default `gpt-5.6`, with `gpt-5.6-terra` and `gpt-5.6-luna` available as manual switches per channel). Acts as an intelligent assistant with full multimodal input (Images, Audio, Documents) and tool-use (web_search, fetch_url, RAG over channel history, optional MCP integrations).
 
 Sibling project: `gem-discord-bot` (Gemini-backed). The two are designed to coexist in the same Discord guild without looping or double-replying.
 

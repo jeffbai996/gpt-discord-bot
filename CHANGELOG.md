@@ -13,7 +13,7 @@ This repo is the OpenAI sibling of [gem-discord-bot](https://github.com/jeffbai9
 Catches up with gem-discord-bot changes that landed during gem's voice work (May 19-20). Voice itself is deferred — gem-voice is gem-specific (Gemini Live API + custom IPC daemon) and OpenAI's Realtime equivalent would need its own daemon; not in scope for this pass.
 
 - **Per-guild persona override** — `PersonaLoader.load()` now also scans the state dir for `persona.<guildId>.md` siblings (where guildId is a 17-20 digit Discord snowflake). `buildSystemPrompt` takes an optional guildId and prefers the per-guild override when present. Falls through to the default for DMs (no guildId) and guilds without an override. Lookup is O(1) on an in-memory Map populated at load. (Gem parity: ports `dc10e5a9`.)
-- **`/gpt model` — swap default model + auto-restart** — new top-level subcommand. Validates against `ALLOWED_MODELS`, rewrites `OPENAI_MODEL` in `<GPT_STATE_DIR>/.env` atomically (tmp+rename, preserves comments/ordering), replies with confirmation, then schedules a detached `systemctl --user restart gpt` after 1.5s. The per-channel `/gpt set model` override still works and takes precedence at request time. New module: `src/restart.ts` with `rewriteEnvVar` + `scheduleSelfRestart`. (Gem parity: ports `b0193187`.)
+- **`/gpt model` — codex model picker** — current choices are GPT-5.6 Sol/Terra/Luna; retired choices are no longer accepted.
 - **Parser-fix verified no-op** — gem's `42063eb3` fix (unescape literal `\n` in `parseResponse` JSON-fail fallback) doesn't apply. gpt's `parseStructuredReply` + `extractPartialReply` already handle `\n`/`\r`/`\t` character-by-character and the fallback path doesn't return raw escaped strings.
 - **Voice deferred** — gem shipped `7c7fe01e` (VoiceManager), `9939a05f` (/voice slash commands), `dddd4cf9` (intent + wiring), and follow-up debug commits. The architecture requires a separate `gem-voice` IPC daemon (Unix socket at `/tmp/gem-voice.sock`) that opens the voice WebSocket itself. Porting cleanly to gpt would require building an OpenAI Realtime equivalent daemon — out of scope here. Gpt's discord.js client doesn't yet request the `GuildVoiceStates` intent and has no `/gpt voice` subcommand.
 - 6 new tests for `rewriteEnvVar` (replace-in-place, comments+ordering preserved, append-if-missing with newline, file-creates-if-missing, atomic-no-tmp-left, prefix-key rejection). Total test count: 81 (up from 75).
@@ -22,9 +22,9 @@ Catches up with gem-discord-bot changes that landed during gem's voice work (May
 
 Bring gpt-bot up to gem v0.12 equivalent for production-ready parallel use in the same server.
 
-- **Reasoning lifecycle state wired** — `🧠 reasoning` reaction now fires when an o-series or gpt-5 reasoning model emits its first reasoning-summary delta. Covers both SDK shapes (`delta.reasoning_content` legacy o1, `delta.reasoning.summary[*].delta` newer responses-style). De-duped per turn. The OpenAI analog of Gem's `native_thinking` from gemini-3 thinking parts.
+- **Reasoning lifecycle state wired** — `🧠 reasoning` reaction now fires when a gpt-5 reasoning model emits its first reasoning-summary delta. De-duped per turn. The OpenAI analog of Gem's `native_thinking` from gemini-3 thinking parts.
 - **Outbound react validator wired** — `isValidOutboundReactEmoji` existed in `reactions/vocabulary.ts` with full test coverage but was never imported. The model's structured-output `react` field is now gated; custom Discord emoji names (`:pack_sticker_14:` etc) get silently dropped + logged instead of bothering Discord with calls that return 10014 'Unknown Emoji'.
-- **Cache + reasoning token telemetry** — `RespondResult.usage` adds `cachedInputTokens` (from `prompt_tokens_details.cached_tokens`, OpenAI's automatic prefix caching) and `reasoningTokens` (from `completion_tokens_details.reasoning_tokens`, o-series + gpt-5 internal CoT cost). Accumulated across tool-loop iterations. Verbose footer renders both inline only when nonzero, e.g. `↑ 4,231 (cached 3,840) ↓ 512 (reasoning 192) » 2.3s gpt-5`.
+- **Cache + reasoning token telemetry** — `RespondResult.usage` adds `cachedInputTokens` (from `prompt_tokens_details.cached_tokens`, OpenAI's automatic prefix caching) and `reasoningTokens` (from `completion_tokens_details.reasoning_tokens`, gpt-5 internal reasoning cost). Accumulated across tool-loop iterations. Verbose footer renders both inline only when nonzero, e.g. `↑ 4,231 (cached 3,840) ↓ 512 (reasoning 192) » 2.3s gpt-5`.
 - **`/gpt cache info` slash subcommand** — rolling per-channel telemetry. `src/cache-stats.ts` ring-buffers the last 50 turns; `snapshot(channelId)` aggregates hit rate, totals, distinct models seen, window age. Card surfaces all that ephemerally. OpenAI's caching is automatic with no TTL/flush controls, so the card explains as much. (Gem's `/gemini cache ttl|flush` don't port — they're Gemini-specific.)
 - 8 new tests for `cache-stats` (empty channel, single turn, accumulation, ring-buffer cap, channel isolation, model tracking, null-usage skip, zero-input edge case). Total test count: 75 (up from 67).
 
@@ -45,12 +45,12 @@ Auto-discovers and registers tools exposed by an external MCP server, transparen
 Persistent rolling per-channel summaries, injected into the system prompt for older context. Lets the bot remember channels with thousands of messages without overflowing the prompt window.
 
 - `src/summarization/store.ts` — `SummaryStore` wraps the `conversation_summaries` SQLite table (added to `MemoryStore` schema). DI surface (`getSummary` / `upsertSummary`) lets tests swap in a fake.
-- `src/summarization/summarizer.ts` — `runSummarization()` builds the prompt (previous summary + new messages since last cutoff) and runs a one-shot completion. Param shape branches on model family (gpt-5.x and o-series take `max_completion_tokens` only; legacy models keep `temperature` + `max_tokens`).
+- `src/summarization/summarizer.ts` — `runSummarization()` builds the prompt (previous summary + new messages since last cutoff) and runs a one-shot completion. Param shape branches on model family (gpt-5.x takes `max_completion_tokens` only; legacy models keep `temperature` + `max_tokens`).
 - `src/summarization/scheduler.ts` — `SummarizationScheduler` is single-flight per channel and fire-and-forget from the caller. `scheduleIfNeeded(channelId)` runs only when the un-summarized message count crosses the threshold (default 50, configurable via `GPT_SUMMARIZATION_THRESHOLD`). `runForChannel(channelId)` forces an immediate rollup regardless of threshold (used by `/gpt compact`).
 - `gpt.ts` schedules summarization after every passive ingest. Dependency-graceful: when the native sqlite-vss / better-sqlite3 modules fail to load, the scheduler is null and ingestion / summarization both skip.
 - `PersonaLoader.buildSystemPrompt()` injects the channel's summary above the pinned-facts block when a summary exists.
 - `/gpt compact` slash command — forces a rollup now and reports the message count back to the user (or "nothing new to summarize").
-- `GPT_SUMMARIZATION_MODEL` defaults to `gpt-5.4-mini` because summarization is a low-bar synthesis task and the latency/cost wins are real.
+- `GPT_SUMMARIZATION_MODEL` defaults to `gpt-5.6-luna` because summarization is a low-bar synthesis task and the latency/cost wins are real.
 - 7 new tests cover the summarizer (empty input throws, summary trimmed, last-id correct), store DI, and scheduler flow (skips below threshold, runs when met, forced rollup with 0/N messages).
 
 ## v0.8 — reaction-driven actions
@@ -100,7 +100,7 @@ Pluggable function-calling tools. The model can now decide it needs to read a UR
 - jsdom + readability are dynamically imported so the rest of the test suite stays green on Node versions that don't satisfy jsdom's modern-ArrayBuffer requirements (Node 22+ for the actual HTML pipeline).
 - 14 new tests cover registry behavior, IPv4/IPv6 SSRF guard, scheme rejection, content extraction, and the public fetch_url tool surface.
 
-Verified end-to-end live: gpt-5.5 successfully called `fetch_url("https://example.com")`, ingested the page, and composed a grounded reply.
+Verified end-to-end live: gpt-5.6 successfully called `fetch_url("https://example.com")`, ingested the page, and composed a grounded reply.
 
 ## v0.5 — multimodal + DM intent
 
@@ -116,7 +116,7 @@ Adds image understanding, audio transcription, text-file extraction, and DM chan
 - `gpt.ts` — discord client gains `DirectMessages` + `DirectMessageReactions` + `DirectMessageTyping` intents. The 📎 ingesting lifecycle reaction fires only when there's actually an attachment to process; plain-text messages skip it.
 - Tests cover empty / image / oversized / unsupported / charset-suffix paths.
 
-Verified end-to-end: gpt-5.5 received a red placeholder image and correctly described it as "Red." through our `respond()` wrapper.
+Verified end-to-end: gpt-5.6 received a red placeholder image and correctly described it as "Red." through our `respond()` wrapper.
 
 ## v0.4 — streaming + lifecycle reactions
 
@@ -131,7 +131,7 @@ Replies stream into Discord as the model generates, and lifecycle reactions surf
 
 First version that actually talks to OpenAI. Non-streaming, no tools, no multimodal — just system prompt + history + user message → reply.
 
-- `src/openai.ts` — `OpenAIClient.respond()` returns structured `{ react, reply, usage, finishReason, durationMs, modelUsed }`. Uses Chat Completions with `response_format: { type: "json_object" }` for the structured shape. Reasoning models (`o1*`/`o3*`/`o4*`) use `reasoning_effort` instead of `temperature`+`max_tokens`. `'minimal'` reasoning collapses to `'low'` until the SDK catches up.
+- `src/openai.ts` — `OpenAIClient.respond()` returns structured `{ react, reply, usage, finishReason, durationMs, modelUsed }`. Uses Chat Completions with `response_format: { type: "json_object" }` for the structured shape. GPT-5 models use `reasoning_effort` instead of `temperature`+`max_tokens`. `'minimal'` reasoning collapses to `'low'` until the SDK catches up.
 - `src/history.ts` — `fetchHistory()` pulls the most recent 30 Discord messages before the current one. `formatHistoryForOpenAI()` converts to Chat Completions message shape, mapping bot messages to `assistant` and everyone else to `user` (author name prefixed inside content). `stripBotMetadata()` drops `-#` footer lines from the bot's past replies before feeding back so the model doesn't pattern-match its own footer format.
 - `OpenAIRequestRejected` typed exception for rate-limit/quota and content-policy refusals — emitted as `⚠️` instead of `❌` in the user-facing error.
 - `gpt.ts` — placeholder `💭 thinking…` reply, edits to the final response on completion. Silent-exit if model returns empty `{react: null, reply: ""}`. Verbose footer (`-# ↑ N · ↓ N · » Ns · model`) when channel flag enables it.

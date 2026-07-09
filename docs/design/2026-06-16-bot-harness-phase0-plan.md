@@ -155,9 +155,9 @@ Append to `tests/core/provider.test.ts`:
 import { OpenAIProvider } from '../../src/openai.ts'
 
 test('OpenAIProvider conforms to Provider with correct capabilities', () => {
-  const p: Provider = new OpenAIProvider('sk-test', 'gpt-5.5')
+  const p: Provider = new OpenAIProvider('sk-test', 'gpt-5.6')
   assert.equal(p.id, 'openai')
-  assert.equal(p.defaultModel, 'gpt-5.5')
+  assert.equal(p.defaultModel, 'gpt-5.6')
   assert.equal(p.capabilities.voice, false)
   assert.equal(p.capabilities.managedCache, false)
   assert.equal(p.capabilities.nativeWebSearch, false)
