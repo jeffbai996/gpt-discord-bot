@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { recordTurn, snapshot, _reset } from '../src/cache-stats.ts'
 import type { RespondResult } from '../src/openai.ts'
 
-function makeResult(over: Partial<RespondResult['usage']> = {}, model = 'gpt-5.6'): RespondResult {
+function makeResult(over: Partial<RespondResult['usage']> = {}, model = 'gpt-5.6-sol'): RespondResult {
   return {
     react: null,
     reply: '',
@@ -39,7 +39,7 @@ test('cache-stats: records a turn and reports it', () => {
   assert.equal(s.inputTokens, 1000)
   assert.equal(s.cachedInputTokens, 800)
   assert.equal(s.cacheHitRate, 0.8)
-  assert.deepEqual(s.models, ['gpt-5.6'])
+  assert.deepEqual(s.models, ['gpt-5.6-sol'])
 })
 
 test('cache-stats: accumulates across turns', () => {
@@ -73,12 +73,12 @@ test('cache-stats: channels are isolated', () => {
 
 test('cache-stats: tracks distinct models in window', () => {
   _reset()
-  recordTurn('ch1', makeResult({}, 'gpt-5.6'))
+  recordTurn('ch1', makeResult({}, 'gpt-5.6-sol'))
   recordTurn('ch1', makeResult({}, 'gpt-5.6-terra'))
-  recordTurn('ch1', makeResult({}, 'gpt-5.6'))
+  recordTurn('ch1', makeResult({}, 'gpt-5.6-sol'))
   const s = snapshot('ch1')
   assert.equal(s.models.length, 2)
-  assert.ok(s.models.includes('gpt-5.6'))
+  assert.ok(s.models.includes('gpt-5.6-sol'))
   assert.ok(s.models.includes('gpt-5.6-terra'))
 })
 
@@ -90,7 +90,7 @@ test('cache-stats: ignores turns with no usage', () => {
     usage: null,
     finishReason: 'stop',
     durationMs: 1,
-    modelUsed: 'gpt-5.6',
+    modelUsed: 'gpt-5.6-sol',
     reasoning: '',
     toolCalls: [],
   })

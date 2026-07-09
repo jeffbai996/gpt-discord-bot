@@ -12,7 +12,7 @@ export interface ChannelConfig {
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
   thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
-  codexModel?: CodexModel  // default gpt-5.6 — codex engine model only
+  codexModel?: CodexModel  // default gpt-5.6-sol — codex engine model only
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
 }
 
@@ -62,8 +62,8 @@ function normCodexModel(v: unknown): CodexModel {
     : DEFAULT_FLAGS.codexModel
 }
 
-// Keep codex/API model choices aligned: GPT-5.6 is Sol by alias, with Terra/Luna
-// available for lower-cost channels. Retired choices are intentionally excluded
+// Keep codex/API model choices aligned. The API slug is explicitly `gpt-5.6-sol`;
+// `gpt-5.6` is not a valid alias. Retired choices are intentionally excluded
 // so old saved channel config normalizes back to the default.
 export const CODEX_MODELS = OPENAI_MODELS
 export type CodexModel = OpenAIModel

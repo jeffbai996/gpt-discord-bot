@@ -18,7 +18,7 @@ function fakeOpenAI(replyContent: string) {
 
 test('runSummarization: empty messages throws', async () => {
   await assert.rejects(
-    () => runSummarization(null, [], { client: fakeOpenAI('x'), model: 'gpt-5.6' }),
+    () => runSummarization(null, [], { client: fakeOpenAI('x'), model: 'gpt-5.6-sol' }),
     /empty/
   )
 })
@@ -30,7 +30,7 @@ test('runSummarization: returns trimmed summary + last message id', async () => 
       { authorName: 'a', content: 'hi', timestamp: '2025-01-01', messageId: '100' },
       { authorName: 'b', content: 'hello', timestamp: '2025-01-02', messageId: '200' }
     ],
-    { client: fakeOpenAI('  channel summary text  '), model: 'gpt-5.6' }
+    { client: fakeOpenAI('  channel summary text  '), model: 'gpt-5.6-sol' }
   )
   assert.equal(out.summary, 'channel summary text')
   assert.equal(out.lastMessageId, '200')
@@ -63,7 +63,7 @@ test('SummarizationScheduler: skips when below threshold', async () => {
     store,
     fetchSinceForSummarization: async () => [{ authorName: 'a', content: 'hi', timestamp: 't', messageId: '1' }],
     client: fakeOpenAI('summary'),
-    model: 'gpt-5.6',
+    model: 'gpt-5.6-sol',
     threshold: 50
   })
   scheduler.scheduleIfNeeded('c1')
@@ -88,7 +88,7 @@ test('SummarizationScheduler: runs and upserts when threshold met', async () => 
     store,
     fetchSinceForSummarization: async () => messages,
     client: fakeOpenAI('rolled-up summary'),
-    model: 'gpt-5.6',
+    model: 'gpt-5.6-sol',
     threshold: 50
   })
   scheduler.scheduleIfNeeded('c1')
@@ -110,7 +110,7 @@ test('SummarizationScheduler: runForChannel returns null when nothing to summari
     store,
     fetchSinceForSummarization: async () => [],
     client: fakeOpenAI('x'),
-    model: 'gpt-5.6',
+    model: 'gpt-5.6-sol',
     threshold: 50
   })
   const result = await scheduler.runForChannel('c1')
@@ -129,7 +129,7 @@ test('SummarizationScheduler: runForChannel returns count when forced', async ()
       { authorName: 'u', content: 'b', timestamp: 't', messageId: '2' }
     ],
     client: fakeOpenAI('s'),
-    model: 'gpt-5.6',
+    model: 'gpt-5.6-sol',
     threshold: 50
   })
   const result = await scheduler.runForChannel('c1')

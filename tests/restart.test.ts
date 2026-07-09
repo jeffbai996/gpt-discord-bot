@@ -21,9 +21,9 @@ describe('rewriteEnvVar', () => {
 
   test('replaces an existing key in place', async () => {
     await setup('OPENAI_MODEL=gpt-5.6-luna\nDISCORD_BOT_TOKEN=abc\n')
-    await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6')
+    await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6-sol')
     const body = await fs.readFile(envPath, 'utf8')
-    assert.match(body, /^OPENAI_MODEL=gpt-5\.6$/m)
+    assert.match(body, /^OPENAI_MODEL=gpt-5\.6-sol$/m)
     // Other keys preserved.
     assert.match(body, /^DISCORD_BOT_TOKEN=abc$/m)
     // Only one model line — no duplicates.
@@ -44,7 +44,7 @@ describe('rewriteEnvVar', () => {
 
   test('appends a missing key with trailing newline', async () => {
     await setup('DISCORD_BOT_TOKEN=tok\n')
-    await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6')
+    await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6-sol')
     const body = await fs.readFile(envPath, 'utf8')
     assert.match(body, /^DISCORD_BOT_TOKEN=tok$/m)
     assert.match(body, /^OPENAI_MODEL=gpt-5\.6$/m)
@@ -54,7 +54,7 @@ describe('rewriteEnvVar', () => {
   test('creates the file if it does not exist', async () => {
     await fs.rm(tmp, { recursive: true, force: true })
     await fs.mkdir(tmp, { recursive: true })
-    await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6')
+    await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6-sol')
     const body = await fs.readFile(envPath, 'utf8')
     assert.match(body, /^OPENAI_MODEL=gpt-5\.6$/m)
   })

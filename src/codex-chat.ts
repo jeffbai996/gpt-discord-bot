@@ -492,7 +492,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const effort = mapEffort(input.reasoningEffort)
   const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
   const watchdog = codexWatchdogPolicy(input)
-  const model = input.codexModel || 'gpt-5.6'
+  const model = input.codexModel || 'gpt-5.6-sol'
 
   // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
   // env (CODEX_PROMPT) so user text can't break out of the shell. `exec resume` is

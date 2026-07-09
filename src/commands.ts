@@ -87,7 +87,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('stats')
-    .setDescription('Token usage + $-equivalent (gpt-5.6 rates; flat sub = ~$0 actual) since boot.')
+    .setDescription('Token usage + $-equivalent (gpt-5.6-sol rates; flat sub = ~$0 actual) since boot.')
   )
   .addSubcommand(s => s
     .setName('limits')
@@ -100,10 +100,11 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('model')
-    .setDescription('Codex engine model (5.6 default). Omit value to read current.')
+    .setDescription('Codex engine model (5.6 Sol default). Omit value to read current.')
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
-        { name: 'gpt-5.6 — Sol, flagship reasoning/coding', value: 'gpt-5.6' },
+        { name: 'gpt-5.5 — previous flagship', value: 'gpt-5.5' },
+        { name: 'gpt-5.6-sol — Sol, flagship reasoning/coding', value: 'gpt-5.6-sol' },
         { name: 'gpt-5.6-terra — balanced cost/intelligence', value: 'gpt-5.6-terra' },
         { name: 'gpt-5.6-luna — cheapest high-volume 5.6', value: 'gpt-5.6-luna' },
       ))
@@ -116,7 +117,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('effort')
-    .setDescription('Reasoning effort for this channel (gpt-5.6 / codex): none | low | medium | high | xhigh.')
+    .setDescription('Reasoning effort for this channel (gpt-5.6-sol / codex): none | low | medium | high | xhigh.')
     .addStringOption(o => o
       .setName('value')
       .setDescription('none | low | medium | high | xhigh')
@@ -346,7 +347,7 @@ export async function executeGptCommand(
       // Humanize big token counts so they don't sprawl: 4.39M / 45k / 1,234.
       const h = (x: number) => x >= 1e6 ? `${(x / 1e6).toFixed(2)}M` : x >= 1e4 ? `${Math.round(x / 1e3)}k` : n(x)
       const uncachedIn = Math.max(0, g.inputTokens - g.cachedInputTokens)
-      const dIn = uncachedIn * 5.00 / 1e6        // gpt-5.6 Sol, per 1M
+      const dIn = uncachedIn * 5.00 / 1e6        // gpt-5.6-sol, per 1M
       const dCached = g.cachedInputTokens * 0.50 / 1e6
       const dOut = g.outputTokens * 30.00 / 1e6
       const dTotal = dIn + dCached + dOut
@@ -364,7 +365,7 @@ export async function executeGptCommand(
         `output:   ${h(g.outputTokens)} tok  (${h(g.reasoningTokens)} reasoning)`,
         `total:    ${h(total)} tok`,
         '',
-        `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.6 Sol API rates, est.)`,
+        `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.6-sol API rates, est.)`,
         `          in $${dIn.toFixed(2)} \u00b7 cached $${dCached.toFixed(2)} \u00b7 out $${dOut.toFixed(2)}`,
         '',
         `engines:  ${engines}`,

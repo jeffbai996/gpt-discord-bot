@@ -2,7 +2,7 @@
 
 **An OpenAI-backed Discord bot whose chat engine is the `codex` CLI running on a flat ChatGPT subscription — not the metered API.** Standalone TypeScript daemon, sibling to [gem-bot](https://github.com/jeffbai996/gem-bot): same shape, different brain, built to coexist in the same guild without looping.
 
-The headline: most turns run through **codex (gpt-5.6)** on a flat sub, so chat is effectively free. The bot surfaces everything codex does — every command, web search, and file edit — as a live, Claude-Code-style tool trace, and falls back to the metered API only when codex errors or the turn carries images.
+The headline: most turns run through **codex (gpt-5.6-sol)** on a flat sub, so chat is effectively free. The bot surfaces everything codex does — every command, web search, and file edit — as a live, Claude-Code-style tool trace, and falls back to the metered API only when codex errors or the turn carries images.
 
 > **Status:** codex-as-default-engine + full Claude-style trace surface. See [CHANGELOG.md](./CHANGELOG.md) for the per-epoch breakdown.
 
@@ -40,8 +40,8 @@ The trace card (real commands, diffs first), the `💭 ✓ thought for Ns` line,
 
 | `/gpt engine` | Runs | Cost | Tools |
 |---|---|---|---|
-| **`codex`** (default) | the `codex` CLI (gpt-5.6) on a flat ChatGPT sub | ~$0 — flat sub, not metered | agentic shell: web, file read/write under configured workspace roots, local tools, network |
-| **`api`** | OpenAI Responses API (gpt-5.6) | metered per-token | the bot's own function registry (`fetch_url`, `web_search`, `search_memory`, MCP) |
+| **`codex`** (default) | the `codex` CLI (gpt-5.6-sol) on a flat ChatGPT sub | ~$0 — flat sub, not metered | agentic shell: web, file read/write under configured workspace roots, local tools, network |
+| **`api`** | OpenAI Responses API (gpt-5.6-sol) | metered per-token | the bot's own function registry (`fetch_url`, `web_search`, `search_memory`, MCP) |
 
 Codex runs `workspace-write` with network access, scoped to configured workspace roots. The bot streams codex's `--json` event log line-by-line so it can show work **live**, and reads the session **rollout** afterward to recover file-edit diffs (the `--json` stream omits hunk text). On any codex error — or when the turn has an image codex can't take — it transparently falls back to the API path.
 
@@ -75,7 +75,7 @@ Each is its own subcommand with selectable choices (no free-text):
 - **`/gpt trace off | on | collapse`** — the tool-trace card. `collapse` = show it live, keep it 120s, then delete for a clean channel.
 - **`/gpt thinking off | on | collapse`** — the reasoning-summary card.
 - **`/gpt engine codex | api`** — chat engine.
-- **`/gpt effort none | low | medium | high | xhigh`** — codex reasoning effort (gpt-5.6).
+- **`/gpt effort none | low | medium | high | xhigh`** — codex reasoning effort (gpt-5.6-sol).
 - **`/gpt counter off | token | both`** — the token/cost footer.
 - **`/gpt mention on | off`** — require an @-mention to respond.
 
@@ -90,7 +90,7 @@ Each is its own subcommand with selectable choices (no free-text):
 - **Semantic memory (RAG)** — allowed messages are embedded (`text-embedding-3-small`) into sqlite-vss; the model can `search_memory`; background summarization rolls older history into a per-channel summary above the live context.
 - **Multimodal** — images (vision), audio (whisper-transcribed), text/code files inlined; PDFs/video surfaced as `[attachments not ingested]`. (Image turns use the API path — codex can't take them.)
 - **Reaction actions** on the bot's replies — 🔁 regenerate, 🔍 expand, 📌 pin (per-channel pinned-facts injected into the prompt), ❌ delete, 🔇/🔊 mute, ✏️ edit-on-next-message.
-- **`/gpt stats`** — token burn since boot + dollar-equivalent at gpt-5.6 rates (≈ $0 actual on the flat sub), in a code block.
+- **`/gpt stats`** — token burn since boot + dollar-equivalent at gpt-5.6-sol rates (≈ $0 actual on the flat sub), in a code block.
 
 ---
 

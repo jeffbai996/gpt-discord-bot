@@ -60,7 +60,7 @@ test('access: retired saved codexModel normalizes to current default', async () 
 
   await a.load()
   const flags = a.channelFlags('c1')
-  assert.equal(flags.codexModel, 'gpt-5.6')
+  assert.equal(flags.codexModel, 'gpt-5.6-sol')
 })
 
 // NOTE: the per-channel API `model` override was removed 2026-06-29 (orphaned —
