@@ -721,6 +721,7 @@ async function handleUserMessage(
 
   let history: Awaited<ReturnType<typeof formatHistoryForOpenAI>> = []
   let rawHistory: HistoryMessage[] = []
+  let historyFetchFailed = false
   try {
     if (
       message.channel.type === 0 /* GuildText */ ||
@@ -743,7 +744,10 @@ async function handleUserMessage(
       console.error(`[history] ch=${channelId} fetched=${raw.length} afterCutoff=${rawFiltered.length} sent=${history.length}${_cutoff ? ` cutoff=${_cutoff}` : ''}`)
     }
   } catch (e) {
-    // A throw here = empty history = no context this turn. No longer silent.
+    // Empty history = no context this turn. Flagged (not just logged) so the
+    // reply carries a visible marker instead of silently degrading (Jeff
+    // 2026-07-08 — the 2026-06-29 fix only logged, the degrade was still silent).
+    historyFetchFailed = true
     console.error(`[history] FETCH FAILED for ch=${channelId} — replying with NO context:`, e)
   }
 
@@ -1590,8 +1594,13 @@ async function handleUserMessage(
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
     // literal '#### text'. Convert heading lines to bold and swallow the blank
     // line after them so `**Heading**` sits directly above its body.
+    // historyFetchFailed: the message-history fetch threw earlier this turn, so
+    // the model answered with NO conversation context — flag it visibly instead
+    // of degrading silently (Jeff 2026-07-08). Kept on top of the newer
+    // closeDanglingInlineCode pass rather than replacing it.
+    const degradedNotice = historyFetchFailed ? '⚠️ *replying with reduced context — history fetch failed*\n\n' : ''
     const replyBody = closeDanglingInlineCode((result.reply ?? '').trim())
-    const body = stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
+    const body = degradedNotice + stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim() && !result.files?.length) {
       await applyLifecycle(message, codexFailureLifecycle ?? 'silenced')
