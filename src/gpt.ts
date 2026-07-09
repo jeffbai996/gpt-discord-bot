@@ -16,6 +16,7 @@ import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
+import { RestartCoordinator, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { channelSessions } from './channel-sessions.ts'
@@ -561,6 +562,21 @@ const client = new Client({
 })
 
 let shuttingDown = false
+const restartCoordinator = new RestartCoordinator(
+  () => activeTurns.waitForIdle(),
+  () => scheduleSelfRestart('gpt', 250),
+)
+
+function requestGracefulRestart(): void {
+  const accepted = restartCoordinator.request()
+  if (!accepted) {
+    console.error('[restart] request coalesced; restart already pending')
+    return
+  }
+  shuttingDown = true
+  console.error('[restart] requested; draining active turns before asking systemd to restart')
+}
+
 function installGracefulShutdown(): void {
   const timeoutMs = Number(process.env.GPT_GRACEFUL_SHUTDOWN_MS) || 30 * 60_000
   const shutdown = (signal: string) => {
@@ -585,6 +601,7 @@ function installGracefulShutdown(): void {
   }
   process.once('SIGTERM', () => shutdown('SIGTERM'))
   process.once('SIGINT', () => shutdown('SIGINT'))
+  process.on('SIGUSR2', requestGracefulRestart)
 }
 
 installGracefulShutdown()

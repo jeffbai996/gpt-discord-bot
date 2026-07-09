@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { rewriteEnvVar } from '../src/restart.ts'
+import { RestartCoordinator, rewriteEnvVar } from '../src/restart.ts'
 
 const tmp = path.join(os.tmpdir(), `gpt-restart-test-${process.pid}`)
 const envPath = path.join(tmp, '.env')
@@ -47,7 +47,7 @@ describe('rewriteEnvVar', () => {
     await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6-sol')
     const body = await fs.readFile(envPath, 'utf8')
     assert.match(body, /^DISCORD_BOT_TOKEN=tok$/m)
-    assert.match(body, /^OPENAI_MODEL=gpt-5\.6$/m)
+    assert.match(body, /^OPENAI_MODEL=gpt-5\.6-sol$/m)
     assert.ok(body.endsWith('\n'), 'file should end with a newline')
   })
 
@@ -56,7 +56,7 @@ describe('rewriteEnvVar', () => {
     await fs.mkdir(tmp, { recursive: true })
     await rewriteEnvVar(envPath, 'OPENAI_MODEL', 'gpt-5.6-sol')
     const body = await fs.readFile(envPath, 'utf8')
-    assert.match(body, /^OPENAI_MODEL=gpt-5\.6$/m)
+    assert.match(body, /^OPENAI_MODEL=gpt-5\.6-sol$/m)
   })
 
   test('write is atomic (no .tmp left behind)', async () => {
@@ -72,5 +72,37 @@ describe('rewriteEnvVar', () => {
     const body = await fs.readFile(envPath, 'utf8')
     assert.match(body, /^OPENAI_MODEL_NICKNAME=robot$/m)
     assert.match(body, /^OPENAI_MODEL=new$/m)
+  })
+})
+
+describe('RestartCoordinator', () => {
+  test('waits for active work to become idle before launching', async () => {
+    let resolveIdle!: () => void
+    const idle = new Promise<void>(resolve => { resolveIdle = resolve })
+    let launches = 0
+    const coordinator = new RestartCoordinator(() => idle, () => { launches++ })
+
+    assert.equal(coordinator.request(), true)
+    await Promise.resolve()
+    assert.equal(launches, 0)
+
+    resolveIdle()
+    await idle
+    await Promise.resolve()
+    assert.equal(launches, 1)
+  })
+
+  test('coalesces duplicate restart requests', async () => {
+    let resolveIdle!: () => void
+    const idle = new Promise<void>(resolve => { resolveIdle = resolve })
+    let launches = 0
+    const coordinator = new RestartCoordinator(() => idle, () => { launches++ })
+
+    assert.equal(coordinator.request(), true)
+    assert.equal(coordinator.request(), false)
+    resolveIdle()
+    await idle
+    await Promise.resolve()
+    assert.equal(launches, 1)
   })
 })

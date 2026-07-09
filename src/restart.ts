@@ -16,6 +16,36 @@
 import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 
+type WaitForIdle = () => Promise<void>
+type RestartLauncher = () => void
+
+/**
+ * Coalesces restart requests and does not ask systemd to stop the service until
+ * every active turn has finished. This is deliberately separate from SIGTERM:
+ * once systemd starts a stop job, a second restart request can replace that job
+ * and SIGKILL the still-running worker even when TimeoutStopSec is generous.
+ */
+export class RestartCoordinator {
+  private pending = false
+
+  constructor(
+    private readonly waitForIdle: WaitForIdle,
+    private readonly launch: RestartLauncher,
+  ) {}
+
+  request(): boolean {
+    if (this.pending) return false
+    this.pending = true
+    void this.waitForIdle()
+      .then(() => this.launch())
+      .catch(err => {
+        this.pending = false
+        console.error('[restart] failed while waiting for idle:', err)
+      })
+    return true
+  }
+}
+
 /**
  * Atomically rewrite an `.env` file with a new value for `key`.
  * Preserves the rest of the file (comments, other vars, ordering).
@@ -56,11 +86,19 @@ export async function rewriteEnvVar(envPath: string, key: string, value: string)
  * the caller sent. systemd handles re-up; the new process re-reads .env.
  */
 export function scheduleSelfRestart(unit: string = 'gpt', delayMs: number = 1500): void {
-  // `setsid` would be ideal but isn't always present; `detached: true` plus
-  // ignoring stdio + unref() is enough on systemd-user contexts.
+  // Run the restart from a transient unit, outside the service cgroup. A
+  // detached child alone still belongs to gpt.service and can be killed by the
+  // stop operation it initiated.
+  const transientUnit = `${unit}-restart-${process.pid}-${Date.now()}`
   const proc = spawn(
-    'bash',
-    ['-c', `sleep ${(delayMs / 1000).toFixed(2)} && systemctl --user restart ${unit}`],
+    'systemd-run',
+    [
+      '--user',
+      `--unit=${transientUnit}`,
+      '--collect',
+      `--on-active=${Math.max(0.1, delayMs / 1000).toFixed(2)}s`,
+      'systemctl', '--user', 'restart', unit,
+    ],
     { detached: true, stdio: 'ignore' },
   )
   proc.unref()
