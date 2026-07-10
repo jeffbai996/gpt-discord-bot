@@ -22,6 +22,7 @@ export type LifecycleEvent =
   | { type: 'reasoning_start' }   // first reasoning_summary token (gpt-5 reasoning)
   | { type: 'first_token' }       // first reply content token observed
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
+  | { type: 'progress', reply: string }  // Codex commentary during a long turn
   | { type: 'status', label: string }  // live activity status (codex tool events)
   | { type: 'tool_start', name: string, args?: string }
   | {

@@ -1,9 +1,28 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexShellScriptForTest, codexTimeoutMs, codexWatchdogPolicy, liveEvent, mapEffort, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexShellScriptForTest, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, liveEvent, mapEffort, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
+})
+
+test('codex commentary: surfaces in-flight progress text', () => {
+  assert.equal(commentaryProgress({
+    type: 'event_msg',
+    payload: { type: 'agent_message', phase: 'commentary', message: 'tests are still running' },
+  }), 'tests are still running')
+  assert.equal(commentaryProgress({
+    type: 'event_msg',
+    payload: { type: 'agent_message', phase: 'final_answer', message: 'done' },
+  }), null)
+})
+
+test('in-flight status ping: status checks do not become barge-ins', () => {
+  assert.equal(isInFlightStatusPing('wait did this just get stuck'), true)
+  assert.equal(isInFlightStatusPing('are you still working?'), true)
+  assert.equal(isInFlightStatusPing('where\'d ya go'), true)
+  assert.equal(isInFlightStatusPing('diagnose why this got stuck and fix it'), false)
+  assert.equal(isInFlightStatusPing('stop this'), false)
 })
 
 test('liveEvent: surfaces MCP begin events from codex rollout-style JSON', () => {

@@ -372,6 +372,21 @@ export function liveEvent(ev: any): { status: string; tool?: { name: string; arg
   }
 }
 
+export function commentaryProgress(ev: any): string | null {
+  if (ev?.type !== 'event_msg'
+      || ev.payload?.type !== 'agent_message'
+      || ev.payload?.phase !== 'commentary') return null
+  const message = typeof ev.payload.message === 'string' ? ev.payload.message.trim() : ''
+  return message || null
+}
+
+export function isInFlightStatusPing(text: string): boolean {
+  const s = text.trim().toLowerCase()
+  if (!s || s.length > 180) return false
+  const statusOnly = /^(?:wait[,.! ]+)?(?:did (?:this|that|you) (?:just )?get stuck|are you (?:still )?(?:working|running|alive)|you (?:still )?(?:working|running|alive)|still (?:working|running)|where(?:'d| did) (?:you|ya) go|alive\??|ping\??)[?!. ]*$/i
+  return statusOnly.test(s)
+}
+
 // The --json exec stream omits file-edit hunk text; codex's session rollout keeps
 // it. Locate the rollout by thread_id (== the rollout filename suffix) and pull
 // each path's unified_diff from the patch_apply_end events. Best-effort.
@@ -565,6 +580,8 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
         input.onEvent?.({ type: 'status', label: ev.status })
         if (ev.tool) input.onEvent?.({ type: 'tool_start', name: ev.tool.name, args: ev.tool.args })
       }
+      const progress = commentaryProgress(obj)
+      if (progress) input.onEvent?.({ type: 'progress', reply: progress })
       if (obj?.type === 'item.completed' && obj.item) {
         const completed = toolCallsFromCompletedItem(obj.item)
         for (const call of completed) input.onEvent?.({ type: 'tool_end', ...call })

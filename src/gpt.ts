@@ -10,7 +10,7 @@ import { gptCommand, executeGptCommand } from './commands.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent, RespondResult, ToolCall } from './openai.ts'
-import { respondViaCodex } from './codex-chat.ts'
+import { isInFlightStatusPing, respondViaCodex } from './codex-chat.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
@@ -752,9 +752,14 @@ async function handleUserMessage(
   let placeholderId: string | null = null
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   let spinnerEditPromise: Promise<unknown> | null = null
+  let progressTask: Promise<void> | null = null
   const stopThinkingAnim = async () => {
     if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null }
     if (spinnerEditPromise) { await spinnerEditPromise; spinnerEditPromise = null }
+  }
+  const settleLiveUi = async () => {
+    await stopThinkingAnim()
+    if (progressTask) await progressTask
   }
   const throwIfStopped = () => {
     if (stopController.signal.aborted) throw new CodexStoppedError(0)
@@ -971,6 +976,23 @@ async function handleUserMessage(
       currentStatus = event.label
       return
     }
+    if (event.type === 'progress') {
+      const prior = progressTask
+      progressTask = (async () => {
+        if (prior) await prior
+        await postPlaceholder()
+        if (!workMessage) return
+        await stopThinkingAnim()
+        const display = event.reply.trim()
+        if (!display || display === lastEditedText) return
+        const max = 1900
+        const truncated = display.length > max ? display.slice(0, max) + '…' : display
+        lastEditAt = Date.now()
+        lastEditedText = display
+        await workMessage.edit(truncated).catch(() => {})
+      })()
+      return
+    }
     if (event.type === 'partial') {
       // Streamed content arrived before the placeholder timer fired (fast API
       // turn). Create the bubble now so there's somewhere to render — fire the
@@ -1069,7 +1091,7 @@ async function handleUserMessage(
       } catch (e) {
         if (e instanceof CodexStoppedError) {
           // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
-          await stopThinkingAnim()
+          await settleLiveUi()
           await deleteLiveTrace()
           if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
           try { await message.react('✗') } catch {}
@@ -1105,7 +1127,7 @@ async function handleUserMessage(
     // transient bubble) and the typing heartbeat, alongside the spinner.
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
-    await stopThinkingAnim()
+    await settleLiveUi()
     if (stopController.signal.aborted) throw new CodexStoppedError(result.durationMs)
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
@@ -1289,7 +1311,7 @@ async function handleUserMessage(
       liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
     }
 
-    await stopThinkingAnim()
+    await settleLiveUi()
     // "thought for Ns" sits ON TOP of the reply, in the SAME message block (Jeff
     // 2026-06-24) — small-text first line, then the answer. We reuse the placeholder
     // as the first message so the thought line replaces "thinking…" in place AND the
@@ -1359,7 +1381,7 @@ async function handleUserMessage(
   } catch (e: any) {
     if (e instanceof CodexStoppedError) {
       await applyLifecycle(message, 'interrupted')
-      await stopThinkingAnim()
+      await settleLiveUi()
       await deleteLiveTrace()
       try {
         if (workMessage) await workMessage.edit(INTERRUPTED_MARKER)
@@ -1376,7 +1398,7 @@ async function handleUserMessage(
       await applyLifecycle(message, 'errored')
     }
     const errMsg = isRejected ? `⚠️ ${e.reason}` : `❌ error: ${e?.message ?? String(e)}`
-    await stopThinkingAnim()
+    await settleLiveUi()
     console.error('respond failed:', e)
     await deleteLiveTrace()
     try {
@@ -1386,7 +1408,7 @@ async function handleUserMessage(
   } finally {
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
-    await stopThinkingAnim()
+    await settleLiveUi()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
     activeTurns.done(channelId)
   }
@@ -1465,6 +1487,11 @@ client.on('messageCreate', async (message: Message) => {
   // prevents mid-output death while still letting the queued message cut in.
   {
     const st = channelTurns.get(channelId)
+    if (st?.running && activeTurns.isActive(channelId) && isInFlightStatusPing(message.content)) {
+      void replyOrSend(message, 'still working — not stuck. latest progress is in the live reply above.')
+        .catch(() => {})
+      return
+    }
     if (st?.running && activeTurns.canRequestBarge(channelId)) {
       activeTurns.deferStopFor(channelId, { clearQueue: false })
       st.queue.unshift(message)
