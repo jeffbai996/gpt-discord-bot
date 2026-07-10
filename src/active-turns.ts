@@ -57,6 +57,23 @@ class ActiveTurns {
     return this.stopFor(channelId, { clearQueue: true })
   }
 
+  /** Resolve Discord's command context defensively. Threads and their parent
+   *  channels can produce different IDs depending on where autocomplete was
+   *  invoked. Prefer an exact candidate; if there is exactly one turn running
+   *  in the whole bot, that turn is unambiguous and safe to stop. */
+  stopResolvable(channelIds: Array<string | null | undefined>): string | null {
+    for (const channelId of channelIds) {
+      if (channelId && this.killers.has(channelId)) {
+        this.stop(channelId)
+        return channelId
+      }
+    }
+    if (this.killers.size !== 1) return null
+    const [onlyChannelId] = this.killers.keys()
+    this.stop(onlyChannelId)
+    return onlyChannelId
+  }
+
   /** Kill the in-flight turn. `clearQueue` controls whether the queue runner drops
    *  its remaining follow-ups: true for a user stop (❌ / /gpt stop — "abandon all"),
    *  false for a barge ("replace the running turn, keep any other queued messages").

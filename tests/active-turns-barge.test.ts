@@ -62,6 +62,37 @@ test('stopFor: false when no turn is running', () => {
   assert.equal(activeTurns.stopFor(c, { clearQueue: false }), false)
 })
 
+test('stopResolvable: uses an exact candidate before the sole-active fallback', () => {
+  const exact = cid()
+  const other = cid()
+  let killed = ''
+  activeTurns.register(exact, () => { killed = exact })
+  activeTurns.register(other, () => { killed = other })
+  assert.equal(activeTurns.stopResolvable(['missing', exact]), exact)
+  assert.equal(killed, exact)
+  activeTurns.done(other)
+  activeTurns.consumeStopped(exact)
+})
+
+test('stopResolvable: stops the sole active turn when Discord command context differs', () => {
+  const running = cid()
+  let killed = false
+  activeTurns.register(running, () => { killed = true })
+  assert.equal(activeTurns.stopResolvable(['discord-parent-channel']), running)
+  assert.equal(killed, true)
+  activeTurns.consumeStopped(running)
+})
+
+test('stopResolvable: refuses an ambiguous cross-channel fallback', () => {
+  const one = cid()
+  const two = cid()
+  activeTurns.register(one, () => {})
+  activeTurns.register(two, () => {})
+  assert.equal(activeTurns.stopResolvable(['missing']), null)
+  activeTurns.done(one)
+  activeTurns.done(two)
+})
+
 test('deferStopFor: records a pending barge without killing until boundary', () => {
   const c = cid()
   let killed = false

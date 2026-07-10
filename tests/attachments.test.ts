@@ -38,10 +38,16 @@ test('processAttachments: image becomes image_url part', async () => {
     size: 50_000,
     contentType: 'image/png'
   })
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from('fake-image'), {
+    status: 200,
+    headers: { 'content-type': 'image/png' },
+  })
   const out = await processAttachments([att], openaiStub)
+  globalThis.fetch = originalFetch
   assert.equal(out.imageParts.length, 1)
   assert.equal(out.imageParts[0].type, 'image_url')
-  assert.equal(out.imageParts[0].image_url.url, 'https://cdn.example/cat.png')
+  assert.equal(out.imageParts[0].image_url.url, `data:image/png;base64,${Buffer.from('fake-image').toString('base64')}`)
   assert.equal(out.skipped.length, 0)
 })
 
@@ -70,6 +76,40 @@ test('processAttachments: handles charset suffix on contentType', async () => {
     size: 5000,
     contentType: 'image/jpeg; charset=binary'
   })
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from('jpeg'), { status: 200 })
   const out = await processAttachments([att], openaiStub)
+  globalThis.fetch = originalFetch
   assert.equal(out.imageParts.length, 1)
+})
+
+test('processAttachments: infers Discord voice-note MIME from .ogg when contentType is absent', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from('opus-audio'), { status: 200 })
+  let receivedType = ''
+  const client = {
+    audio: { transcriptions: { create: async ({ file }: any) => {
+      receivedType = file.type
+      return { text: 'voice note text' }
+    } } },
+  } as any
+  const out = await processAttachments([
+    fakeAtt({ name: 'voice-message.ogg', contentType: null, size: 11 }),
+  ], client)
+  globalThis.fetch = originalFetch
+  assert.equal(receivedType, 'audio/ogg')
+  assert.match(out.text, /voice note text/)
+  assert.deepEqual(out.skipped, [])
+})
+
+test('processAttachments: failed image download is surfaced, not passed as a dead CDN URL', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response('expired', { status: 403 })
+  const out = await processAttachments([
+    fakeAtt({ name: 'expired.png', contentType: 'image/png' }),
+  ], openaiStub)
+  globalThis.fetch = originalFetch
+  assert.equal(out.imageParts.length, 0)
+  assert.equal(out.skipped[0]?.reason, 'download_failed')
+  assert.match(out.text, /expired\.png/)
 })

@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+import OpenAI, { toFile } from 'openai'
 import type { Attachment as DiscordAttachment } from 'discord.js'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
@@ -29,6 +29,21 @@ const TEXT_MIMES = new Set([
   'text/typescript', 'text/x-typescript'
 ])
 const TEXT_INLINE_BYTE_CAP = 100 * 1024
+
+const EXTENSION_MIMES: Record<string, string> = {
+  '.gif': 'image/gif', '.jpeg': 'image/jpeg', '.jpg': 'image/jpeg',
+  '.png': 'image/png', '.webp': 'image/webp',
+  '.flac': 'audio/flac', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg',
+  '.mp4': 'audio/mp4', '.oga': 'audio/ogg', '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg', '.wav': 'audio/wav', '.webm': 'audio/webm',
+}
+
+function resolvedMime(contentType: string | null, name: string): string {
+  const declared = (contentType ?? '').split(';')[0].trim().toLowerCase()
+  if (declared) return declared
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? (EXTENSION_MIMES[name.slice(dot).toLowerCase()] ?? '') : ''
+}
 
 type SkipReason =
   | 'too_large'
@@ -63,8 +78,8 @@ export async function processAttachments(
   const textBlocks: string[] = []
 
   for (const att of attachments) {
-    const mime = (att.contentType ?? '').split(';')[0].trim().toLowerCase()
     const name = att.name ?? '(unnamed)'
+    const mime = resolvedMime(att.contentType, name)
 
     if (att.size > MAX_BYTES) {
       result.skipped.push({ name, reason: 'too_large' })
@@ -72,22 +87,28 @@ export async function processAttachments(
     }
 
     if (IMAGE_MIMES.has(mime)) {
-      // gpt-5.x and gpt-4o accept `image_url` parts pointing to a publicly
-      // fetchable URL; Discord CDN URLs are public. Skips the round-trip of
-      // download → base64 → upload.
-      result.imageParts.push({
-        type: 'image_url',
-        image_url: { url: att.url }
-      })
+      try {
+        // Discord attachment URLs are signed and can expire or be rejected by
+        // OpenAI's fetcher. Download while Discord's URL is fresh and send the
+        // bytes as a data URI so vision input is deterministic.
+        const buf = await downloadToBuffer(att.url, MAX_BYTES)
+        result.imageParts.push({
+          type: 'image_url',
+          image_url: { url: `data:${mime};base64,${buf.toString('base64')}` }
+        })
+      } catch (e) {
+        console.error('image fetch failed for', name, e)
+        result.skipped.push({ name, reason: 'download_failed' })
+      }
       continue
     }
 
     if (AUDIO_MIMES.has(mime)) {
       try {
         const buf = await downloadToBuffer(att.url, MAX_BYTES)
-        // File constructor expects BlobPart[]; copy into a fresh Uint8Array
-        // so TS doesn't trip on Buffer's ArrayBufferLike vs ArrayBuffer.
-        const file = new File([new Uint8Array(buf)], name, { type: mime })
+        // Node 22 does not provide a global File constructor on this host.
+        // The SDK helper creates its Node-safe FileLike upload instead.
+        const file = await toFile(buf, name, { type: mime })
         const transcription = await client.audio.transcriptions.create({
           model: transcribeModel,
           file

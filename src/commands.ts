@@ -278,9 +278,10 @@ export async function executeGptCommand(
     }
 
     if (subcommand === 'stop') {
-      const killed = activeTurns.stop(interaction.channelId)
+      const parentId = interaction.channel?.isThread() ? interaction.channel.parentId : null
+      const stoppedChannelId = activeTurns.stopResolvable([interaction.channelId, parentId])
       return interaction.reply({
-        content: killed ? INTERRUPTED_MARKER : 'ℹ️ Nothing is running in this channel right now.',
+        content: stoppedChannelId ? INTERRUPTED_MARKER : 'ℹ️ Nothing is running in this channel right now.',
         ephemeral: true,
       })
     }
