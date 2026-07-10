@@ -10,12 +10,13 @@
 // stopping before the next tool action, where the queued replacement can run.
 type Killer = () => void
 type BusyTool = 'shell' | 'edit' | null
-type PendingStop = { clearQueue: boolean }
+type PendingStop = { clearQueue: boolean; timer: ReturnType<typeof setTimeout> | null }
 
 // Grace period (ms): a turn younger than this is never barged. Protects both a
 // just-started turn (no useful work to preserve yet is a wash — but avoids thrash on
 // rapid double-sends) and, combined with the tool guard, a near-done turn.
 export const BARGE_GRACE_MS = 4000
+export const BARGE_MAX_WAIT_MS = 8000
 
 class ActiveTurns {
   private killers = new Map<string, Killer>()
@@ -27,6 +28,7 @@ class ActiveTurns {
 
   /** respondViaCodex: record how to kill this channel's running turn. */
   register(channelId: string, kill: Killer): void {
+    this.clearPendingStop(channelId)
     this.killers.set(channelId, kill)
     this.startedAt.set(channelId, Date.now())
   }
@@ -36,7 +38,7 @@ class ActiveTurns {
     this.killers.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
-    this.pendingStops.delete(channelId)
+    this.clearPendingStop(channelId)
     this.resolveIdleIfNeeded()
   }
 
@@ -49,6 +51,9 @@ class ActiveTurns {
   /** codex-chat live loop: the destructive tool finished — safe to barge again. */
   clearBusy(channelId: string): void {
     this.busyTool.set(channelId, null)
+    // Finishing a destructive tool is itself a safe boundary. Do not wait for
+    // Codex to start another tool before handing the channel to queued input.
+    this.stopIfPending(channelId)
   }
 
   /** /gpt stop: kill the in-flight turn + mark the channel stopped so the queue
@@ -82,7 +87,7 @@ class ActiveTurns {
     const k = this.killers.get(channelId)
     if (!k) return false
     if (opts.clearQueue) this.stopped.add(channelId)
-    this.pendingStops.delete(channelId)
+    this.clearPendingStop(channelId)
     try { k() } catch { /* best-effort */ }
     this.killers.delete(channelId)
     this.startedAt.delete(channelId)
@@ -93,9 +98,24 @@ class ActiveTurns {
 
   /** Normal message barge-in: mark the running turn to be killed at the next
    *  safe lifecycle boundary instead of SIGKILLing mid-output. */
-  deferStopFor(channelId: string, opts: { clearQueue: boolean }): boolean {
+  deferStopFor(channelId: string, opts: { clearQueue: boolean; maxWaitMs?: number }): boolean {
     if (!this.killers.has(channelId)) return false
-    this.pendingStops.set(channelId, opts)
+    this.clearPendingStop(channelId)
+    const pending: PendingStop = { clearQueue: opts.clearQueue, timer: null }
+    const maxWaitMs = opts.maxWaitMs ?? BARGE_MAX_WAIT_MS
+    pending.timer = setTimeout(() => {
+      const current = this.pendingStops.get(channelId)
+      if (current !== pending || !this.killers.has(channelId)) return
+      // Never cut through a shell command or file edit. clearBusy() performs
+      // the handoff immediately after that destructive operation completes.
+      if (this.busyTool.get(channelId)) {
+        pending.timer = null
+        return
+      }
+      this.stopIfPending(channelId)
+    }, maxWaitMs)
+    pending.timer.unref?.()
+    this.pendingStops.set(channelId, pending)
     return true
   }
 
@@ -149,6 +169,12 @@ class ActiveTurns {
     const waiters = [...this.idleWaiters]
     this.idleWaiters.clear()
     for (const resolve of waiters) resolve()
+  }
+
+  private clearPendingStop(channelId: string): void {
+    const pending = this.pendingStops.get(channelId)
+    if (pending?.timer) clearTimeout(pending.timer)
+    this.pendingStops.delete(channelId)
   }
 }
 

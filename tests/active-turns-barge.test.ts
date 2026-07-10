@@ -106,6 +106,38 @@ test('deferStopFor: records a pending barge without killing until boundary', () 
   assert.equal(activeTurns.consumeStopped(c), false, 'barge does not clear queued follow-ups')
 })
 
+test('deferStopFor: no-tool turn is stopped after bounded wait', async () => {
+  const c = cid()
+  let killed = false
+  activeTurns.register(c, () => { killed = true })
+  activeTurns.deferStopFor(c, { clearQueue: false, maxWaitMs: 10 })
+  await new Promise(resolve => setTimeout(resolve, 25))
+  assert.equal(killed, true)
+  assert.equal(activeTurns.isActive(c), false)
+  assert.equal(activeTurns.consumeStopped(c), false, 'queued follow-ups survive timed barge')
+})
+
+test('deferStopFor: destructive tool completion is a safe handoff boundary', () => {
+  const c = cid()
+  let killed = false
+  activeTurns.register(c, () => { killed = true })
+  activeTurns.setBusy(c, 'edit')
+  activeTurns.deferStopFor(c, { clearQueue: false, maxWaitMs: 60_000 })
+  activeTurns.clearBusy(c)
+  assert.equal(killed, true)
+  assert.equal(activeTurns.isActive(c), false)
+})
+
+test('done: cancels the bounded deferred-stop timer', async () => {
+  const c = cid()
+  let killed = false
+  activeTurns.register(c, () => { killed = true })
+  activeTurns.deferStopFor(c, { clearQueue: false, maxWaitMs: 10 })
+  activeTurns.done(c)
+  await new Promise(resolve => setTimeout(resolve, 25))
+  assert.equal(killed, false)
+})
+
 test('deferStopFor(clearQueue:true): pending user stop clears queue at boundary', () => {
   const c = cid()
   activeTurns.register(c, () => {})
