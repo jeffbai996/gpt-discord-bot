@@ -102,6 +102,25 @@ test('processAttachments: infers Discord voice-note MIME from .ogg when contentT
   assert.deepEqual(out.skipped, [])
 })
 
+test('processAttachments: infers Discord voice-note MIME through generic octet-stream', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from('opus-audio'), { status: 200 })
+  let receivedType = ''
+  const client = {
+    audio: { transcriptions: { create: async ({ file }: any) => {
+      receivedType = file.type
+      return { text: 'generic mime voice note' }
+    } } },
+  } as any
+  const out = await processAttachments([
+    fakeAtt({ name: 'voice-message.ogg', contentType: 'application/octet-stream', size: 11 }),
+  ], client)
+  globalThis.fetch = originalFetch
+  assert.equal(receivedType, 'audio/ogg')
+  assert.match(out.text, /generic mime voice note/)
+  assert.deepEqual(out.skipped, [])
+})
+
 test('processAttachments: failed image download is surfaced, not passed as a dead CDN URL', async () => {
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response('expired', { status: 403 })

@@ -16,7 +16,7 @@ import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
-import { RestartCoordinator, scheduleSelfRestart } from './restart.ts'
+import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { channelSessions } from './channel-sessions.ts'
@@ -561,7 +561,7 @@ const client = new Client({
   partials: [Partials.Channel, Partials.Message, Partials.User, Partials.Reaction]
 })
 
-let shuttingDown = false
+const shutdownGate = new ShutdownGate()
 const restartCoordinator = new RestartCoordinator(
   () => activeTurns.waitForIdle(),
   () => scheduleSelfRestart('gpt', 250),
@@ -573,15 +573,14 @@ function requestGracefulRestart(): void {
     console.error('[restart] request coalesced; restart already pending')
     return
   }
-  shuttingDown = true
+  shutdownGate.beginDrain()
   console.error('[restart] requested; draining active turns before asking systemd to restart')
 }
 
 function installGracefulShutdown(): void {
   const timeoutMs = Number(process.env.GPT_GRACEFUL_SHUTDOWN_MS) || 30 * 60_000
   const shutdown = (signal: string) => {
-    if (shuttingDown) return
-    shuttingDown = true
+    if (!shutdownGate.beginExit()) return
     console.error(`[shutdown] ${signal} received; waiting for active turns to finish`)
     const timer = new Promise<'timeout'>(resolve => {
       const t = setTimeout(() => resolve('timeout'), timeoutMs)
@@ -632,7 +631,7 @@ client.once('ready', async () => {
 
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return
-  if (shuttingDown) {
+  if (shutdownGate.isDraining()) {
     await interaction.reply({ content: '⚠️ restarting after the current turn finishes', ephemeral: true }).catch(() => {})
     return
   }
@@ -1433,7 +1432,7 @@ async function runChannelTurn(message: Message, target: Message | null): Promise
 
 client.on('messageCreate', async (message: Message) => {
   if (message.author.bot) return
-  if (shuttingDown) return
+  if (shutdownGate.isDraining()) return
 
   const channelId = message.channel.id
   const userId = message.author.id

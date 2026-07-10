@@ -40,7 +40,9 @@ const EXTENSION_MIMES: Record<string, string> = {
 
 function resolvedMime(contentType: string | null, name: string): string {
   const declared = (contentType ?? '').split(';')[0].trim().toLowerCase()
-  if (declared) return declared
+  // Discord occasionally labels voice messages as generic binary data. In
+  // that case the filename extension is more informative than the declaration.
+  if (declared && declared !== 'application/octet-stream') return declared
   const dot = name.lastIndexOf('.')
   return dot >= 0 ? (EXTENSION_MIMES[name.slice(dot).toLowerCase()] ?? '') : ''
 }

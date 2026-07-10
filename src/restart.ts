@@ -20,6 +20,37 @@ type WaitForIdle = () => Promise<void>
 type RestartLauncher = () => void
 
 /**
+ * Tracks two distinct shutdown phases:
+ * - draining stops new Discord work while an in-band restart waits for turns;
+ * - exiting lets the later systemd SIGTERM run cleanup exactly once.
+ *
+ * A single boolean cannot represent both phases: SIGUSR2 enters drain mode
+ * before systemd sends SIGTERM, so treating "already draining" as "already
+ * exiting" leaves the service stuck in stop-sigterm.
+ */
+export class ShutdownGate {
+  private draining = false
+  private exiting = false
+
+  beginDrain(): boolean {
+    if (this.draining) return false
+    this.draining = true
+    return true
+  }
+
+  beginExit(): boolean {
+    if (this.exiting) return false
+    this.draining = true
+    this.exiting = true
+    return true
+  }
+
+  isDraining(): boolean {
+    return this.draining
+  }
+}
+
+/**
  * Coalesces restart requests and does not ask systemd to stop the service until
  * every active turn has finished. This is deliberately separate from SIGTERM:
  * once systemd starts a stop job, a second restart request can replace that job

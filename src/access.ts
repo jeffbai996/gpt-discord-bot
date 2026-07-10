@@ -1,7 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
-import { DEFAULT_OPENAI_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
+import { DEFAULT_CODEX_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
 
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
 
@@ -73,7 +73,7 @@ const DEFAULT_FLAGS = {
   trace: 'off' as 'off' | 'on' | 'collapse',
   thinking: 'off' as 'off' | 'on' | 'collapse',
   engine: 'codex' as 'codex' | 'api',
-  codexModel: DEFAULT_OPENAI_MODEL as CodexModel,
+  codexModel: DEFAULT_CODEX_MODEL as CodexModel,
   counter: 'both' as 'off' | 'token' | 'both',
 }
 

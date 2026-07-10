@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { RestartCoordinator, rewriteEnvVar } from '../src/restart.ts'
+import { RestartCoordinator, ShutdownGate, rewriteEnvVar } from '../src/restart.ts'
 
 const tmp = path.join(os.tmpdir(), `gpt-restart-test-${process.pid}`)
 const envPath = path.join(tmp, '.env')
@@ -104,5 +104,30 @@ describe('RestartCoordinator', () => {
     await idle
     await Promise.resolve()
     assert.equal(launches, 1)
+  })
+})
+
+describe('ShutdownGate', () => {
+  test('SIGTERM can begin exit after a restart already entered drain mode', () => {
+    const gate = new ShutdownGate()
+
+    assert.equal(gate.beginDrain(), true)
+    assert.equal(gate.isDraining(), true)
+    assert.equal(gate.beginExit(), true)
+  })
+
+  test('coalesces duplicate exit signals', () => {
+    const gate = new ShutdownGate()
+
+    assert.equal(gate.beginExit(), true)
+    assert.equal(gate.beginExit(), false)
+  })
+
+  test('direct exit also stops new work from being accepted', () => {
+    const gate = new ShutdownGate()
+
+    assert.equal(gate.isDraining(), false)
+    assert.equal(gate.beginExit(), true)
+    assert.equal(gate.isDraining(), true)
   })
 })

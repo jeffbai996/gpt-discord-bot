@@ -6,7 +6,7 @@ import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
-import { DEFAULT_OPENAI_MODEL } from './models.ts'
+import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -324,7 +324,7 @@ export async function executeGptCommand(
       }
       const raw = interaction.options.getString('value')
       if (!raw) {
-        const cur = access.channelFlags(channel.id).codexModel ?? DEFAULT_OPENAI_MODEL
+        const cur = access.channelFlags(channel.id).codexModel ?? DEFAULT_CODEX_MODEL
         return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API-fallback path uses its own model).`, ephemeral: true })
       }
       const value = raw.trim().toLowerCase()
@@ -391,7 +391,7 @@ export async function executeGptCommand(
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
       const rows: Array<[string, string]> = [
         ['engine', `${f.engine} (default codex)`],
-        ['codex model', `${f.codexModel} (default ${DEFAULT_OPENAI_MODEL})`],
+        ['codex model', `${f.codexModel} (default ${DEFAULT_CODEX_MODEL})`],
         ['api model', `${process.env.GPT_MODEL || DEFAULT_OPENAI_MODEL} (env, global)`],
         ['effort', `${f.reasoning} (default high)`],
         ['thinking', `${f.thinking} (default off)`],
