@@ -34,6 +34,7 @@ import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
+import { formatResultTraceLine } from './tool-trace.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -361,23 +362,17 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
     const dig = argDigest(call.args, Math.max(20, ROW_W - overhead))
     lines.push(`${prefix}${nm}(${dig})${tail}${ms}`)
     if (call.diff) {
-      // Bare ⎿ summary + body; renderTraceCard's padTraceLine adds the 1-cell indent.
+      // One leading cell here plus renderTraceCard's pad gives ⎿ a 2-cell indent.
       const { badge, body } = formatDiff(call.diff)
-      lines.push(`⎿ ${badge}`)
+      lines.push(` ⎿ ${badge}`)
       // Collapse to a preview so a big edit doesn't wall the card (Claude-bot style).
       const shown = body.length > MAX_DIFF_BODY_LINES ? body.slice(0, MAX_DIFF_BODY_LINES) : body
       for (const b of shown) lines.push(b)
       const moreLines = body.length - shown.length
       if (moreLines > 0) lines.push(`     … (${moreLines} more line${moreLines === 1 ? '' : 's'})`)
     } else if (call.resultPreview) {
-      // Keep the [N lines] tag on its own continuation row so it does not make
-      // the tiny output preview wrap.
       const n = call.resultLines ?? 0
-      let rp = call.resultPreview.replace(/\n/g, ' ')
-      const cap = OUT_W
-      if (rp.length > cap) rp = rp.slice(0, cap - 1) + '…'
-      lines.push(`⎿ ${rp}`)
-      if (n > 1) lines.push(`     [${n} lines]`)
+      lines.push(formatResultTraceLine(call.resultPreview, n, OUT_W))
     }
   }
   return lines
