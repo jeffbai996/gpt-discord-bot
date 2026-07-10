@@ -35,6 +35,7 @@ import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
 import { formatResultTraceLine } from './tool-trace.ts'
+import { formatLiveWorkMessage } from './live-ui.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -879,14 +880,14 @@ async function handleUserMessage(
   let lastEditedText = ''
   const EDIT_INTERVAL_MS = 700
 
-  const queueLiveText = (raw: string, rememberProgress: boolean): void => {
+  const queueLiveText = (raw: string, rememberProgress: boolean, footer = ''): void => {
     if (liveUiClosed) return
-    const display = raw.trim()
-    if (!display) return
+    const detail = raw.trim()
     if (rememberProgress) {
-      lastProgressText = display
+      lastProgressText = detail
       lastProgressAt = Date.now()
     }
+    const display = formatLiveWorkMessage({ effortLabel, detail, footer })
     const prior = progressTask
     progressTask = (async () => {
       if (prior) await prior.catch(() => {})
@@ -895,12 +896,10 @@ async function handleUserMessage(
       if (!workMessage || liveUiClosed) return
       await stopThinkingAnim()
       if (display === lastEditedText || liveUiClosed) return
-      const max = 1900
-      const truncated = display.length > max ? display.slice(0, max) + '…' : display
       lastEditAt = Date.now()
       lastEditedText = display
       const target = workMessage
-      if (!await awaitBounded(target.edit(truncated)) && workMessage === target) {
+      if (!await awaitBounded(target.edit(display)) && workMessage === target) {
         abandonWedgedPlaceholder()
       }
     })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
@@ -1061,9 +1060,11 @@ async function handleUserMessage(
       // A model can be healthy but silent between public commentary events. Keep
       // proof-of-life visible independently of the model's willingness to narrate.
       if (Date.now() - lastProgressAt < 12_000) return
-      const base = lastProgressText || `${currentStatus}…`
+      const initialStatus = `💭 ${effortLabel}`
+      const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
       const activity = event.idleMs < 1_000 ? 'activity just now' : `last activity ${fmtDur(event.idleMs)} ago`
-      queueLiveText(`${base}\n\n-# ✻ still working · ${fmtDur(event.elapsedMs)} elapsed · ${activity}`, false)
+      const footer = `-# ✻ still working · ${fmtDur(event.elapsedMs)} elapsed · ${activity}`
+      queueLiveText(base, false, footer)
       return
     }
     if (event.type === 'partial') {

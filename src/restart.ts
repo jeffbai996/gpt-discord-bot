@@ -11,7 +11,7 @@
  * Why detached: a child of the dying parent would die with it. We want the
  * `systemctl restart` to outlive us.
  *
- * Gem parity: ported from gem-discord-bot src/restart.ts (b0193187).
+ * Gem parity: ported from gem-bot src/restart.ts (b0193187).
  */
 import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'

@@ -4,13 +4,13 @@ Versioning is `0.MAJOR` (no patch level). Each version reflects a shippable feat
 
 Tags are annotated; check them out with `git checkout v0.N` to inspect that point.
 
-This repo is the OpenAI sibling of [gem-discord-bot](https://github.com/jeffbai996/gem-discord-bot). Same architecture (standalone daemon, structured-output reply, tool registry, reaction-driven actions, persistent summarization, MCP autoload). Versions track in parallel where the feature surface overlaps; they diverge where the underlying API does (e.g., Gemini's manual context caching has no OpenAI analog beyond automatic prefix caching).
+This repo is the OpenAI sibling of [gem-bot](https://github.com/jeffbai996/gem-bot). Same architecture (standalone daemon, structured-output reply, tool registry, reaction-driven actions, persistent summarization, MCP autoload). Versions track in parallel where the feature surface overlaps; they diverge where the underlying API does (e.g., Gemini's manual context caching has no OpenAI analog beyond automatic prefix caching).
 
 ---
 
 ## v0.12 — 2026-05-21 — second parity sync (post-gem-voice)
 
-Catches up with gem-discord-bot changes that landed during gem's voice work (May 19-20). Voice itself is deferred — gem-voice is gem-specific (Gemini Live API + custom IPC daemon) and OpenAI's Realtime equivalent would need its own daemon; not in scope for this pass.
+Catches up with gem-bot changes that landed during gem's voice work (May 19-20). Voice itself is deferred — gem-voice is gem-specific (Gemini Live API + custom IPC daemon) and OpenAI's Realtime equivalent would need its own daemon; not in scope for this pass.
 
 - **Per-guild persona override** — `PersonaLoader.load()` now also scans the state dir for `persona.<guildId>.md` siblings (where guildId is a 17-20 digit Discord snowflake). `buildSystemPrompt` takes an optional guildId and prefers the per-guild override when present. Falls through to the default for DMs (no guildId) and guilds without an override. Lookup is O(1) on an in-memory Map populated at load. (Gem parity: ports `dc10e5a9`.)
 - **`/gpt model` — codex model picker** — current choices are GPT-5.6 Sol/Terra/Luna; retired choices are no longer accepted.
@@ -154,7 +154,7 @@ Builds the discord plumbing end-to-end without yet wiring up an OpenAI client. L
 Repo skeleton — no runtime code yet. Establishes the project shape that subsequent versions extend.
 
 - `package.json` with `discord.js`, `openai`, `dotenv`, `tsx`.
-- `tsconfig.json` matching the sibling gem-discord-bot conventions (ESNext, strict, Bundler resolution).
+- `tsconfig.json` matching the sibling gem-bot conventions (ESNext, strict, Bundler resolution).
 - `.gitignore` covering `node_modules`, `.env*`, runtime state files (`persona.md`, `access.json`), and internal-only doc directories.
 - `.env.example` with the required env-var shape.
 - MIT license, AGENTS.md context, README skeleton.

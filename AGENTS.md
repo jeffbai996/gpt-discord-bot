@@ -6,7 +6,7 @@ This document provides context for agents working on `gpt-bot`.
 
 A standalone Discord bot using Discord.js and the OpenAI API (default `gpt-5.6-sol`, with `gpt-5.5`, `gpt-5.6-terra`, and `gpt-5.6-luna` available as manual switches per channel). Acts as an intelligent assistant with full multimodal input (Images, Audio, Documents) and tool-use (web_search, fetch_url, RAG over channel history, optional MCP integrations).
 
-Sibling project: `gem-discord-bot` (Gemini-backed). The two are designed to coexist in the same Discord guild without looping or double-replying.
+Sibling project: `gem-bot` (Gemini-backed). The two are designed to coexist in the same Discord guild without looping or double-replying.
 
 Durable workspace: treat `/home/user/repos/gpt-bot` as gpt's own durable home for bot code and persistent bot-specific artifacts. Use `/tmp` only for scratch work because it may be wiped.
 
