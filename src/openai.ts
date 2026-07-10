@@ -23,6 +23,8 @@ export type LifecycleEvent =
   | { type: 'first_token' }       // first reply content token observed
   | { type: 'partial', reply: string }  // incremental reply (best-effort)
   | { type: 'progress', reply: string }  // Codex commentary during a long turn
+  | { type: 'reasoning_progress', text: string } // explicit Codex reasoning summary (never hidden CoT)
+  | { type: 'heartbeat', elapsedMs: number, idleMs: number } // supervisor pulse even when model is silent
   | { type: 'status', label: string }  // live activity status (codex tool events)
   | { type: 'tool_start', name: string, args?: string }
   | {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexShellScriptForTest, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, liveEvent, mapEffort, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
@@ -15,6 +15,44 @@ test('codex commentary: surfaces in-flight progress text', () => {
     type: 'event_msg',
     payload: { type: 'agent_message', phase: 'final_answer', message: 'done' },
   }), null)
+
+  // codex-cli 0.144.0 flattens both commentary and the final answer to this
+  // item.completed shape on --json stdout. Every agent message is useful live
+  // progress; the -o file remains authoritative for the final answer.
+  assert.equal(commentaryProgress({
+    type: 'item.completed',
+    item: { type: 'agent_message', text: 'checking the service logs now' },
+  }), 'checking the service logs now')
+})
+
+test('codex reasoning: surfaces explicit reasoning summaries, never encrypted thought data', () => {
+  assert.equal(reasoningProgress({
+    type: 'item.completed',
+    item: { type: 'reasoning', text: 'The child is alive but its stdout is silent.' },
+  }), 'The child is alive but its stdout is silent.')
+  assert.equal(reasoningProgress({
+    type: 'response_item',
+    payload: { type: 'reasoning', encrypted_content: 'opaque-private-state' },
+  }), null)
+})
+
+test('codex liveness: only meaningful state transitions refresh the idle watchdog', () => {
+  for (const event of [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { type: 'command_execution' } },
+    { type: 'item.completed', item: { type: 'agent_message', text: 'progress' } },
+    { type: 'turn.completed', usage: {} },
+    { type: 'event_msg', payload: { type: 'agent_message', phase: 'commentary', message: 'progress' } },
+  ]) assert.equal(isMeaningfulCodexActivity(event), true, JSON.stringify(event))
+
+  for (const event of [
+    null,
+    {},
+    { type: 'token_count', info: {} },
+    { type: 'event_msg', payload: { type: 'token_count', info: {} } },
+    { type: 'unknown.keepalive.noise' },
+  ]) assert.equal(isMeaningfulCodexActivity(event), false, JSON.stringify(event))
 })
 
 test('in-flight status ping: status checks do not become barge-ins', () => {
@@ -215,10 +253,31 @@ test('codexTimeoutMs: a genuine QUESTION about a hang is not a throwaway ping', 
   )
 })
 
-test('codex shell script does not add a nested GNU timeout', () => {
-  const script = buildCodexShellScriptForTest('/bin/codex', 'exec "$CODEX_PROMPT"', '/tmp/err.log')
-  assert.equal(script.includes('timeout -k'), false)
-  assert.equal(script, 'cd /tmp && "/bin/codex" exec "$CODEX_PROMPT" </dev/null 2>"/tmp/err.log"')
+test('codex process args use direct spawn with the prompt as one inert argv', () => {
+  const prompt = 'literal shell text: $(touch /tmp/nope); `also-nope`'
+  assert.deepEqual(buildCodexArgs({
+    prompt,
+    model: 'gpt-test',
+    effort: 'high',
+    outfile: '/tmp/final.txt',
+  }), [
+    'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox',
+    '-c', 'model="gpt-test"', '-c', 'model_reasoning_effort=high',
+    '--json', '-o', '/tmp/final.txt', prompt,
+  ])
+})
+
+test('codex resume args preserve the session id without a shell wrapper', () => {
+  assert.deepEqual(buildCodexArgs({
+    prompt: 'continue',
+    model: 'gpt-test',
+    effort: 'medium',
+    outfile: '/tmp/final.txt',
+    resumeSessionId: 'session-123',
+  }).slice(0, 5), [
+    'exec', 'resume', '--skip-git-repo-check',
+    '--dangerously-bypass-approvals-and-sandbox', '-c',
+  ])
 })
 
 test('codexTimeoutMs: bare status pokes still fail fast', () => {

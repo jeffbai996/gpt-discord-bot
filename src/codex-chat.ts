@@ -1,12 +1,11 @@
-import { execFile, spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import { promisify } from 'node:util'
 import { rm, readFile, readdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { activeTurns } from './active-turns.ts'
 import { killProcessTree } from './kill-tree.ts'
+import { spawnSupervisedProcess } from './process-supervisor.ts'
 import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
@@ -27,8 +26,6 @@ export class CodexStoppedError extends Error {
   }
 }
 
-const execFileAsync = promisify(execFile)
-
 // Same binary the codex *tool* uses — Codex (OpenAI GPT-5.6) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
 // Watchdog policy, not a guessed "turn should be done by now" timer.
@@ -38,6 +35,9 @@ const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v2
 const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 10 * 60_000
 const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 45 * 60_000
 const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 120_000
+const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 15_000
+const DEFAULT_KILL_GRACE_MS = Number(process.env.GPT_CODEX_KILL_GRACE_MS) || 5_000
+const MAX_STDERR_CHARS = Number(process.env.GPT_CODEX_STDERR_MAX_CHARS) || 64 * 1024
 
 // Squad-memory in the codex path: rather than an MCP server, we lean on codex's
 // agentic shell — it can run the shared-memory CLI directly (verified: works under
@@ -47,6 +47,10 @@ const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) 
 const SQUAD_STORE_BIN = process.env.GPT_SQUAD_STORE_BIN || '/home/user/.local/bin/shared-memory'
 const VECGREP_BIN = process.env.GPT_VECGREP_BIN || '/home/user/.local/bin/vecgrep'
 const IBKR_BIN = process.env.GPT_IBKR_BIN || '/home/user/.local/bin/ibkr'
+const LIVE_PROGRESS_INSTRUCTION =
+  'Keep the Discord user visibly informed while you work: send a concise commentary update early, ' +
+  'then another whenever the activity changes or roughly once a minute during long work. Commentary ' +
+  'is progress, not the final answer; do not expose private hidden reasoning.'
 
 export interface CodexChatInput {
   systemPrompt: string
@@ -112,8 +116,28 @@ export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extr
   return codexWatchdogPolicy(input).hardTimeoutMs
 }
 
-export function buildCodexShellScriptForTest(codexBin: string, execPart: string, errfile: string): string {
-  return `cd /tmp && "${codexBin}" ${execPart} </dev/null 2>"${errfile}"`
+export interface CodexArgsInput {
+  prompt: string
+  model: string
+  effort: string
+  outfile: string
+  resumeSessionId?: string
+}
+
+export function buildCodexArgs(input: CodexArgsInput): string[] {
+  const args = ['exec']
+  if (input.resumeSessionId) args.push('resume')
+  args.push(
+    '--skip-git-repo-check',
+    '--dangerously-bypass-approvals-and-sandbox',
+    '-c', `model="${input.model}"`,
+    '-c', `model_reasoning_effort=${input.effort}`,
+    '--json',
+    '-o', input.outfile,
+  )
+  if (input.resumeSessionId) args.push(input.resumeSessionId)
+  args.push(input.prompt)
+  return args
 }
 
 // Codex exec is single-shot (no conversation memory), so we bridge the whole
@@ -154,6 +178,7 @@ function buildPrompt(input: CodexChatInput): string {
       + `  ${SQUAD_STORE_BIN} todo add --discord-chat-id "${input.channelId ?? ''}" "<task>"\n`
       + `Save ONLY genuinely durable, reusable facts — never chit-chat, recaps, or progress notes.`,
     `You can set your own Discord status: include [[presence: <short status>]] anywhere in your reply and it'll be applied to your presence + stripped from the message. Use it sparingly — only for a genuine status change.`,
+    LIVE_PROGRESS_INSTRUCTION,
     '--- New message ---',
     `${input.userName}: ${input.userMessage}`,
     '',
@@ -234,6 +259,7 @@ export function toolCallsFromCompletedItem(it: any): ToolCall[] {
 function parseCodexEvents(jsonl: string): ParsedEvents {
   const toolCalls: ToolCall[] = []
   const reasoningParts: string[] = []
+  const agentMessages: string[] = []
   let usage: RespondResult['usage'] = null
   let lastAgentMessage = ''
 
@@ -261,7 +287,10 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
     const it = ev.item
     switch (it.type) {
       case 'agent_message':
-        if (it.text) lastAgentMessage = String(it.text)
+        if (it.text) {
+          lastAgentMessage = String(it.text)
+          agentMessages.push(lastAgentMessage)
+        }
         break
       case 'reasoning':
         if (it.text) reasoningParts.push(String(it.text))
@@ -287,7 +316,16 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
     }
   }
 
-  return { toolCalls, reasoning: reasoningParts.join('\n\n'), usage, lastAgentMessage }
+  // 0.144.0 flattens commentary and final prose to agent_message items. Preserve
+  // every pre-final message as the reasoning/progress summary so the post-hoc
+  // "Thinking" card remains useful even when no reasoning item is emitted.
+  const publicProgress = agentMessages.slice(0, -1)
+  return {
+    toolCalls,
+    reasoning: [...reasoningParts, ...publicProgress].join('\n\n'),
+    usage,
+    lastAgentMessage,
+  }
 }
 
 // Run a chat turn through the Codex CLI instead of the OpenAI API. Returns a
@@ -373,11 +411,48 @@ export function liveEvent(ev: any): { status: string; tool?: { name: string; arg
 }
 
 export function commentaryProgress(ev: any): string | null {
-  if (ev?.type !== 'event_msg'
-      || ev.payload?.type !== 'agent_message'
-      || ev.payload?.phase !== 'commentary') return null
-  const message = typeof ev.payload.message === 'string' ? ev.payload.message.trim() : ''
-  return message || null
+  // Rollout/older protocol: phase is explicit, so never surface final_answer as
+  // an in-flight update.
+  if (ev?.type === 'event_msg'
+      && ev.payload?.type === 'agent_message'
+      && ev.payload?.phase === 'commentary') {
+    const message = typeof ev.payload.message === 'string' ? ev.payload.message.trim() : ''
+    return message || null
+  }
+  // codex-cli 0.144.0 --json stdout flattens commentary and final prose to the
+  // same item.completed agent_message shape. Surface each one live; `-o` remains
+  // authoritative for the final answer and replaces this placeholder afterward.
+  if (ev?.type === 'item.completed' && ev.item?.type === 'agent_message') {
+    const message = typeof ev.item.text === 'string' ? ev.item.text.trim() : ''
+    return message || null
+  }
+  return null
+}
+
+export function reasoningProgress(ev: any): string | null {
+  // Only render reasoning text Codex explicitly places on the public JSONL
+  // protocol. Encrypted/internal thought state is intentionally ignored.
+  if (ev?.type !== 'item.completed' || ev.item?.type !== 'reasoning') return null
+  const text = typeof ev.item.text === 'string' ? ev.item.text.trim() : ''
+  return text || null
+}
+
+export function isMeaningfulCodexActivity(ev: any): boolean {
+  if (!ev || typeof ev !== 'object') return false
+  if (ev.type === 'thread.started'
+      || ev.type === 'turn.started'
+      || ev.type === 'turn.completed'
+      || ev.type === 'turn.failed') return true
+  if ((ev.type === 'item.started' || ev.type === 'item.completed') && ev.item) return true
+  if (ev.type === 'response_item' && ev.payload?.type === 'function_call') return true
+  if (ev.type === 'event_msg') {
+    return ev.payload?.type === 'agent_message'
+      || ev.payload?.type === 'mcp_tool_call_begin'
+      || ev.payload?.type === 'mcp_tool_call_end'
+      || ev.payload?.type === 'function_call'
+      || ev.payload?.type === 'task_complete'
+  }
+  return false
 }
 
 export function isInFlightStatusPing(text: string): boolean {
@@ -488,7 +563,7 @@ export async function readLatestRateLimits(): Promise<RateLimits | null> {
 function buildResumePrompt(input: CodexChatInput): string {
   const who = input.userName ? `[${input.userName}] ` : ''
   const extra = input.extraText?.trim() ? `\n\n[Additional context]\n${input.extraText.trim()}` : ''
-  return `${who}${input.userMessage}${extra}`
+  return `${who}${input.userMessage}${extra}\n\n${LIVE_PROGRESS_INSTRUCTION}`
 }
 
 export async function respondViaCodex(input: CodexChatInput): Promise<RespondResult> {
@@ -509,54 +584,58 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const watchdog = codexWatchdogPolicy(input)
   const model = input.codexModel || 'gpt-5.6-sol'
 
-  // --json → JSONL events on stdout; -o → clean final reply to a file; prompt via
-  // env (CODEX_PROMPT) so user text can't break out of the shell. `exec resume` is
-  // pickier than fresh `exec`: it REJECTS --add-dir and -s (the resumed session
-  // INHERITS its sandbox + dirs from the original), so resume carries only the
-  // minimal flags. Fresh exec keeps the full sandbox setup. (verified 2026-06-25)
-  const common = `-c model="${model}" -c model_reasoning_effort=${effort} --json -o "${outfile}"`
-  // --dangerously-bypass-approvals-and-sandbox is the ONLY way codex exec runs MCP
-  // tool calls (Playwright browser) non-interactively — without it every MCP call is
-  // auto-cancelled ("user cancelled MCP tool call", codex GH #24135). Tradeoff Jeff
-  // accepted 2026-06-25: gpt runs UNSANDBOXED (full /home/user write, not just /tmp).
-  const BYPASS = '--dangerously-bypass-approvals-and-sandbox'
-  const execPart = resuming
-    ? `exec resume --skip-git-repo-check ${BYPASS} ${common} "${input.resumeSessionId}" "$CODEX_PROMPT"`
-    : `exec --skip-git-repo-check ${BYPASS} ${common} "$CODEX_PROMPT"`
-  // Codex stderr used to go to /dev/null — a mid-turn crash left no trace ("for
-  // some reason"). Capture it per-turn so a failure is inspectable; the file is
-  // small and overwritten each turn. (Jeff 2026-07-05)
-  const errfile = `/tmp/gpt_codexerr_${randomBytes(6).toString('hex')}.log`
-  const script = buildCodexShellScriptForTest(CODEX_BIN, execPart, errfile)
-
-  // Stream codex's JSONL events line-by-line so we can surface what it's doing
-  // LIVE (running cmd / searching / editing) to the placeholder via onEvent, while
-  // still collecting every line for the post-turn trace/usage parse.
-  const child = spawn('bash', ['-lc', script], {
-    detached: true,  // own process group so /gpt stop can SIGKILL the whole codex tree
-    env: { ...process.env, CODEX_PROMPT: prompt, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
+  // Spawn Codex directly: no bash, shell interpolation, inherited stdin, stderr
+  // temp file, or intermediate process whose exit can race the real child. Resume
+  // still carries only the flags it accepts and inherits sandbox/dirs from the
+  // original session. The bypass flag is required for non-interactive MCP calls.
+  const args = buildCodexArgs({
+    prompt,
+    model,
+    effort,
+    outfile,
+    resumeSessionId: input.resumeSessionId,
   })
-  // Kill the whole tree (bash + timeout + codex), not just bash's process group.
-  // GNU `timeout` re-groups codex via setpgid(), so a plain `kill(-bashPid)` misses
-  // it — killProcessTree walks descendants by PPID to reach every node. (Jeff 2026-07-05)
-  const killTree = () => { try { killProcessTree(child.pid as number) } catch { try { child.kill('SIGKILL') } catch {} } }
+  const supervisor = spawnSupervisedProcess(CODEX_BIN, args, {
+    cwd: '/tmp',
+    detached: true,
+    env: { ...process.env, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
+  }, {
+    idleTimeoutMs: watchdog.idleTimeoutMs,
+    hardTimeoutMs: watchdog.hardTimeoutMs,
+    heartbeatMs: DEFAULT_HEARTBEAT_MS,
+    killGraceMs: DEFAULT_KILL_GRACE_MS,
+  }, {
+    kill: child => {
+      try {
+        if (child.pid) killProcessTree(child.pid)
+        else child.kill('SIGKILL')
+      } catch {
+        try { child.kill('SIGKILL') } catch { /* supervisor force-settles */ }
+      }
+    },
+    onHeartbeat: beat => input.onEvent?.({ type: 'heartbeat', ...beat }),
+  })
+  const child = supervisor.child
   let stoppedByUser = false
-  const stopRunningTurn = () => { stoppedByUser = true; killTree() }
+  const stopRunningTurn = () => { stoppedByUser = true; supervisor.stop('user') }
   if (input.signal) {
     if (input.signal.aborted) stopRunningTurn()
     else input.signal.addEventListener('abort', stopRunningTurn, { once: true })
   }
   const lines: string[] = []
   let threadId = ''
-  let lastActivityAt = Date.now()
-  const markActivity = () => { lastActivityAt = Date.now() }
+  let stderrTail = ''
+  child.stderr.setEncoding('utf8')
+  child.stderr.on('data', (chunk: string) => {
+    stderrTail = (stderrTail + chunk).slice(-MAX_STDERR_CHARS)
+  })
   const rl = createInterface({ input: child.stdout! })
   rl.on('line', (line) => {
     if (!line.trim()) return
-    markActivity()
     lines.push(line)
     try {
       const obj = JSON.parse(line)
+      if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
       if (obj?.type === 'thread.started' && obj.thread_id) threadId = String(obj.thread_id)
       // Barge-safety: track whether codex is mid a DESTRUCTIVE tool (shell/file-edit)
       // so canBarge() blocks a barge that would SIGKILL a half-written file. Set on
@@ -582,6 +661,8 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       }
       const progress = commentaryProgress(obj)
       if (progress) input.onEvent?.({ type: 'progress', reply: progress })
+      const reasoning = reasoningProgress(obj)
+      if (reasoning) input.onEvent?.({ type: 'reasoning_progress', text: reasoning })
       if (obj?.type === 'item.completed' && obj.item) {
         const completed = toolCallsFromCompletedItem(obj.item)
         for (const call of completed) input.onEvent?.({ type: 'tool_end', ...call })
@@ -609,30 +690,17 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   let codexStderr = ''
   let timedOut = false
   let timeoutKind: 'idle' | 'hard' | null = null
+  let processResult: Awaited<ReturnType<typeof supervisor.wait>> | null = null
   try {
-    await new Promise<void>((resolve, reject) => {
-      const hardTimer = setTimeout(() => {
-        timedOut = true
-        timeoutKind = 'hard'
-        killTree()
-      }, watchdog.hardTimeoutMs + 8_000)
-      const idleTimer = setInterval(() => {
-        if (timedOut) return
-        if (Date.now() - lastActivityAt < watchdog.idleTimeoutMs) return
-        timedOut = true
-        timeoutKind = 'idle'
-        killTree()
-      }, Math.min(30_000, Math.max(1000, Math.floor(watchdog.idleTimeoutMs / 4))))
-      child.on('error', (e) => { clearTimeout(hardTimer); clearInterval(idleTimer); reject(e) })
-      child.on('close', () => { clearTimeout(hardTimer); clearInterval(idleTimer); resolve() })
-    })
+    processResult = await supervisor.wait()
+    timedOut = processResult.stopReason === 'idle' || processResult.stopReason === 'hard'
+    timeoutKind = timedOut ? processResult.stopReason as 'idle' | 'hard' : null
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
-    codexStderr = (await readFile(errfile, 'utf8').catch(() => '')).trim()
+    codexStderr = stderrTail.trim()
   } finally {
     if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})
-    await rm(errfile, { force: true }).catch(() => {})
   }
 
   const parsed = parseCodexEvents(lines.join('\n'))
@@ -664,9 +732,25 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     }))
   }
 
-  if (stoppedByUser) { logOutcome('stopped'); throw new CodexStoppedError(Date.now() - t0) }
+  if (stoppedByUser || processResult?.stopReason === 'user') {
+    logOutcome('stopped')
+    throw new CodexStoppedError(Date.now() - t0)
+  }
+  if (timedOut) {
+    const forced = processResult?.forced ? '; forced settle after failed child close' : ''
+    logOutcome('timeout', `${timeoutKind ?? 'unknown'} watchdog fired${forced}`)
+    throw new CodexInterruptedError(Date.now() - t0)
+  }
+  if (processResult?.error) {
+    logOutcome('error', processResult.error.message)
+    throw processResult.error
+  }
+  if (processResult && processResult.code !== 0) {
+    const detail = `codex exited code=${processResult.code} signal=${processResult.signal ?? 'none'}`
+    logOutcome('error', detail)
+    throw new Error(detail)
+  }
   if (!reply) {
-    if (timedOut) { logOutcome('timeout', timeoutKind ? `${timeoutKind} watchdog fired` : undefined); throw new CodexInterruptedError(Date.now() - t0) }
     logOutcome('empty', `no answer (lines=${lines.length})`)
     throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
   }

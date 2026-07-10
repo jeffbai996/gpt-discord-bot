@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, execFileSync } from 'node:child_process'
-import { killProcessTree } from '../src/kill-tree.ts'
+import { descendantPidsFromParentMap, killProcessTree } from '../src/kill-tree.ts'
 
 // Reproduces the /gpt stop bug: gpt runs codex as
 //   bash -lc "timeout -k 5 <n> codex exec …"  (spawned detached)
@@ -27,6 +27,16 @@ const descendants = (pid: number, acc: number[] = []): number[] => {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+test('descendant snapshot crosses process groups and orders leaves first', () => {
+  const parents = new Map([
+    [20, 10],
+    [30, 20],
+    [40, 10],
+    [50, 999],
+  ])
+  assert.deepEqual(descendantPidsFromParentMap(10, parents), [30, 20, 40])
+})
 
 test('killProcessTree kills a timeout-wrapped tree that re-groups (the /gpt stop bug)', async () => {
   // Exact shape of the gpt-bot codex spawn: detached bash → timeout → child.

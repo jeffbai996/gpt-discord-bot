@@ -748,13 +748,42 @@ async function handleUserMessage(
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   let spinnerEditPromise: Promise<unknown> | null = null
   let progressTask: Promise<void> | null = null
+  let lastProgressText = ''
+  let lastProgressAt = 0
+  let liveUiClosed = false
+  const LIVE_UI_SETTLE_MS = Number(process.env.GPT_LIVE_UI_SETTLE_MS) || 5_000
+  const awaitBounded = async (promise: Promise<unknown> | null): Promise<boolean> => {
+    if (!promise) return true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const settled = await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), LIVE_UI_SETTLE_MS) }),
+    ])
+    if (timer) clearTimeout(timer)
+    return settled
+  }
+  const abandonWedgedPlaceholder = () => {
+    if (!workMessage) return
+    const wedged = workMessage
+    workMessage = null
+    if (!targetMessage) void wedged.delete().catch(() => {})
+  }
   const stopThinkingAnim = async () => {
     if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null }
-    if (spinnerEditPromise) { await spinnerEditPromise; spinnerEditPromise = null }
+    const pending = spinnerEditPromise
+    spinnerEditPromise = null
+    if (!await awaitBounded(pending)) abandonWedgedPlaceholder()
   }
   const settleLiveUi = async () => {
+    liveUiClosed = true
     await stopThinkingAnim()
-    if (progressTask) await progressTask
+    const settled = await awaitBounded(progressTask)
+    if (!settled) {
+      // A Discord REST edit that never settles must not wake up after the final
+      // render and overwrite it. Delete/abandon this placeholder; the final reply
+      // will be posted as a fresh message and any late edit will hit Unknown Message.
+      abandonWedgedPlaceholder()
+    }
   }
   const throwIfStopped = () => {
     if (stopController.signal.aborted) throw new CodexStoppedError(0)
@@ -781,19 +810,21 @@ async function handleUserMessage(
   // Start the placeholder spinner (idempotent). Animates the ellipsis (. .. …)
   // + glyph every 1.5s so a non-streaming (codex) turn doesn't sit frozen.
   const startSpinner = () => {
-    if (thinkingAnim || !workMessage || targetMessage) return
+    if (liveUiClosed || thinkingAnim || !workMessage || targetMessage) return
     const GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸']
     const dots = ['.', '..', '…']
     let fi = 1
     thinkingAnim = setInterval(() => {
-      if (!workMessage) return
+      if (!workMessage || spinnerEditPromise) return
       const sp = GLYPHS[fi % GLYPHS.length]
       const d = dots[fi % dots.length]
       fi++
       const i = currentStatus.indexOf(' ')
       const emoji = i > 0 ? currentStatus.slice(0, i) : currentStatus
       const text = i > 0 ? currentStatus.slice(i + 1) : ''
-      spinnerEditPromise = workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
+      const edit = workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
+      spinnerEditPromise = edit
+      void edit.finally(() => { if (spinnerEditPromise === edit) spinnerEditPromise = null })
     }, 1500)
   }
 
@@ -801,10 +832,30 @@ async function handleUserMessage(
   // the deferred timer (slow path) or eagerly the instant streamed content
   // needs a home before the timer fired. No-op if a workMessage already exists.
   const postPlaceholder = async () => {
+    if (liveUiClosed) return
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (workMessage) { startSpinner(); return }
     try {
-      workMessage = await replyOrSend(message, `💭 ✻ **${effortLabel}…**`)
+      const pending = replyOrSend(message, `💭 ✻ **${effortLabel}…**`)
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const posted = await Promise.race([
+        pending,
+        new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), LIVE_UI_SETTLE_MS) }),
+      ])
+      if (timer) clearTimeout(timer)
+      if (!posted) {
+        // If Discord eventually resolves after our deadline, remove the orphaned
+        // placeholder instead of letting it appear beneath an already-final reply.
+        void pending.then(late => {
+          if (late && !targetMessage) void late.delete().catch(() => {})
+        }).catch(() => {})
+        return
+      }
+      if (liveUiClosed) {
+        if (!targetMessage) void posted.delete().catch(() => {})
+        return
+      }
+      workMessage = posted
       if (workMessage) {
         placeholderId = workMessage.id
         pendingPlaceholders.track(message.channel.id, workMessage.id, message.id)
@@ -827,6 +878,33 @@ async function handleUserMessage(
   let lastEditAt = 0
   let lastEditedText = ''
   const EDIT_INTERVAL_MS = 700
+
+  const queueLiveText = (raw: string, rememberProgress: boolean): void => {
+    if (liveUiClosed) return
+    const display = raw.trim()
+    if (!display) return
+    if (rememberProgress) {
+      lastProgressText = display
+      lastProgressAt = Date.now()
+    }
+    const prior = progressTask
+    progressTask = (async () => {
+      if (prior) await prior.catch(() => {})
+      if (liveUiClosed) return
+      await postPlaceholder()
+      if (!workMessage || liveUiClosed) return
+      await stopThinkingAnim()
+      if (display === lastEditedText || liveUiClosed) return
+      const max = 1900
+      const truncated = display.length > max ? display.slice(0, max) + '…' : display
+      lastEditAt = Date.now()
+      lastEditedText = display
+      const target = workMessage
+      if (!await awaitBounded(target.edit(truncated)) && workMessage === target) {
+        abandonWedgedPlaceholder()
+      }
+    })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
+  }
 
   const compactAndDropCodexSession = async (reason: string, inputTokens?: number) => {
     let compacted = false
@@ -972,20 +1050,20 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'progress') {
-      const prior = progressTask
-      progressTask = (async () => {
-        if (prior) await prior
-        await postPlaceholder()
-        if (!workMessage) return
-        await stopThinkingAnim()
-        const display = event.reply.trim()
-        if (!display || display === lastEditedText) return
-        const max = 1900
-        const truncated = display.length > max ? display.slice(0, max) + '…' : display
-        lastEditAt = Date.now()
-        lastEditedText = display
-        await workMessage.edit(truncated).catch(() => {})
-      })()
+      queueLiveText(event.reply, true)
+      return
+    }
+    if (event.type === 'reasoning_progress') {
+      queueLiveText(`🧠 ${event.text}`, true)
+      return
+    }
+    if (event.type === 'heartbeat') {
+      // A model can be healthy but silent between public commentary events. Keep
+      // proof-of-life visible independently of the model's willingness to narrate.
+      if (Date.now() - lastProgressAt < 12_000) return
+      const base = lastProgressText || `${currentStatus}…`
+      const activity = event.idleMs < 1_000 ? 'activity just now' : `last activity ${fmtDur(event.idleMs)} ago`
+      queueLiveText(`${base}\n\n-# ✻ still working · ${fmtDur(event.elapsedMs)} elapsed · ${activity}`, false)
       return
     }
     if (event.type === 'partial') {

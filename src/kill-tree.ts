@@ -1,35 +1,43 @@
-import { execFileSync } from 'node:child_process'
+import { readdirSync, readFileSync } from 'node:fs'
 
 // Kill a spawned process and its ENTIRE descendant tree, crossing process-group
-// boundaries. This exists because the codex turn runs as
-//   bash -lc "timeout -k 5 <n> codex exec …"   (spawned detached)
-// and GNU `timeout` calls setpgid() to put codex in its OWN process group. So the
-// old `process.kill(-bashPid)` group-kill hit bash but MISSED timeout + codex —
-// they survived and kept running after /gpt stop ("✗ showed but gpt still running",
-// Jeff 2026-07-05). Walking the tree by PPID reaches every node regardless of group.
-//
-// Order matters: collect the whole tree FIRST (while parents are alive so pgrep can
-// see the links), THEN signal — kill a parent first and pgrep can no longer find its
-// orphaned children (they reparent to init).
+// boundaries. Codex tools can create their own process groups, so a group signal
+// alone can miss descendants. Snapshot before signalling: once a parent dies,
+// its children reparent and can no longer be discovered from the original root.
 
-/** Recursively collect all descendant PIDs of `pid` (not including `pid` itself). */
-function descendantPids(pid: number, acc: number[] = []): number[] {
-  let out = ''
-  try {
-    // execFileSync (no shell) — pid is numeric, but keep the injection surface at zero.
-    out = execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
-  } catch {
-    // pgrep exits non-zero when there are no children — that's normal, not an error.
-    return acc
+function procParentMap(): Map<number, number> {
+  const parents = new Map<number, number>()
+  let entries: string[] = []
+  try { entries = readdirSync('/proc') } catch { return parents }
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue
+    try {
+      const status = readFileSync(`/proc/${entry}/status`, 'utf8')
+      const match = status.match(/^PPid:\s+(\d+)/m)
+      if (match) parents.set(Number(entry), Number(match[1]))
+    } catch { /* process exited during the snapshot */ }
   }
-  for (const line of out.split('\n')) {
-    const child = parseInt(line.trim(), 10)
-    if (child && !acc.includes(child)) {
-      acc.push(child)
-      descendantPids(child, acc)
-    }
+  return parents
+}
+
+/** Return descendants in leaves-first order from one atomic-ish /proc snapshot. */
+export function descendantPidsFromParentMap(rootPid: number, parents: Map<number, number>): number[] {
+  const children = new Map<number, number[]>()
+  for (const [pid, parent] of parents) {
+    const siblings = children.get(parent) ?? []
+    siblings.push(pid)
+    children.set(parent, siblings)
   }
-  return acc
+  const ordered: number[] = []
+  const visited = new Set<number>()
+  const walk = (pid: number) => {
+    if (visited.has(pid)) return
+    visited.add(pid)
+    for (const child of children.get(pid) ?? []) walk(child)
+    if (pid !== rootPid) ordered.push(pid)
+  }
+  walk(rootPid)
+  return ordered
 }
 
 /**
@@ -38,10 +46,11 @@ function descendantPids(pid: number, acc: number[] = []): number[] {
  * child that forked into rootPid's group after we snapshotted the tree.
  */
 export function killProcessTree(rootPid: number, signal: NodeJS.Signals = 'SIGKILL'): void {
-  // Snapshot the tree BEFORE killing anything (a dead parent hides its children).
-  const tree = [rootPid, ...descendantPids(rootPid)]
-  // Kill leaves-first (reverse) so a parent can't respawn/reparent a child mid-sweep.
-  for (const pid of tree.reverse()) {
+  // Snapshot the entire host process table once. The old recursive `pgrep -P`
+  // launched one synchronous subprocess per descendant and could freeze Node for
+  // seconds precisely when the bot was trying to recover from a hang.
+  const tree = [...descendantPidsFromParentMap(rootPid, procParentMap()), rootPid]
+  for (const pid of tree) {
     try { process.kill(pid, signal) } catch { /* already gone */ }
   }
   // Belt-and-suspenders: also nuke rootPid's own process group.

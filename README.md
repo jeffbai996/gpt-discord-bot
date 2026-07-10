@@ -118,8 +118,11 @@ State (allowlist, persona, embeddings DB, summaries, pinned facts, the placehold
 |---|---|
 | `GPT_CODEX_BIN` | path to the `codex` CLI (default the nvm v22 install) |
 | `GPT_CODEX_CHAT` | set `0` to force the API engine everywhere |
-| `GPT_CODEX_IDLE_TIMEOUT_MS` | silent-child watchdog for Codex turns; active JSONL progress resets it (default 600000) |
+| `GPT_CODEX_HEARTBEAT_MS` | Discord proof-of-life pulse while Codex is silent (default 15000) |
+| `GPT_CODEX_IDLE_TIMEOUT_MS` | meaningful-activity watchdog; malformed/noisy JSONL does not reset it (default 600000) |
 | `GPT_CODEX_CHAT_TIMEOUT_MS` | hard runaway fuse for a Codex turn, not the normal work limit (default 2700000) |
+| `GPT_CODEX_KILL_GRACE_MS` | maximum wait for a killed child to close before the queue force-settles (default 5000) |
+| `GPT_LIVE_UI_SETTLE_MS` | maximum wait for a Discord progress edit during final cleanup (default 5000) |
 | `GPT_THOUGHT_LINGER_MS` | how long collapse keeps the thought-for / trace cards (default 120000) |
 | `GPT_MCP_URL` / `GPT_MCP_LABEL` | MCP server to auto-register tools from |
 | `SQUAD_STORE_URL` / `SQUAD_STORE_BOT` | shared shared-memory endpoint + this bot's identity |
