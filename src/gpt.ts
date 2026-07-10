@@ -76,7 +76,7 @@ const ARG_DIGEST_PREFERENCE = [
 ]
 
 // Single-line, ID-shaped arg digest, <= maxLen chars.
-// codex accepts none|low|medium|high|xhigh; the OpenAI API (fallback path) only
+// codex accepts none|low|medium|high|xhigh|max; the OpenAI API fallback only
 // takes minimal|low|medium|high. Map the codex extremes down for the API call.
 // Duration like the Claude bots: "40s" under a minute, "1m 5s" over.
 function fmtDur(ms: number): string {
@@ -86,7 +86,7 @@ function fmtDur(ms: number): string {
 
 function apiEffort(e: string): 'minimal' | 'low' | 'medium' | 'high' {
   if (e === 'none') return 'minimal'
-  if (e === 'xhigh') return 'high'
+  if (e === 'xhigh' || e === 'max') return 'high'
   if (e === 'low' || e === 'medium' || e === 'high') return e
   return 'medium'
 }

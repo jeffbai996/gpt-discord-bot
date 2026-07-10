@@ -33,11 +33,42 @@ interface GlobalTotals {
   turns: number; inputTokens: number; outputTokens: number
   cachedInputTokens: number; reasoningTokens: number
   byModel: Record<string, number>; bootTs: number; since: number
+  days: Record<string, DailyTotals>
 }
+
+interface ModelDailyTotals {
+  turns: number; inputTokens: number; outputTokens: number
+  cachedInputTokens: number; reasoningTokens: number
+}
+
+interface DailyTotals extends ModelDailyTotals {
+  byModel: Record<string, ModelDailyTotals>
+}
+
+const emptyDaily = (): DailyTotals => ({
+  turns: 0, inputTokens: 0, outputTokens: 0,
+  cachedInputTokens: 0, reasoningTokens: 0, byModel: {},
+})
+
+export function pacificDay(ts = Date.now()): string {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(ts))
+  const get = (type: string) => parts.find(p => p.type === type)?.value ?? ''
+  return `${get('year')}-${get('month')}-${get('day')}`
+}
+
+function pruneDays(days: Record<string, DailyTotals>, keep = 45): Record<string, DailyTotals> {
+  return Object.fromEntries(Object.entries(days).sort(([a], [b]) => b.localeCompare(a)).slice(0, keep))
+}
+
 const globalTotals: GlobalTotals = {
-  turns: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0, byModel: {}, bootTs: Date.now(), since: Date.now(),
+  turns: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, reasoningTokens: 0,
+  byModel: {}, bootTs: Date.now(), since: Date.now(), days: {},
 }
-export function globalSnapshot(): GlobalTotals { return { ...globalTotals, byModel: { ...globalTotals.byModel } } }
+export function globalSnapshot(): GlobalTotals {
+  return structuredClone(globalTotals)
+}
 
 // Persistence: bootTs stays per-process (drives uptime); the totals + `since` carry
 // across restarts so /gpt stats reflects real cumulative usage, not just this boot.
@@ -53,6 +84,7 @@ export function initGlobalStats(file: string): void {
     globalTotals.reasoningTokens = d.reasoningTokens ?? 0
     globalTotals.byModel = (d.byModel && typeof d.byModel === 'object') ? d.byModel : {}
     globalTotals.since = d.since ?? Date.now()
+    globalTotals.days = (d.days && typeof d.days === 'object') ? pruneDays(d.days) : {}
   } catch { /* fresh / unreadable — start clean */ }
 }
 function saveGlobalStats(): void {
@@ -61,7 +93,7 @@ function saveGlobalStats(): void {
     writeFileSync(_statsFile, JSON.stringify({
       turns: globalTotals.turns, inputTokens: globalTotals.inputTokens, outputTokens: globalTotals.outputTokens,
       cachedInputTokens: globalTotals.cachedInputTokens, reasoningTokens: globalTotals.reasoningTokens,
-      byModel: globalTotals.byModel, since: globalTotals.since,
+      byModel: globalTotals.byModel, since: globalTotals.since, days: globalTotals.days,
     }))
   } catch { /* best-effort */ }
 }
@@ -86,6 +118,23 @@ export function recordTurn(channelId: string, result: RespondResult): void {
   globalTotals.cachedInputTokens += result.usage.cachedInputTokens
   globalTotals.reasoningTokens += result.usage.reasoningTokens
   globalTotals.byModel[result.modelUsed] = (globalTotals.byModel[result.modelUsed] ?? 0) + 1
+
+  const dayKey = pacificDay()
+  const day = globalTotals.days[dayKey] ?? emptyDaily()
+  const model = day.byModel[result.modelUsed] ?? {
+    turns: 0, inputTokens: 0, outputTokens: 0,
+    cachedInputTokens: 0, reasoningTokens: 0,
+  }
+  for (const totals of [day, model]) {
+    totals.turns++
+    totals.inputTokens += result.usage.inputTokens
+    totals.outputTokens += result.usage.outputTokens
+    totals.cachedInputTokens += result.usage.cachedInputTokens
+    totals.reasoningTokens += result.usage.reasoningTokens
+  }
+  day.byModel[result.modelUsed] = model
+  globalTotals.days[dayKey] = day
+  globalTotals.days = pruneDays(globalTotals.days)
   saveGlobalStats()
 }
 
@@ -141,4 +190,14 @@ export function snapshot(channelId: string): CacheSnapshot {
 // Test-only: reset all state.
 export function _reset(): void {
   channelStats.clear()
+  _statsFile = null
+  globalTotals.turns = 0
+  globalTotals.inputTokens = 0
+  globalTotals.outputTokens = 0
+  globalTotals.cachedInputTokens = 0
+  globalTotals.reasoningTokens = 0
+  globalTotals.byModel = {}
+  globalTotals.bootTs = Date.now()
+  globalTotals.since = Date.now()
+  globalTotals.days = {}
 }

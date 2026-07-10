@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexShellScriptForTest, codexTimeoutMs, codexWatchdogPolicy, liveEvent, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexShellScriptForTest, codexTimeoutMs, codexWatchdogPolicy, liveEvent, mapEffort, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+
+test('codex effort: max passes through to the CLI', () => {
+  assert.equal(mapEffort('max'), 'max')
+})
 
 test('liveEvent: surfaces MCP begin events from codex rollout-style JSON', () => {
   const ev = liveEvent({

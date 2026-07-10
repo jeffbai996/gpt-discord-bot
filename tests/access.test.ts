@@ -48,6 +48,14 @@ test('access: setChannelFlags preserves enabled/requireMention', async () => {
   assert.equal(a.canHandle({ channelId: 'c1', userId: 'u1', isMention: true }), true)
 })
 
+test('access: max is a valid reasoning effort', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c1', true, false)
+  await a.setChannelFlags('c1', { reasoning: 'max' })
+  assert.equal(a.channelFlags('c1').reasoning, 'max')
+})
+
 test('access: retired saved codexModel normalizes to current default', async () => {
   const a = new AccessManager()
   await a.load()

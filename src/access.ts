@@ -3,7 +3,7 @@ import path from 'path'
 import os from 'os'
 import { DEFAULT_CODEX_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
 
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 export interface ChannelConfig {
   enabled: boolean
@@ -45,7 +45,7 @@ export interface CanHandleInput {
 }
 
 const EMPTY: AccessFile = { users: {}, channels: {} }
-const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh']
+const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 
 // trace/thinking went boolean -> 'off'|'on'|'collapse'. Old saved configs may still
 // hold a boolean — map false->off, true->on so a legacy `false` doesn't read as "on".

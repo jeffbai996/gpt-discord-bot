@@ -54,7 +54,7 @@ export interface CodexChatInput {
   history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
   userMessage: string
   userName: string
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh'
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   codexModel?: string
   extraText?: string
   channelId?: string
@@ -63,16 +63,16 @@ export interface CodexChatInput {
   onEvent?: (event: LifecycleEvent) => void
 }
 
-// Discord's reasoning flag → Codex's config knob. Codex defaults to xhigh
-// (~59s, too slow for chat); we never want that here. medium is the chat
-// sweet spot; only an explicit 'high' flag opts into the slower deep mode.
-function mapEffort(effort?: string): string {
+// Discord's reasoning flag → Codex's config knob.
+// medium is the chat default; deeper levels are explicit per-channel choices.
+export function mapEffort(effort?: string): string {
   switch (effort) {
     case 'none':
     case 'low':
     case 'medium':
     case 'high':
-    case 'xhigh': return effort
+    case 'xhigh':
+    case 'max': return effort
     case 'minimal': return 'low' // legacy alias
     default: return 'medium'
   }

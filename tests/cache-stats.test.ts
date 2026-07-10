@@ -1,6 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { recordTurn, snapshot, _reset } from '../src/cache-stats.ts'
+import { readFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { initGlobalStats, pacificDay, recordTurn, snapshot, _reset } from '../src/cache-stats.ts'
 import type { RespondResult } from '../src/openai.ts'
 
 function makeResult(over: Partial<RespondResult['usage']> = {}, model = 'gpt-5.6-sol'): RespondResult {
@@ -101,4 +104,25 @@ test('cache-stats: cacheHitRate is 0 when input is 0', () => {
   _reset()
   recordTurn('ch1', makeResult({ inputTokens: 0, cachedInputTokens: 0 }))
   assert.equal(snapshot('ch1').cacheHitRate, 0)
+})
+
+test('cache-stats: persists per-model usage in a Pacific-day bucket', async () => {
+  _reset()
+  const file = path.join(os.tmpdir(), `gpt-stats-${process.pid}-${Date.now()}.json`)
+  initGlobalStats(file)
+  recordTurn('ch1', makeResult({ inputTokens: 1200, outputTokens: 300, cachedInputTokens: 900 }, 'codex'))
+
+  const saved = JSON.parse(await readFile(file, 'utf8'))
+  const today = saved.days[pacificDay()]
+  assert.equal(today.turns, 1)
+  assert.equal(today.inputTokens, 1200)
+  assert.equal(today.cachedInputTokens, 900)
+  assert.deepEqual(today.byModel.codex, {
+    turns: 1,
+    inputTokens: 1200,
+    outputTokens: 300,
+    cachedInputTokens: 900,
+    reasoningTokens: 0,
+  })
+  _reset()
 })
