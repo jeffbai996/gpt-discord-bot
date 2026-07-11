@@ -7,9 +7,9 @@ export interface ParsedResponse {
 }
 
 export function maxToolLoops(raw = process.env.GPT_MAX_TOOL_LOOPS): number {
-  if (raw === undefined || raw.trim() === '') return 24
+  if (raw === undefined || raw.trim() === '') return 256
   const parsed = Number(raw)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 24
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 256
 }
 
 // A single dispatched tool call, captured for the post-hoc trace card.
