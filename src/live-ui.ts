@@ -17,7 +17,7 @@ export function formatLiveWorkMessage({
   const suffix = cleanFooter ? `\n\n${cleanFooter}` : ''
   if (!cleanDetail) return header + suffix
 
-  const prefix = `${header}\n\n`
+  const prefix = `${header}\n`
   const available = Math.max(1, maxLength - prefix.length - suffix.length)
   const clippedDetail = cleanDetail.length > available
     ? cleanDetail.slice(0, Math.max(0, available - 1)) + '…'

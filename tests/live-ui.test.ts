@@ -6,7 +6,7 @@ import { formatLiveWorkMessage } from '../src/live-ui.ts'
 test('keeps the thinking header above live progress', () => {
   assert.equal(
     formatLiveWorkMessage({ effortLabel: 'thinking with max effort', detail: 'Checking the renderer.' }),
-    '💭 ✻ **thinking with max effort…**\n\nChecking the renderer.',
+    '💭 ✻ **thinking with max effort…**\nChecking the renderer.',
   )
 })
 
@@ -26,7 +26,7 @@ test('renders multiline commentary without blockquote markers', () => {
     detail: 'A first line\nand a second line',
   })
 
-  assert.match(message, /\n\nA first line\nand a second line/)
+  assert.match(message, /\nA first line\nand a second line/)
   assert.doesNotMatch(message, /^> /m)
 })
 
