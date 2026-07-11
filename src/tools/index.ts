@@ -15,7 +15,12 @@ import type { MemoryStore } from '../memory.ts'
 export { ToolRegistry } from './registry.ts'
 
 // Async because MCP autoload makes a streamable-HTTP connection at boot.
-export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore | null = null): Promise<ToolRegistry> {
+// `client` is the real OpenAI client (web-search side-call needs a real model).
+// `embedClient` backs search_memory's query embedding — it must be the SAME
+// backend that ingestion used to store vectors (local Ollama by default), or
+// query and stored vectors live in different spaces and search returns noise.
+// Defaults to `client` for backward compatibility / tests.
+export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore | null = null, embedClient: OpenAI = client): Promise<ToolRegistry> {
   const registry = new ToolRegistry()
   registry.register(fetchUrlTool)
   // browse drives Jeff's logged-in Chrome (CDP attach) — reads pages behind a
@@ -29,7 +34,7 @@ export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore |
   registry.register(makeSquadFilesTool())
   registry.register(makeCodexTool())
   if (memory) {
-    registry.register(makeSearchMemoryTool(client, memory))
+    registry.register(makeSearchMemoryTool(embedClient, memory))
   }
 
   // MCP autoload — opt-in via GPT_MCP_URL. Supports MULTIPLE servers via

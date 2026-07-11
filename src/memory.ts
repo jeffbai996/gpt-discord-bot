@@ -2,11 +2,15 @@ import path from 'path'
 import os from 'os'
 import OpenAI from 'openai'
 
-// Embedding dimension for `text-embedding-3-small`. v0.7 uses small over large
-// because we're storing every passive message — the cost difference adds up
-// when storing thousands of tokens per channel per day.
-export const EMBEDDING_DIM = 1536
-export const EMBEDDING_MODEL = process.env.GPT_EMBEDDING_MODEL || 'text-embedding-3-small'
+// Embedding backend. We embed every passive message, so this runs constantly —
+// it's pointed at the local Ollama `bge-m3` embedder (1024-dim) rather than the
+// metered OpenAI `text-embedding-3-small` (1536-dim) it used through v0.9. The
+// chat engine moved to the flat-sub Codex CLI; this closes the last metered
+// per-message API call. Override both together — model and dim MUST agree, and
+// changing them requires re-embedding the store (dimension is baked into the
+// vss table). Mirrors llm-bot's memory backend.
+export const EMBEDDING_DIM = Number(process.env.GPT_EMBEDDING_DIM) || 1024
+export const EMBEDDING_MODEL = process.env.GPT_EMBEDDING_MODEL || 'bge-m3:latest'
 
 // better-sqlite3 + sqlite-vss are native modules. They fail to load on Node
 // versions without the right ABI. We lazy-load both so the rest of the bot

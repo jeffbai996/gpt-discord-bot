@@ -12,15 +12,17 @@ import { MemoryStore, EMBEDDING_DIM, EMBEDDING_MODEL, embed } from '../src/memor
 // and throws BEFORE it ever touches this.db, so an instance created via the
 // prototype (bypassing the native-dependent constructor) reaches the guard.
 
-test('EMBEDDING_DIM is the text-embedding-3-small dimension', () => {
-  assert.equal(EMBEDDING_DIM, 1536)
-})
-
-test('EMBEDDING_MODEL defaults to text-embedding-3-small', () => {
+test('EMBEDDING_DIM defaults to the bge-m3 (Ollama) dimension', () => {
   // Only assert the default when no override is set, so a custom env var
   // doesn't fail this spuriously.
+  if (!process.env.GPT_EMBEDDING_DIM) {
+    assert.equal(EMBEDDING_DIM, 1024)
+  }
+})
+
+test('EMBEDDING_MODEL defaults to local Ollama bge-m3', () => {
   if (!process.env.GPT_EMBEDDING_MODEL) {
-    assert.equal(EMBEDDING_MODEL, 'text-embedding-3-small')
+    assert.equal(EMBEDDING_MODEL, 'bge-m3:latest')
   }
 })
 
@@ -46,7 +48,7 @@ test('insertMessage: rejects wrong-dimension embedding', () => {
   const tooShort = new Array(10).fill(0.1)
   assert.throws(
     () => store.insertMessage(sampleRow, tooShort),
-    /embedding dim 10 ≠ expected 1536/
+    new RegExp(`embedding dim 10 ≠ expected ${EMBEDDING_DIM}`)
   )
 })
 
@@ -54,7 +56,7 @@ test('insertMessage: rejects empty embedding', () => {
   const store = bareStore()
   assert.throws(
     () => store.insertMessage(sampleRow, []),
-    /embedding dim 0 ≠ expected 1536/
+    new RegExp(`embedding dim 0 ≠ expected ${EMBEDDING_DIM}`)
   )
 })
 

@@ -450,10 +450,18 @@ initGlobalStats(path.join(STATE_DIR, 'global-stats.json'))
 const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
-// Raw SDK client for non-chat endpoints (audio.transcriptions, embeddings,
-// web-search side-call). Sharing the same key/instance avoids spinning up two
-// HTTP pools.
+// Raw SDK client for metered OpenAI endpoints that have no local equivalent:
+// audio.transcriptions (Whisper), web-search side-call, Responses fallback.
 const openaiRaw = new OpenAI({ apiKey: OPENAI_KEY })
+
+// Local Ollama client (OpenAI-compatible /v1) for the cost-sensitive background
+// paths that DON'T need a frontier model: per-message embeddings and history
+// summarization. Both used to hit the metered OpenAI API on every message /
+// rollup; pointing them at the local Ollama box makes them free. `apiKey` is a
+// throwaway — Ollama ignores it. Mirrors llm-bot's memory backend. See
+// memory.ts EMBEDDING_MODEL and GPT_SUMMARIZATION_MODEL in the env.
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://100.94.27.37:11434'
+const ollamaClient = new OpenAI({ apiKey: 'ollama', baseURL: OLLAMA_URL + '/v1' })
 
 // Realtime voice-to-voice, under `/gpt voice …`. Owner-gated; empty admin id =
 // nobody, which safely disables it. The real persona + tool registry are built
@@ -475,12 +483,19 @@ const memoryStore = await MemoryStore.open()
 if (!memoryStore) {
   console.error('memory: RAG disabled (native module load failed); set up Node 22+ to enable')
 }
-const toolRegistry = await buildDefaultRegistry(openaiRaw, memoryStore)
+// Registry gets the real OpenAI client (web-search side-call needs a real
+// model) plus the Ollama client for the embedding-backed search_memory tool —
+// query embeddings MUST use the same backend as stored vectors or search is
+// garbage.
+const toolRegistry = await buildDefaultRegistry(openaiRaw, memoryStore, ollamaClient)
 
 // Summarization scheduler. Wires only when the SQLite-backed memory store is
 // available — summaries persist into the same conversation_summaries table.
 const SUMMARIZATION_THRESHOLD = parseInt(process.env.GPT_SUMMARIZATION_THRESHOLD ?? '50', 10)
 const SUMMARIZATION_BATCH_LIMIT = parseInt(process.env.GPT_SUMMARIZATION_BATCH_LIMIT ?? '500', 10)
+// Summarization runs on the local Ollama client with a local model by default
+// (was metered gpt-5.5 on every rollup). Override the model via
+// GPT_SUMMARIZATION_MODEL; it resolves against whichever client is wired below.
 const SUMMARIZATION_MODEL = process.env.GPT_SUMMARIZATION_MODEL ?? DEFAULT_SUMMARIZATION_MODEL
 const summaryStore = memoryStore ? SummaryStore.fromMemory(memoryStore) : null
 if (summaryStore) persona.setSummaryStore(summaryStore)
@@ -496,7 +511,7 @@ const summarizer: SummarizationScheduler | null = (memoryStore && summaryStore)
           messageId: r.id
         }))
       },
-      client: openaiRaw,
+      client: ollamaClient,
       model: SUMMARIZATION_MODEL,
       threshold: SUMMARIZATION_THRESHOLD,
       batchLimit: SUMMARIZATION_BATCH_LIMIT
@@ -530,7 +545,7 @@ async function ingestMessage(message: Message): Promise<void> {
   // message just isn't RAG-indexed; it's still in live Discord history.
   if (!shouldEmbed(message.channel.id, message.author.id)) return
   try {
-    const emb = await embed(openaiRaw, message.content)
+    const emb = await embed(ollamaClient, message.content)
     if (!emb) return
     memoryStore.insertMessage({
       id: message.id,
