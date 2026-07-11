@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { processAttachments } from '../src/attachments.ts'
+import { access } from 'node:fs/promises'
+import { cleanupAttachmentFiles, processAttachments } from '../src/attachments.ts'
 
 // Minimal stand-in for discord.js's Attachment type. processAttachments only
 // reads url/name/size/contentType, so we don't need the full class.
@@ -48,6 +49,10 @@ test('processAttachments: image becomes image_url part', async () => {
   assert.equal(out.imageParts.length, 1)
   assert.equal(out.imageParts[0].type, 'image_url')
   assert.equal(out.imageParts[0].image_url.url, `data:image/png;base64,${Buffer.from('fake-image').toString('base64')}`)
+  assert.equal(out.imagePaths.length, 1)
+  await access(out.imagePaths[0])
+  await cleanupAttachmentFiles(out.imagePaths)
+  await assert.rejects(access(out.imagePaths[0]))
   assert.equal(out.skipped.length, 0)
 })
 
@@ -81,6 +86,7 @@ test('processAttachments: handles charset suffix on contentType', async () => {
   const out = await processAttachments([att], openaiStub)
   globalThis.fetch = originalFetch
   assert.equal(out.imageParts.length, 1)
+  await cleanupAttachmentFiles(out.imagePaths)
 })
 
 test('processAttachments: infers Discord voice-note MIME from .ogg when contentType is absent', async () => {

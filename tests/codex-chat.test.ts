@@ -268,15 +268,20 @@ test('codex process args use direct spawn with the prompt as one inert argv', ()
 })
 
 test('codex resume args preserve the session id without a shell wrapper', () => {
-  assert.deepEqual(buildCodexArgs({
+  const args = buildCodexArgs({
     prompt: 'continue',
     model: 'gpt-test',
     effort: 'medium',
     outfile: '/tmp/final.txt',
     resumeSessionId: 'session-123',
-  }).slice(0, 5), [
+    imagePaths: ['/tmp/one.png', '/tmp/two.jpg'],
+  })
+  assert.deepEqual(args.slice(0, 5), [
     'exec', 'resume', '--skip-git-repo-check',
     '--dangerously-bypass-approvals-and-sandbox', '-c',
+  ])
+  assert.deepEqual(args.slice(-6), [
+    '--image', '/tmp/one.png', '--image', '/tmp/two.jpg', 'session-123', 'continue',
   ])
 })
 

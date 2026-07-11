@@ -68,6 +68,7 @@ export interface CodexChatInput {
   reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   codexModel?: string
   extraText?: string
+  imagePaths?: string[]
   channelId?: string
   turnGeneration?: number
   resumeSessionId?: string
@@ -130,6 +131,7 @@ export interface CodexArgsInput {
   effort: string
   outfile: string
   resumeSessionId?: string
+  imagePaths?: string[]
 }
 
 export function buildCodexArgs(input: CodexArgsInput): string[] {
@@ -143,6 +145,7 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
     '--json',
     '-o', input.outfile,
   )
+  for (const imagePath of input.imagePaths ?? []) args.push('--image', imagePath)
   if (input.resumeSessionId) args.push(input.resumeSessionId)
   args.push(input.prompt)
   return args
@@ -603,6 +606,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     effort,
     outfile,
     resumeSessionId: input.resumeSessionId,
+    imagePaths: input.imagePaths,
   })
   const supervisor = spawnSupervisedProcess(CODEX_BIN, args, {
     cwd: '/tmp',

@@ -14,7 +14,7 @@ import type { LifecycleEvent, RespondResult, ToolCall } from './openai.ts'
 import { isInFlightStatusPing, respondViaCodex } from './codex-chat.ts'
 import { codexFallbackWaitMs } from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
-import { processAttachments } from './attachments.ts'
+import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError, CodexProcessDiedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
@@ -779,12 +779,14 @@ async function handleUserMessage(
 
   const attachments = [...message.attachments.values()]
   let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []
+  let imagePaths: string[] = []
   let extraText = ''
   if (attachments.length > 0) {
     await applyLifecycle(message, 'ingesting')
     try {
       const processed = await processAttachments(attachments, openaiRaw)
       imageParts = processed.imageParts
+      imagePaths = processed.imagePaths
       extraText = processed.text
     } catch (e) {
       console.error('attachment processing failed:', e)
@@ -1139,8 +1141,8 @@ async function handleUserMessage(
   try {
     throwIfStopped()
     // Codex-as-default-chat: route text turns through the Codex CLI (flat-sub,
-    // self-web-searching) instead of the metered API. Images bypass Codex because
-    // the CLI cannot ingest them. Runtime fallback is reserved for a confirmed
+    // self-web-searching) instead of the metered API. Downloaded images are passed
+    // to Codex as local files. Runtime fallback is reserved for a confirmed
     // dead Codex child after the grace window. Kill switch: GPT_CODEX_CHAT=0.
     const apiRespond = () => openai.respond({
       systemPrompt,
@@ -1158,7 +1160,7 @@ async function handleUserMessage(
     })
 
     let result: RespondResult
-    if (flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0' && imageParts.length === 0) {
+    if (flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0') {
       try {
         let resumeSessionId = channelSessions.get(channelId)
         const lastInput = channelSessions.lastUsage(channelId)?.input ?? 0
@@ -1176,6 +1178,7 @@ async function handleUserMessage(
           reasoningEffort: flags.reasoning,
           codexModel: flags.codexModel,
           extraText,
+          imagePaths,
           channelId,
           turnGeneration,
           resumeSessionId,
@@ -1580,6 +1583,7 @@ async function handleUserMessage(
       else await replyOrSend(message, errMsg)
     } catch {}
   } finally {
+    await cleanupAttachmentFiles(imagePaths).catch(e => console.error('attachment cleanup failed:', e))
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     await settleLiveUi()

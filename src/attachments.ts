@@ -1,5 +1,8 @@
 import OpenAI, { toFile } from 'openai'
 import type { Attachment as DiscordAttachment } from 'discord.js'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
 // on guild boost tier; the smaller cap protects against "user dropped a 4-hour
@@ -64,10 +67,11 @@ export interface ProcessedAttachments {
   // go in `parts` for the vision-capable models.
   text: string
   imageParts: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
+  imagePaths: string[]
   skipped: SkippedAttachment[]
 }
 
-const EMPTY: ProcessedAttachments = { text: '', imageParts: [], skipped: [] }
+const EMPTY: ProcessedAttachments = { text: '', imageParts: [], imagePaths: [], skipped: [] }
 
 export async function processAttachments(
   attachments: DiscordAttachment[],
@@ -76,8 +80,9 @@ export async function processAttachments(
 ): Promise<ProcessedAttachments> {
   if (attachments.length === 0) return EMPTY
 
-  const result: ProcessedAttachments = { text: '', imageParts: [], skipped: [] }
+  const result: ProcessedAttachments = { text: '', imageParts: [], imagePaths: [], skipped: [] }
   const textBlocks: string[] = []
+  let imageDir: string | undefined
 
   for (const att of attachments) {
     const name = att.name ?? '(unnamed)'
@@ -94,10 +99,15 @@ export async function processAttachments(
         // OpenAI's fetcher. Download while Discord's URL is fresh and send the
         // bytes as a data URI so vision input is deterministic.
         const buf = await downloadToBuffer(att.url, MAX_BYTES)
+        imageDir ??= await mkdtemp(path.join(tmpdir(), 'gpt-discord-images-'))
+        const ext = path.extname(name).toLowerCase() || mimeExtension(mime)
+        const imagePath = path.join(imageDir, `${result.imagePaths.length}${ext}`)
+        await writeFile(imagePath, buf, { mode: 0o600 })
         result.imageParts.push({
           type: 'image_url',
           image_url: { url: `data:${mime};base64,${buf.toString('base64')}` }
         })
+        result.imagePaths.push(imagePath)
       } catch (e) {
         console.error('image fetch failed for', name, e)
         result.skipped.push({ name, reason: 'download_failed' })
@@ -148,6 +158,18 @@ export async function processAttachments(
 
   result.text = textBlocks.join('\n\n')
   return result
+}
+
+export async function cleanupAttachmentFiles(imagePaths: string[]): Promise<void> {
+  const dirs = new Set(imagePaths.map(p => path.dirname(p)))
+  await Promise.all([...dirs].map(dir => rm(dir, { recursive: true, force: true })))
+}
+
+function mimeExtension(mime: string): string {
+  if (mime === 'image/jpeg') return '.jpg'
+  if (mime === 'image/webp') return '.webp'
+  if (mime === 'image/gif') return '.gif'
+  return '.png'
 }
 
 async function downloadToBuffer(url: string, maxBytes: number): Promise<Buffer> {

@@ -1,4 +1,4 @@
-// The API fallback handles images and emergency Codex failures. Keep it on a
+// The API fallback handles confirmed Codex failures, including failures during image turns. Keep it on a
 // generally available API model; subscription-only Codex slugs fail there.
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'

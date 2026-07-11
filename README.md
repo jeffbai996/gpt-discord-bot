@@ -88,7 +88,7 @@ Each is its own subcommand with selectable choices (no free-text):
 - **vecgrep** — semantic search hook (`GPT_VECGREP_BIN`) on the codex path.
 - **Voice** — joins a voice channel and runs an OpenAI Realtime session (`OPENAI_REALTIME_MODEL`/`_VOICE`), with TTS fallback (`OPENAI_TTS_MODEL`/`_VOICE`). `GPT_VOICE_TOOL_DENY` gates tools in voice.
 - **Semantic memory (RAG)** — allowed messages are embedded (`text-embedding-3-small`) into sqlite-vss; the model can `search_memory`; background summarization rolls older history into a per-channel summary above the live context.
-- **Multimodal** — images (vision), audio (whisper-transcribed), text/code files inlined; PDFs/video surfaced as `[attachments not ingested]`. (Image turns use the API path — codex can't take them.)
+- **Multimodal** — images are passed to the Codex CLI for vision, audio is Whisper-transcribed, and text/code files are inlined; PDFs/video are surfaced as `[attachments not ingested]`.
 - **Reaction actions** on the bot's replies — 🔁 regenerate, 🔍 expand, 📌 pin (per-channel pinned-facts injected into the prompt), ❌ delete, 🔇/🔊 mute, ✏️ edit-on-next-message.
 - **`/gpt stats`** — token burn since boot + dollar-equivalent at gpt-5.6-sol rates (≈ $0 actual on the flat sub), in a code block.
 
