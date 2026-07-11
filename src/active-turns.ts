@@ -89,10 +89,11 @@ class ActiveTurns {
     if (opts.clearQueue) this.stopped.add(channelId)
     this.clearPendingStop(channelId)
     try { k() } catch { /* best-effort */ }
-    this.killers.delete(channelId)
-    this.startedAt.delete(channelId)
+    // Aborting the Codex child only starts teardown. Keep the turn registered
+    // until handleUserMessage's finally calls done(); otherwise restart drain
+    // and later barge-ins observe a false-idle window while Discord/UI cleanup
+    // is still running.
     this.busyTool.delete(channelId)
-    this.resolveIdleIfNeeded()
     return true
   }
 

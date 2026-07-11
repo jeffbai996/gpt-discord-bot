@@ -283,7 +283,7 @@ function formatThinkingText(text: string): string {
       ?? raw.match(/^[ \t]*\*\*(.+?)\*\*[ \t]*$/)
     if (heading) {
       if (out.length && out[out.length - 1] !== '') out.push('')
-      out.push(`> **${heading[1]}**`)
+      out.push(`**${heading[1]}**`)
       previousWasHeading = true
       while (i + 1 < lines.length && lines[i + 1].trim() === '') i++
       continue
@@ -293,10 +293,10 @@ function formatThinkingText(text: string): string {
       previousWasHeading = false
       continue
     }
-    out.push(`> ${raw}`)
+    out.push(raw)
     previousWasHeading = false
   }
-  return out.join('\n')
+  return `>>> ${out.join('\n')}`
 }
 
 function formatDiff(unified: string): { badge: string; body: string[] } {
@@ -1169,6 +1169,16 @@ async function handleUserMessage(
           await deleteLiveTrace()
           if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
           try { await message.react('✗') } catch {}
+          return
+        }
+        // `systemctl kill -s SIGUSR2 gpt` signals the whole service cgroup, so
+        // the Codex child may die before the parent finishes entering drain
+        // mode. Never turn an intentional deploy restart into an API fallback.
+        if (shutdownGate.isDraining()) {
+          console.error('codex exited during graceful restart; suppressing API fallback')
+          await settleLiveUi()
+          await deleteLiveTrace()
+          if (workMessage) await workMessage.edit('↻ **restart in progress — queued work will resume when gpt is back**').catch(() => {})
           return
         }
         // A codex turn failed — drop this channel's session pointer so the NEXT turn

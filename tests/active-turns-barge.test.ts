@@ -55,6 +55,8 @@ test('stopFor(clearQueue:false) kills without marking stopped; stop() marks stop
   activeTurns.register(c2, () => {})
   assert.equal(activeTurns.stop(c2), true)
   assert.equal(activeTurns.consumeStopped(c2), true, 'a user stop DOES set the stopped flag (queue cleared)')
+  activeTurns.done(c1)
+  activeTurns.done(c2)
 })
 
 test('stopFor: false when no turn is running', () => {
@@ -70,6 +72,7 @@ test('stopResolvable: uses an exact candidate before the sole-active fallback', 
   activeTurns.register(other, () => { killed = other })
   assert.equal(activeTurns.stopResolvable(['missing', exact]), exact)
   assert.equal(killed, exact)
+  activeTurns.done(exact)
   activeTurns.done(other)
   activeTurns.consumeStopped(exact)
 })
@@ -81,6 +84,7 @@ test('stopResolvable: stops the sole active turn when Discord command context di
   assert.equal(activeTurns.stopResolvable(['discord-parent-channel']), running)
   assert.equal(killed, true)
   activeTurns.consumeStopped(running)
+  activeTurns.done(running)
 })
 
 test('stopResolvable: refuses an ambiguous cross-channel fallback', () => {
@@ -102,7 +106,8 @@ test('deferStopFor: records a pending barge without killing until boundary', () 
   assert.equal(activeTurns.isActive(c), true, 'turn remains active until boundary')
   assert.equal(activeTurns.stopIfPending(c), true, 'boundary consumes pending stop')
   assert.equal(killed, true, 'killer fired at boundary')
-  assert.equal(activeTurns.isActive(c), false, 'turn is no longer active after boundary stop')
+  assert.equal(activeTurns.isActive(c), true, 'turn remains active while aborted handler unwinds')
+  activeTurns.done(c)
   assert.equal(activeTurns.consumeStopped(c), false, 'barge does not clear queued follow-ups')
 })
 
@@ -113,7 +118,8 @@ test('deferStopFor: no-tool turn is stopped after bounded wait', async () => {
   activeTurns.deferStopFor(c, { clearQueue: false, maxWaitMs: 10 })
   await new Promise(resolve => setTimeout(resolve, 25))
   assert.equal(killed, true)
-  assert.equal(activeTurns.isActive(c), false)
+  assert.equal(activeTurns.isActive(c), true)
+  activeTurns.done(c)
   assert.equal(activeTurns.consumeStopped(c), false, 'queued follow-ups survive timed barge')
 })
 
@@ -125,7 +131,8 @@ test('deferStopFor: destructive tool completion is a safe handoff boundary', () 
   activeTurns.deferStopFor(c, { clearQueue: false, maxWaitMs: 60_000 })
   activeTurns.clearBusy(c)
   assert.equal(killed, true)
-  assert.equal(activeTurns.isActive(c), false)
+  assert.equal(activeTurns.isActive(c), true)
+  activeTurns.done(c)
 })
 
 test('done: cancels the bounded deferred-stop timer', async () => {
@@ -145,6 +152,7 @@ test('deferStopFor(clearQueue:true): pending user stop clears queue at boundary'
   assert.equal(activeTurns.consumeStopped(c), false, 'not stopped until boundary')
   assert.equal(activeTurns.stopIfPending(c), true)
   assert.equal(activeTurns.consumeStopped(c), true, 'clearQueue propagates when pending stop fires')
+  activeTurns.done(c)
 })
 
 test('deferStopFor and stopIfPending: false when no turn is running or pending', () => {
