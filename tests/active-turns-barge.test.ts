@@ -188,3 +188,55 @@ test('waitForIdle: resolves only after the last active turn ends', async () => {
 test('waitForIdle: resolves immediately when already idle', async () => {
   await activeTurns.waitForIdle()
 })
+
+test('stale generation completion cannot clear a newer turn', () => {
+  const c = cid()
+  const oldGeneration = activeTurns.register(c, () => {})
+  const newGeneration = activeTurns.register(c, () => {})
+
+  assert.notEqual(oldGeneration, newGeneration)
+  activeTurns.done(c, oldGeneration)
+  assert.equal(activeTurns.isActive(c), true)
+  activeTurns.done(c, newGeneration)
+  assert.equal(activeTurns.isActive(c), false)
+})
+
+test('stale tool completion cannot release a newer generation busy guard', () => {
+  const c = cid()
+  const oldGeneration = activeTurns.register(c, () => {})
+  activeTurns.setBusy(c, 'shell', oldGeneration)
+  const newGeneration = activeTurns.register(c, () => {})
+  activeTurns.setBusy(c, 'edit', newGeneration)
+
+  activeTurns.clearBusy(c, oldGeneration)
+  assert.equal(activeTurns.canBarge(c, Date.now() + BARGE_GRACE_MS + 1), false)
+  activeTurns.clearBusy(c, newGeneration)
+  assert.equal(activeTurns.canBarge(c, Date.now() + BARGE_GRACE_MS + 1), true)
+  activeTurns.done(c, newGeneration)
+})
+
+test('a new generation does not inherit the prior turn busy guard', () => {
+  const c = cid()
+  const oldGeneration = activeTurns.register(c, () => {})
+  activeTurns.setBusy(c, 'shell', oldGeneration)
+  const newGeneration = activeTurns.register(c, () => {})
+
+  assert.equal(activeTurns.canBarge(c, Date.now() + BARGE_GRACE_MS + 1), true)
+  activeTurns.done(c, newGeneration)
+})
+
+test('busy deferred barge has an absolute recovery deadline', async () => {
+  const c = cid()
+  let killed = false
+  const generation = activeTurns.register(c, () => { killed = true })
+  activeTurns.setBusy(c, 'shell', generation)
+  activeTurns.deferStopFor(c, {
+    clearQueue: false,
+    maxWaitMs: 5,
+    maxBusyWaitMs: 15,
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 40))
+  assert.equal(killed, true)
+  activeTurns.done(c, generation)
+})

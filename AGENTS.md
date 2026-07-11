@@ -42,7 +42,7 @@ Deploy flow (replace `<deploy-host>` and `<deploy-user>` with your own):
 
 ```bash
 git push origin main
-ssh <deploy-user>@<deploy-host> 'cd ~/gpt-bot && git pull && npm install && systemctl --user kill -s SIGUSR2 gpt'
+ssh <deploy-user>@<deploy-host> 'cd ~/gpt-bot && git pull && npm install && systemctl --user kill --kill-who=main -s SIGUSR2 gpt'
 ```
 
 Use `SIGUSR2` for in-band deploy restarts. The bot drains active turns,

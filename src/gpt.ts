@@ -16,6 +16,8 @@ import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
+import { ChannelTurnRunner } from './channel-turns.ts'
+import { logTurnLifecycle } from './turn-lifecycle.ts'
 import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
@@ -558,9 +560,35 @@ const client = new Client({
 })
 
 const shutdownGate = new ShutdownGate()
+interface QueuedChannelTurn { message: Message; target: Message | null }
+const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
+  async (channelId, batch) => {
+    const carrier = batch[batch.length - 1]
+    const combined = batch.map(item => item.message.content).filter(Boolean).join('\n')
+    const botId = client.user?.id
+    if (botId) for (const item of batch) {
+      void item.message.reactions.cache.get('\u{1F557}')?.users.remove(botId).catch(() => {})
+    }
+    logTurnLifecycle({
+      event: 'channel_batch_started',
+      channelId,
+      queueDepth: channelTurns.queueDepth(channelId),
+    })
+    await handleUserMessage(
+      carrier.message,
+      batch.length === 1 ? carrier.target : null,
+      false,
+      combined || undefined,
+    )
+  },
+  channelId => activeTurns.consumeStopped(channelId),
+)
 const restartCoordinator = new RestartCoordinator(
-  () => activeTurns.waitForIdle(),
-  () => scheduleSelfRestart('gpt', 250),
+  () => Promise.all([activeTurns.waitForIdle(), channelTurns.waitForIdle()]).then(() => {}),
+  () => {
+    logTurnLifecycle({ event: 'restart_launching', restartPhase: 'launching' })
+    scheduleSelfRestart('gpt', 250)
+  },
 )
 
 function requestGracefulRestart(): void {
@@ -570,6 +598,11 @@ function requestGracefulRestart(): void {
     return
   }
   shutdownGate.beginDrain()
+  logTurnLifecycle({
+    event: 'restart_requested',
+    restartPhase: 'draining',
+    queueDepth: channelTurns.totalQueueDepth(),
+  })
   console.error('[restart] requested; draining active turns before asking systemd to restart')
 }
 
@@ -582,7 +615,9 @@ function installGracefulShutdown(): void {
       const t = setTimeout(() => resolve('timeout'), timeoutMs)
       t.unref?.()
     })
-    const idle = activeTurns.waitForIdle().then(() => 'idle' as const)
+    logTurnLifecycle({ event: 'shutdown_requested', signal, restartPhase: 'draining' })
+    const idle = Promise.all([activeTurns.waitForIdle(), channelTurns.waitForIdle()])
+      .then(() => 'idle' as const)
     Promise.race([idle, timer])
       .then(reason => {
         console.error(`[shutdown] exiting after ${reason}`)
@@ -688,7 +723,13 @@ async function handleUserMessage(
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
   const selfId = client.user?.id ?? ''
   const stopController = new AbortController()
-  activeTurns.register(channelId, () => stopController.abort())
+  const turnGeneration = activeTurns.register(channelId, () => stopController.abort())
+  logTurnLifecycle({
+    event: 'turn_registered',
+    channelId,
+    generation: turnGeneration,
+    queueDepth: channelTurns.queueDepth(channelId),
+  })
 
   let history: Awaited<ReturnType<typeof formatHistoryForOpenAI>> = []
   try {
@@ -1068,21 +1109,12 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'partial') {
-      // Streamed content arrived before the placeholder timer fired (fast API
-      // turn). Create the bubble now so there's somewhere to render — fire the
-      // async post without blocking the event handler; the next partial
-      // (~700ms later) lands once workMessage exists. Also cancels the timer.
-      if (!workMessage) { void postPlaceholder(); return }
-      void stopThinkingAnim()
-      const now = Date.now()
-      if (now - lastEditAt < EDIT_INTERVAL_MS) return
-      const display = event.reply.trim()
-      if (!display || display === lastEditedText) return
-      const max = 1900
-      const truncated = display.length > max ? display.slice(0, max) + '…' : display
-      lastEditAt = now
-      lastEditedText = display
-      workMessage.edit(truncated).catch(() => { /* fire-and-forget */ })
+      // Final-output streaming deliberately has no ownership of workMessage.
+      // That message is the durable thought/progress surface; editing partial
+      // answer text into it made the thought card disappear or overwrite the
+      // final render. Native typing remains active until the completed result
+      // is rendered once by the final-output path below.
+      return
     }
   }
 
@@ -1127,6 +1159,7 @@ async function handleUserMessage(
           codexModel: flags.codexModel,
           extraText,
           channelId,
+          turnGeneration,
           resumeSessionId,
           signal: stopController.signal,
           onEvent,
@@ -1171,10 +1204,18 @@ async function handleUserMessage(
           try { await message.react('✗') } catch {}
           return
         }
-        // `systemctl kill -s SIGUSR2 gpt` signals the whole service cgroup, so
-        // the Codex child may die before the parent finishes entering drain
-        // mode. Never turn an intentional deploy restart into an API fallback.
+        // An intentional restart must never become an API fallback. Deploys now
+        // signal only MainPID, but retain this guard for shutdown races and old
+        // senders that may still target the service cgroup.
         if (shutdownGate.isDraining()) {
+          logTurnLifecycle({
+            event: 'fallback_suppressed',
+            channelId,
+            generation: turnGeneration,
+            engine: 'codex',
+            fallbackReason: 'restart_drain',
+            restartPhase: 'draining',
+          })
           console.error('codex exited during graceful restart; suppressing API fallback')
           await settleLiveUi()
           await deleteLiveTrace()
@@ -1189,10 +1230,18 @@ async function handleUserMessage(
         // SHOW it — an ⏳ reaction + a short note on the placeholder — THEN fall back
         // to the API so the user still gets an answer, but knows what happened.
         if (e instanceof CodexInterruptedError) {
+          logTurnLifecycle({
+            event: 'engine_fallback', channelId, generation: turnGeneration,
+            engine: 'api', fallbackReason: 'codex_interrupted',
+          })
           console.error('codex interrupted by backstop, surfacing + falling back to API:', e.message)
           void applyLifecycle(message, 'interrupted')
           if (workMessage) { await workMessage.edit('⏳ **codex turn interrupted — retrying on the API…**').catch(() => {}) }
         } else {
+          logTurnLifecycle({
+            event: 'engine_fallback', channelId, generation: turnGeneration,
+            engine: 'api', fallbackReason: 'codex_error',
+          })
           console.error('codex chat failed, falling back to API:', e)
           void applyLifecycle(message, 'errored')
           if (workMessage) { await workMessage.edit('⚠️ **codex hit an error — retrying on the API…**').catch(() => {}) }
@@ -1494,7 +1543,13 @@ async function handleUserMessage(
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     await settleLiveUi()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
-    activeTurns.done(channelId)
+    activeTurns.done(channelId, turnGeneration)
+    logTurnLifecycle({
+      event: 'turn_finished',
+      channelId,
+      generation: turnGeneration,
+      queueDepth: channelTurns.queueDepth(channelId),
+    })
   }
 }
 
@@ -1503,36 +1558,14 @@ async function handleUserMessage(
 // messages queue; when it finishes, ALL queued messages are batched into one
 // follow-up turn (repeated until the queue drains). Cross-channel stays
 // parallel — only same-channel pile-ups serialize. (Jeff 2026-06-25)
-const channelTurns = new Map<string, { running: boolean; queue: Message[] }>()
-
 async function runChannelTurn(message: Message, target: Message | null): Promise<void> {
   const cid = message.channel.id
-  let st = channelTurns.get(cid)
-  if (!st) { st = { running: false, queue: [] }; channelTurns.set(cid, st) }
-  if (st.running) {
-    // A turn is already in flight for this channel — queue + signal it was seen.
-    st.queue.push(message)
+  const outcome = await channelTurns.submit(cid, { message, target })
+  if (outcome === 'queued') {
     void message.react('\u{1F557}').catch(() => {})
-    return
-  }
-  st.running = true
-  try {
-    await handleUserMessage(message, target, false)
-    if (activeTurns.consumeStopped(cid)) st.queue.length = 0
-    while (st.queue.length) {
-      const batch = st.queue.splice(0, st.queue.length)
-      const carrier = batch[batch.length - 1]
-      const combined = batch.map(m => m.content).filter(Boolean).join('\n')
-      const botId = client.user?.id
-      if (botId) for (const m of batch) {
-        void m.reactions.cache.get('\u{1F557}')?.users.remove(botId).catch(() => {})
-      }
-      await handleUserMessage(carrier, null, false, combined || undefined)
-      if (activeTurns.consumeStopped(cid)) { st.queue.length = 0; break }
-    }
-  } finally {
-    st.running = false
-    if (!st.queue.length) channelTurns.delete(cid)
+    logTurnLifecycle({
+      event: 'turn_queued', channelId: cid, queueDepth: channelTurns.queueDepth(cid),
+    })
   }
 }
 
@@ -1570,15 +1603,17 @@ client.on('messageCreate', async (message: Message) => {
   // defer the stop until Codex reaches the next tool lifecycle boundary. That
   // prevents mid-output death while still letting the queued message cut in.
   {
-    const st = channelTurns.get(channelId)
-    if (st?.running && activeTurns.isActive(channelId) && isInFlightStatusPing(message.content)) {
+    if (channelTurns.isRunning(channelId) && activeTurns.isActive(channelId) && isInFlightStatusPing(message.content)) {
       void replyOrSend(message, 'still working — not stuck. latest progress is in the live reply above.')
         .catch(() => {})
       return
     }
-    if (st?.running && activeTurns.canRequestBarge(channelId)) {
+    if (channelTurns.isRunning(channelId) && activeTurns.canRequestBarge(channelId)) {
       activeTurns.deferStopFor(channelId, { clearQueue: false })
-      st.queue.unshift(message)
+      const queueDepth = channelTurns.enqueue(channelId, { message, target: null })
+      logTurnLifecycle({
+        event: 'barge_queued', channelId, queueDepth, stopReason: 'deferred_barge',
+      })
       void message.react('\u{23ED}\u{FE0F}').catch(() => {})  // ⏭️ "barging — cutting in"
       return
     }

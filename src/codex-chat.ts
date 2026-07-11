@@ -62,6 +62,7 @@ export interface CodexChatInput {
   codexModel?: string
   extraText?: string
   channelId?: string
+  turnGeneration?: number
   resumeSessionId?: string
   signal?: AbortSignal
   onEvent?: (event: LifecycleEvent) => void
@@ -646,12 +647,16 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
           // Normal message barge-in is deferred until a tool boundary so we do
           // not kill Codex mid-thought/output. Stop before surfacing the next
           // tool row; the queued replacement message will run as this turn exits.
-          if (isToolItemType(obj.item.type) && activeTurns.stopIfPending(input.channelId)) return
-          if (obj.item.type === 'command_execution') activeTurns.setBusy(input.channelId, 'shell')
-          else if (obj.item.type === 'file_change') activeTurns.setBusy(input.channelId, 'edit')
+          if (isToolItemType(obj.item.type) &&
+              activeTurns.stopIfPending(input.channelId, input.turnGeneration)) return
+          if (obj.item.type === 'command_execution') {
+            activeTurns.setBusy(input.channelId, 'shell', input.turnGeneration)
+          } else if (obj.item.type === 'file_change') {
+            activeTurns.setBusy(input.channelId, 'edit', input.turnGeneration)
+          }
         } else if (obj?.type === 'item.completed' && obj.item &&
                    (obj.item.type === 'command_execution' || obj.item.type === 'file_change')) {
-          activeTurns.clearBusy(input.channelId)
+          activeTurns.clearBusy(input.channelId, input.turnGeneration)
         }
       }
       const ev = liveEvent(obj)

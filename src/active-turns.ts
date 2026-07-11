@@ -10,13 +10,20 @@
 // stopping before the next tool action, where the queued replacement can run.
 type Killer = () => void
 type BusyTool = 'shell' | 'edit' | null
-type PendingStop = { clearQueue: boolean; timer: ReturnType<typeof setTimeout> | null }
+type PendingStop = {
+  clearQueue: boolean
+  generation: number
+  deadlineAt: number
+  recoveryDeadlineAt: number
+  timer: ReturnType<typeof setTimeout> | null
+}
 
 // Grace period (ms): a turn younger than this is never barged. Protects both a
 // just-started turn (no useful work to preserve yet is a wash — but avoids thrash on
 // rapid double-sends) and, combined with the tool guard, a near-done turn.
 export const BARGE_GRACE_MS = 4000
 export const BARGE_MAX_WAIT_MS = 8000
+export const BARGE_BUSY_RECOVERY_MS = 120_000
 
 class ActiveTurns {
   private killers = new Map<string, Killer>()
@@ -24,18 +31,26 @@ class ActiveTurns {
   private startedAt = new Map<string, number>()
   private busyTool = new Map<string, BusyTool>()
   private pendingStops = new Map<string, PendingStop>()
+  private generations = new Map<string, number>()
+  private nextGeneration = 1
   private idleWaiters = new Set<() => void>()
 
   /** respondViaCodex: record how to kill this channel's running turn. */
-  register(channelId: string, kill: Killer): void {
+  register(channelId: string, kill: Killer): number {
     this.clearPendingStop(channelId)
+    this.busyTool.delete(channelId)
+    const generation = this.nextGeneration++
+    this.generations.set(channelId, generation)
     this.killers.set(channelId, kill)
     this.startedAt.set(channelId, Date.now())
+    return generation
   }
 
   /** respondViaCodex: the turn finished (or died) — forget its killer + liveness. */
-  done(channelId: string): void {
+  done(channelId: string, generation?: number): void {
+    if (generation !== undefined && this.generations.get(channelId) !== generation) return
     this.killers.delete(channelId)
+    this.generations.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
     this.clearPendingStop(channelId)
@@ -44,16 +59,18 @@ class ActiveTurns {
 
   /** codex-chat live loop: codex just STARTED a destructive tool (shell/file-edit) —
    *  barging now is unsafe. Cleared by clearBusy() on the item's completion. */
-  setBusy(channelId: string, tool: Exclude<BusyTool, null>): void {
+  setBusy(channelId: string, tool: Exclude<BusyTool, null>, generation?: number): void {
+    if (!this.matchesGeneration(channelId, generation)) return
     this.busyTool.set(channelId, tool)
   }
 
   /** codex-chat live loop: the destructive tool finished — safe to barge again. */
-  clearBusy(channelId: string): void {
+  clearBusy(channelId: string, generation?: number): void {
+    if (!this.matchesGeneration(channelId, generation)) return
     this.busyTool.set(channelId, null)
     // Finishing a destructive tool is itself a safe boundary. Do not wait for
     // Codex to start another tool before handing the channel to queued input.
-    this.stopIfPending(channelId)
+    this.stopIfPending(channelId, generation)
   }
 
   /** /gpt stop: kill the in-flight turn + mark the channel stopped so the queue
@@ -99,31 +116,33 @@ class ActiveTurns {
 
   /** Normal message barge-in: mark the running turn to be killed at the next
    *  safe lifecycle boundary instead of SIGKILLing mid-output. */
-  deferStopFor(channelId: string, opts: { clearQueue: boolean; maxWaitMs?: number }): boolean {
+  deferStopFor(channelId: string, opts: {
+    clearQueue: boolean
+    maxWaitMs?: number
+    maxBusyWaitMs?: number
+  }): boolean {
     if (!this.killers.has(channelId)) return false
     this.clearPendingStop(channelId)
-    const pending: PendingStop = { clearQueue: opts.clearQueue, timer: null }
     const maxWaitMs = opts.maxWaitMs ?? BARGE_MAX_WAIT_MS
-    pending.timer = setTimeout(() => {
-      const current = this.pendingStops.get(channelId)
-      if (current !== pending || !this.killers.has(channelId)) return
-      // Never cut through a shell command or file edit. clearBusy() performs
-      // the handoff immediately after that destructive operation completes.
-      if (this.busyTool.get(channelId)) {
-        pending.timer = null
-        return
-      }
-      this.stopIfPending(channelId)
-    }, maxWaitMs)
-    pending.timer.unref?.()
+    const now = Date.now()
+    const pending: PendingStop = {
+      clearQueue: opts.clearQueue,
+      generation: this.generations.get(channelId)!,
+      deadlineAt: now + maxWaitMs,
+      recoveryDeadlineAt: now + maxWaitMs + (opts.maxBusyWaitMs ?? BARGE_BUSY_RECOVERY_MS),
+      timer: null,
+    }
     this.pendingStops.set(channelId, pending)
+    this.schedulePendingCheck(channelId, pending, maxWaitMs)
     return true
   }
 
   /** codex-chat live loop: execute a pending deferred stop at a tool boundary. */
-  stopIfPending(channelId: string): boolean {
+  stopIfPending(channelId: string, generation?: number): boolean {
     const pending = this.pendingStops.get(channelId)
     if (!pending) return false
+    if (!this.matchesGeneration(channelId, generation) ||
+        this.generations.get(channelId) !== pending.generation) return false
     return this.stopFor(channelId, pending)
   }
 
@@ -176,6 +195,45 @@ class ActiveTurns {
     const pending = this.pendingStops.get(channelId)
     if (pending?.timer) clearTimeout(pending.timer)
     this.pendingStops.delete(channelId)
+  }
+
+  private matchesGeneration(channelId: string, generation?: number): boolean {
+    return generation === undefined || this.generations.get(channelId) === generation
+  }
+
+  private schedulePendingCheck(channelId: string, pending: PendingStop, delayMs: number): void {
+    pending.timer = setTimeout(() => {
+      if (this.pendingStops.get(channelId) !== pending ||
+          this.generations.get(channelId) !== pending.generation ||
+          !this.killers.has(channelId)) return
+      const now = Date.now()
+      if (!this.busyTool.get(channelId)) {
+        this.stopIfPending(channelId, pending.generation)
+        return
+      }
+      if (now >= pending.recoveryDeadlineAt) {
+        console.error(JSON.stringify({
+          event: 'barge_recovery_deadline',
+          channelId,
+          generation: pending.generation,
+          stopReason: 'deferred_barge',
+          busyTool: this.busyTool.get(channelId),
+          waitedMs: now - pending.deadlineAt,
+        }))
+        this.stopFor(channelId, pending)
+        return
+      }
+      console.error(JSON.stringify({
+        event: 'barge_waiting_for_tool',
+        channelId,
+        generation: pending.generation,
+        busyTool: this.busyTool.get(channelId),
+        remainingMs: pending.recoveryDeadlineAt - now,
+      }))
+      this.schedulePendingCheck(channelId, pending,
+        Math.min(1_000, Math.max(1, pending.recoveryDeadlineAt - now)))
+    }, Math.max(0, delayMs))
+    pending.timer.unref?.()
   }
 }
 
