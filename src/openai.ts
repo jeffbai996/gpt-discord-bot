@@ -6,6 +6,12 @@ export interface ParsedResponse {
   reply: string          // text to post (may be empty if react-only)
 }
 
+export function maxToolLoops(raw = process.env.GPT_MAX_TOOL_LOOPS): number {
+  if (raw === undefined || raw.trim() === '') return 24
+  const parsed = Number(raw)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 24
+}
+
 // A single dispatched tool call, captured for the post-hoc trace card.
 export interface ToolCall {
   name: string
@@ -287,11 +293,10 @@ export class OpenAIClient {
     // runs onto the end of the prior line ("…web search!**Discussing details**").
     let lastSummaryIndex = -1
     const toolCalls: ToolCall[] = []
-    // Tool-loop cap. 8 rounds covers coding-agent fallback chains (inspect,
-    // patch, test, inspect failure, patch again, final) without giving a
-    // misbehaving model room to spin expensive round-trips. Override with
-    // GPT_MAX_TOOL_LOOPS=<n>.
-    const MAX_LOOPS = parseInt(process.env.GPT_MAX_TOOL_LOOPS ?? '8', 10)
+    // Tool-loop cap. Repo work regularly needs more than eight round-trips
+    // once inspection, edits, tests, and deployment are all involved. Keep a
+    // finite fuse, but leave enough room for a normal implementation turn.
+    const MAX_LOOPS = maxToolLoops()
 
     try {
       for (let iter = 0; iter < MAX_LOOPS; iter++) {

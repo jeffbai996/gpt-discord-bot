@@ -129,7 +129,7 @@ State (allowlist, persona, embeddings DB, summaries, pinned facts, the placehold
 | `GPT_SQUAD_STORE_BIN` / `GPT_VECGREP_BIN` | CLI paths the codex path shells out to |
 | `OPENAI_REALTIME_MODEL` / `OPENAI_REALTIME_VOICE` / `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | voice |
 | `GPT_MODEL` | default API model for unconfigured channels |
-| `GPT_HISTORY_TOKEN_BUDGET` / `GPT_MAX_TOOL_LOOPS` | history budget + API tool-loop cap |
+| `GPT_HISTORY_TOKEN_BUDGET` / `GPT_MAX_TOOL_LOOPS` | history budget + API tool-loop cap (default 24 rounds) |
 | `GPT_SUMMARIZATION_MODEL` / `_THRESHOLD` / `_BATCH_LIMIT` | rolling channel summaries |
 
 ## Runtime
