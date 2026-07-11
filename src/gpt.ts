@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type M
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
+import { setTimeout as sleep } from 'node:timers/promises'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
@@ -11,10 +12,11 @@ import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/comman
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent, RespondResult, ToolCall } from './openai.ts'
 import { isInFlightStatusPing, respondViaCodex } from './codex-chat.ts'
+import { codexFallbackWaitMs } from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
-import { CodexInterruptedError, CodexStoppedError } from './codex-chat.ts'
+import { CodexInterruptedError, CodexProcessDiedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
@@ -148,6 +150,7 @@ const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
   ?? process.env.GPT_SESSION_ROLLOVER_TOKENS
   ?? 750_000
 )
+const CODEX_FALLBACK_MIN_ELAPSED_MS = Number(process.env.GPT_CODEX_FALLBACK_MIN_ELAPSED_MS) || 90_000
 // Match the Claude bots' tool_watcher.py caps: tool-call header rows <= 83, and
 // stdout/result preview rows a touch narrower so the second trace line doesn't
 // wrap. NOTE: OUT_W is the preview WIDTH in chars, not a call count — a prior fix
@@ -1136,9 +1139,9 @@ async function handleUserMessage(
   try {
     throwIfStopped()
     // Codex-as-default-chat: route text turns through the Codex CLI (flat-sub,
-    // self-web-searching) instead of the metered API. Falls back to the API on
-    // any codex error, and skips codex when there are images (the CLI can't take
-    // them). Kill switch: GPT_CODEX_CHAT=0.
+    // self-web-searching) instead of the metered API. Images bypass Codex because
+    // the CLI cannot ingest them. Runtime fallback is reserved for a confirmed
+    // dead Codex child after the grace window. Kill switch: GPT_CODEX_CHAT=0.
     const apiRespond = () => openai.respond({
       systemPrompt,
       history,
@@ -1237,13 +1240,36 @@ async function handleUserMessage(
           if (workMessage) await workMessage.edit('↻ **restart in progress — queued work will resume when gpt is back**').catch(() => {})
           return
         }
-        // A codex turn failed — drop this channel's session pointer so the NEXT turn
-        // starts a clean fresh session (a wedged/expired session would otherwise fail
-        // every turn; the fresh turn re-grounds from Discord history).
+        const fallbackWaitMs = codexFallbackWaitMs(e, CODEX_FALLBACK_MIN_ELAPSED_MS)
+        if (fallbackWaitMs === null) {
+          logTurnLifecycle({
+            event: 'fallback_suppressed', channelId, generation: turnGeneration,
+            engine: 'codex', fallbackReason: 'codex_failure_unconfirmed',
+          })
+          console.error('codex failed without a confirmed child-process death; suppressing API fallback:', e)
+          await settleLiveUi()
+          await deleteLiveTrace()
+          void applyLifecycle(message, 'errored')
+          if (workMessage) await workMessage.edit('⚠️ **codex hit an error — API fallback suppressed**').catch(() => {})
+          return
+        }
+
+        // A confirmed dead/timed-out Codex child invalidates the resumable session.
+        // Wait until the attempt has been dead or running for the configured grace
+        // window before spending API tokens; steering can still abort this wait.
         channelSessions.dropSession(channelId)
-        // Don't fail silently. If codex was interrupted by the backstop (or errored),
-        // SHOW it — an ⏳ reaction + a short note on the placeholder — THEN fall back
-        // to the API so the user still gets an answer, but knows what happened.
+        if (fallbackWaitMs > 0) {
+          if (workMessage) await workMessage.edit(
+            `⏳ **codex exited — waiting ${Math.ceil(fallbackWaitMs / 1000)}s before API fallback…**`,
+          ).catch(() => {})
+          try {
+            await sleep(fallbackWaitMs, undefined, { signal: stopController.signal })
+          } catch {
+            throwIfStopped()
+          }
+          throwIfStopped()
+        }
+
         if (e instanceof CodexInterruptedError) {
           logTurnLifecycle({
             event: 'engine_fallback', channelId, generation: turnGeneration,
@@ -1252,14 +1278,14 @@ async function handleUserMessage(
           console.error('codex interrupted by backstop, surfacing + falling back to API:', e.message)
           void applyLifecycle(message, 'interrupted')
           if (workMessage) { await workMessage.edit('⏳ **codex turn interrupted — retrying on the API…**').catch(() => {}) }
-        } else {
+        } else if (e instanceof CodexProcessDiedError) {
           logTurnLifecycle({
             event: 'engine_fallback', channelId, generation: turnGeneration,
-            engine: 'api', fallbackReason: 'codex_error',
+            engine: 'api', fallbackReason: 'codex_process_died',
           })
-          console.error('codex chat failed, falling back to API:', e)
+          console.error('codex process confirmed dead after fallback grace; using API:', e)
           void applyLifecycle(message, 'errored')
-          if (workMessage) { await workMessage.edit('⚠️ **codex hit an error — retrying on the API…**').catch(() => {}) }
+          if (workMessage) { await workMessage.edit('⚠️ **codex exited — retrying on the API…**').catch(() => {}) }
         }
         throwIfStopped()
         result = await apiRespond()

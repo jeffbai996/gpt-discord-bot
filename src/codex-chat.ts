@@ -19,6 +19,13 @@ export class CodexInterruptedError extends Error {
   }
 }
 
+export class CodexProcessDiedError extends Error {
+  constructor(public readonly afterMs: number, detail: string, options?: ErrorOptions) {
+    super(detail, options)
+    this.name = 'CodexProcessDiedError'
+  }
+}
+
 export class CodexStoppedError extends Error {
   constructor(public readonly afterMs: number) {
     super(`codex turn stopped by user (/gpt stop) after ${Math.round(afterMs/1000)}s`)
@@ -332,7 +339,8 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
 // Run a chat turn through the Codex CLI instead of the OpenAI API. Returns a
 // RespondResult shaped exactly like openai.respond(), so gpt.ts can use it
 // interchangeably. THROWS on any failure (timeout, empty answer, exec error)
-// so the caller can fall back to the API — this never silently returns junk.
+// so the caller can apply its explicit fallback policy — this never silently
+// returns junk.
 
 function parseFunctionCallArgs(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
@@ -748,16 +756,19 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
   if (processResult?.error) {
     logOutcome('error', processResult.error.message)
-    throw processResult.error
+    throw new CodexProcessDiedError(Date.now() - t0, processResult.error.message, { cause: processResult.error })
   }
   if (processResult && processResult.code !== 0) {
     const detail = `codex exited code=${processResult.code} signal=${processResult.signal ?? 'none'}`
     logOutcome('error', detail)
-    throw new Error(detail)
+    throw new CodexProcessDiedError(Date.now() - t0, detail)
   }
   if (!reply) {
     logOutcome('empty', `no answer (lines=${lines.length})`)
-    throw new Error(`codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`)
+    throw new CodexProcessDiedError(
+      Date.now() - t0,
+      `codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`,
+    )
   }
   logOutcome('completed')
 
