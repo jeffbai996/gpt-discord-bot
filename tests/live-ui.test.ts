@@ -6,7 +6,7 @@ import { formatLiveWorkMessage } from '../src/live-ui.ts'
 test('keeps the thinking header above live progress', () => {
   assert.equal(
     formatLiveWorkMessage({ effortLabel: 'thinking with max effort', detail: 'Checking the renderer.' }),
-    '💭 ✻ **thinking with max effort…**\n\nChecking the renderer.',
+    '💭 ✻ **thinking with max effort…**\n\n> Checking the renderer.',
   )
 })
 
@@ -18,6 +18,15 @@ test('keeps the thinking header when only a heartbeat is available', () => {
     }),
     '💭 ✻ **thinking…**\n\n-# ✻ still working · 30s elapsed · last activity 4s ago',
   )
+})
+
+test('quotes multiline commentary as part of the thought trace', () => {
+  const message = formatLiveWorkMessage({
+    effortLabel: 'thinking',
+    detail: 'A first line\nand a second line',
+  })
+
+  assert.match(message, /\n\n> A first line\n> and a second line/)
 })
 
 test('clips progress before the footer instead of dropping the heartbeat', () => {
