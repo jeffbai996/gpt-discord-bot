@@ -5,6 +5,19 @@ interface LiveWorkMessageOptions {
   maxLength?: number
 }
 
+const HEARTBEAT_VERBS = [
+  'cogitating',
+  'pondering',
+  'mulling',
+  'noodling',
+  'ruminating',
+  'scheming',
+] as const
+
+export function pickHeartbeatVerb(random: () => number = Math.random): string {
+  return HEARTBEAT_VERBS[Math.floor(random() * HEARTBEAT_VERBS.length)] ?? HEARTBEAT_VERBS[0]
+}
+
 function formatDuration(ms: number): string {
   const seconds = Math.round(ms / 1000)
   return seconds < 60
@@ -12,11 +25,11 @@ function formatDuration(ms: number): string {
     : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-export function formatHeartbeatFooter(elapsedMs: number, idleMs: number): string {
+export function formatHeartbeatFooter(elapsedMs: number, idleMs: number, verb: string): string {
   const activity = idleMs < 1_000
     ? 'active now'
     : `active ${formatDuration(idleMs)} ago`
-  return `\`✻ ${formatDuration(elapsedMs)} · ${activity}\``
+  return `\`✻ ${verb} · ${formatDuration(elapsedMs)} · ${activity}\``
 }
 
 export function formatLiveWorkMessage({

@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { formatHeartbeatFooter, formatLiveWorkMessage } from '../src/live-ui.ts'
+import { formatHeartbeatFooter, formatLiveWorkMessage, pickHeartbeatVerb } from '../src/live-ui.ts'
+
+test('picks one heartbeat verb from the compact status pool', () => {
+  assert.equal(pickHeartbeatVerb(() => 0), 'cogitating')
+  assert.equal(pickHeartbeatVerb(() => 0.999), 'scheming')
+})
 
 test('renders heartbeat status as one compact inline row', () => {
   assert.equal(
-    formatHeartbeatFooter(33_000, 4_000),
-    '`✻ 33s · active 4s ago`',
+    formatHeartbeatFooter(33_000, 4_000, 'cogitating'),
+    '`✻ cogitating · 33s · active 4s ago`',
   )
 })
 
@@ -21,9 +26,9 @@ test('keeps the thinking header when only a heartbeat is available', () => {
   assert.equal(
     formatLiveWorkMessage({
       effortLabel: 'thinking',
-      footer: '`✻ 30s · active 4s ago`',
+      footer: '`✻ cogitating · 30s · active 4s ago`',
     }),
-    '💭 ✻ **thinking…**\n\n`✻ 30s · active 4s ago`',
+    '💭 ✻ **thinking…**\n\n`✻ cogitating · 30s · active 4s ago`',
   )
 })
 
@@ -32,9 +37,9 @@ test('keeps commentary above the compact heartbeat row', () => {
     formatLiveWorkMessage({
       effortLabel: 'thinking',
       detail: 'Checking the actual repos.',
-      footer: '`✻ 33s · active 4s ago`',
+      footer: '`✻ cogitating · 33s · active 4s ago`',
     }),
-    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n`✻ 33s · active 4s ago`',
+    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n`✻ cogitating · 33s · active 4s ago`',
   )
 })
 

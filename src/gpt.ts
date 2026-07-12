@@ -43,7 +43,7 @@ import {
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
 } from './tool-trace.ts'
-import { formatHeartbeatFooter, formatLiveWorkMessage } from './live-ui.ts'
+import { formatHeartbeatFooter, formatLiveWorkMessage, pickHeartbeatVerb } from './live-ui.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -809,6 +809,7 @@ async function handleUserMessage(
   // placeholder (Jeff 2026-06-24). 'none' effort just reads "thinking".
   const effortLabel = flags.reasoning && flags.reasoning !== 'none'
     ? `thinking with ${flags.reasoning} effort` : 'thinking'
+  const heartbeatVerb = pickHeartbeatVerb()
   let workMessage: Message | null = targetMessage
   let placeholderId: string | null = null
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
@@ -1127,7 +1128,7 @@ async function handleUserMessage(
       if (Date.now() - lastProgressAt < 12_000) return
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
-      const footer = formatHeartbeatFooter(event.elapsedMs, event.idleMs)
+      const footer = formatHeartbeatFooter(event.elapsedMs, event.idleMs, heartbeatVerb)
       queueLiveText(base, false, footer)
       return
     }
