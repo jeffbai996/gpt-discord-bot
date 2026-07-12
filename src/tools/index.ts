@@ -6,7 +6,7 @@ import { makeWebSearchTool } from './web-search.ts'
 import { makeSearchMemoryTool } from './search-memory.ts'
 import { makeSquadMemoryTool } from './squad-memory.ts'
 import { makeSquadFilesTool } from './squad-files.ts'
-import { makeCodexTool } from './codex.ts'
+import { makeCodexHelperTool, makeCodexTool } from './codex.ts'
 import { connectMcpClient } from './mcp-client.ts'
 import { loadMcpTools } from './mcp-tools.ts'
 import { makeUnreachableStub } from './mcp-unreachable-stub.ts'
@@ -33,6 +33,7 @@ export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore |
   // Same posture: the squad files read-tool is HTTP-only, no local store.
   registry.register(makeSquadFilesTool())
   registry.register(makeCodexTool())
+  registry.register(makeCodexHelperTool())
   if (memory) {
     registry.register(makeSearchMemoryTool(embedClient, memory))
   }

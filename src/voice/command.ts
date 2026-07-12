@@ -17,6 +17,7 @@ import { VoiceSession } from './session.ts'
 import type { RealtimeTool, ToolCall } from './realtime.ts'
 import type { PersonaLoader } from '../persona.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
+import type { DeferredToolJob } from '../tools/registry.ts'
 
 // Appended to the bot's real persona for a live call. Mirrors gemma's voice
 // override: the text persona's "stay silent / opt out" etiquette is a bug on a
@@ -30,8 +31,11 @@ ALWAYS respond out loud to anything the speaker says, including greetings, mic \
 tests, and small talk. Keep replies short, natural, and conversational — you are \
 speaking, not writing. No markdown, no lists, no emoji. You can use tools, but \
 keep the conversation flowing: don't announce that you're searching, just answer \
-once you have the result; if a tool is slow, give a brief natural answer and \
-offer to follow up.`.trim()
+once you have the result. For substantial coding, repository, testing, commit, \
+or deployment work, call codex_helper with a self-contained order. It returns \
+immediately: briefly say the job is running and keep talking normally. When its \
+background completion arrives, report the actual outcome out loud without \
+pretending you did work that the result does not confirm.`.trim()
 
 // Tools too slow for a live call (multi-second = dead air that feels broken).
 // Excluded from what the voice model is OFFERED — still dispatchable if somehow
@@ -57,7 +61,7 @@ export interface VoiceManagerOptions {
   instructions?: string
   voice?: string
   tools?: RealtimeTool[]
-  onToolCall?: (call: ToolCall) => Promise<unknown>
+  onToolCall?: (call: ToolCall, defer: (job: DeferredToolJob) => void) => Promise<unknown>
   log?: (msg: string) => void
 }
 
@@ -169,10 +173,13 @@ export async function executeVoiceCommand(
     `${persona.buildSystemPrompt(interaction.channelId, interaction.guildId)}\n\n---\n\n${VOICE_OVERRIDE}`
   const tools = toolRegistry.toRealtimeTools().filter(t => !VOICE_TOOL_DENY.has(t.name))
   const ctx = { channelId: interaction.channelId, userId: interaction.user.id }
-  const onToolCall = async (call: ToolCall): Promise<unknown> => {
+  const onToolCall = async (
+    call: ToolCall,
+    defer: (job: DeferredToolJob) => void,
+  ): Promise<unknown> => {
     let args: Record<string, unknown> = {}
     try { args = JSON.parse(call.argsJson || '{}') } catch { /* malformed args → {} */ }
-    return await toolRegistry.dispatch(call.name, args, ctx)
+    return await toolRegistry.dispatch(call.name, args, { ...ctx, defer })
   }
   try {
     await manager.join(interaction.guildId, channel, { instructions, tools, onToolCall })

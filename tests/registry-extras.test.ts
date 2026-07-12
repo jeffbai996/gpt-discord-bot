@@ -83,6 +83,16 @@ test('ToolRegistry: toRealtimeTools is flat shape, no strict, order preserved', 
   assert.ok(!('strict' in t0))
 })
 
+test('ToolRegistry: voice-only tools are offered only to Realtime', () => {
+  const r = new ToolRegistry()
+  r.register(makeTool('normal'))
+  r.register({ ...makeTool('background'), availability: 'voice' })
+
+  assert.deepEqual(r.toOpenAITools().map(t => t.function.name), ['normal'])
+  assert.deepEqual(r.toResponsesTools().map(t => t.name), ['normal'])
+  assert.deepEqual(r.toRealtimeTools().map(t => t.name), ['normal', 'background'])
+})
+
 test('voice tool dispatch: argsJson round-trips through dispatch (incl. malformed)', async () => {
   // Mirrors the onToolCall closure in command.ts: JSON.parse(argsJson||'{}')
   // then registry.dispatch. Verifies a good payload and a malformed one (→ {}).

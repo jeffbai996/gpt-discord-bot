@@ -10,6 +10,16 @@ export interface ToolContext {
   // (openai.ts) collects the paths and gpt.ts attaches them. Optional — tools
   // that don't emit files ignore it.
   onFile?: (path: string) => void
+  // Voice-only escape hatch for work that outlives a Realtime function call.
+  // The tool returns an immediate acknowledgement, then the voice session feeds
+  // `result` back into the conversation when it settles.
+  defer?: (job: DeferredToolJob) => void
+}
+
+export interface DeferredToolJob {
+  id: string
+  tool: string
+  result: Promise<string>
 }
 
 // JSONSchema fragment describing the tool's args. Using a loose `unknown`
@@ -25,6 +35,7 @@ export interface Tool {
   name: string
   description: string
   parameters: ToolParameters
+  availability?: 'all' | 'voice'
   execute(args: Record<string, unknown>, ctx: ToolContext): Promise<string>
 }
 
@@ -45,7 +56,7 @@ export class ToolRegistry {
   // We hand back exactly that array; the caller passes it as the `tools`
   // request param.
   toOpenAITools(): OpenAI.Chat.Completions.ChatCompletionTool[] {
-    return this.order.map(n => {
+    return this.order.filter(n => this.tools.get(n)!.availability !== 'voice').map(n => {
       const t = this.tools.get(n)!
       return {
         type: 'function',
@@ -65,7 +76,7 @@ export class ToolRegistry {
   // `additionalProperties: false`, which our tool schemas don't all satisfy.
   // The caller passes this as the `tools` request param.
   toResponsesTools(): OpenAI.Responses.FunctionTool[] {
-    return this.order.map(n => {
+    return this.order.filter(n => this.tools.get(n)!.availability !== 'voice').map(n => {
       const t = this.tools.get(n)!
       return {
         type: 'function',

@@ -86,7 +86,7 @@ Each is its own subcommand with selectable choices (no free-text):
 - **Squad memory** — on the codex path, the model can `recall` and **write** to a shared shared-memory (memory / journal) over HTTP; writes post a veto-card back to the channel. Set `SQUAD_STORE_URL` + `SQUAD_STORE_BOT`.
 - **MCP tools** — any MCP server's tools auto-register over streamable-HTTP (`GPT_MCP_URL` / `GPT_MCP_LABEL`). Used in practice to wire an IBKR portfolio server (34 tools).
 - **vecgrep** — semantic search hook (`GPT_VECGREP_BIN`) on the codex path.
-- **Voice** — joins a voice channel and runs an OpenAI Realtime session (`OPENAI_REALTIME_MODEL`/`_VOICE`), with TTS fallback (`OPENAI_TTS_MODEL`/`_VOICE`). `GPT_VOICE_TOOL_DENY` gates tools in voice.
+- **Voice** — joins a voice channel and runs an OpenAI Realtime session (`OPENAI_REALTIME_MODEL`/`_VOICE`), with TTS fallback (`OPENAI_TTS_MODEL`/`_VOICE`). `codex_helper` hands substantial repo work to a separately installed privileged helper, acknowledges immediately, then injects the completion back into the call. This public repo does not contain the writable worker. `GPT_VOICE_TOOL_DENY` gates ordinary tools in voice.
 - **Semantic memory (RAG)** — allowed messages are embedded (`text-embedding-3-small`) into sqlite-vss; the model can `search_memory`; background summarization rolls older history into a per-channel summary above the live context.
 - **Multimodal** — images are passed to the Codex CLI for vision, audio is Whisper-transcribed, and text/code files are inlined; PDFs/video are surfaced as `[attachments not ingested]`.
 - **Reaction actions** on the bot's replies — 🔁 regenerate, 🔍 expand, 📌 pin (per-channel pinned-facts injected into the prompt), ❌ delete, 🔇/🔊 mute, ✏️ edit-on-next-message.
@@ -117,11 +117,14 @@ State (allowlist, persona, embeddings DB, summaries, pinned facts, the placehold
 | Var | Purpose |
 |---|---|
 | `GPT_CODEX_BIN` | path to the `codex` CLI (default the nvm v22 install) |
+| `GPT_CODEX_HELPER_BIN` | path to the separately installed privileged helper used by `codex_helper` |
+| `GPT_CODEX_DEFAULT_REPO` | repo under `~/repos` used when the read-only Codex tool gets no repo (default `gpt-bot`) |
 | `GPT_CODEX_CHAT` | set `0` to force the API engine everywhere |
 | `GPT_CODEX_HEARTBEAT_MS` | Discord proof-of-life pulse while Codex is silent (default 15000) |
 | `GPT_CODEX_IDLE_TIMEOUT_MS` | meaningful-activity watchdog; malformed/noisy JSONL does not reset it (default 600000) |
 | `GPT_CODEX_CHAT_TIMEOUT_MS` | hard runaway fuse for a Codex turn, not the normal work limit (default 2700000) |
 | `GPT_CODEX_KILL_GRACE_MS` | maximum wait for a killed child to close before the queue force-settles (default 5000) |
+| `GPT_VOICE_CODEX_TIMEOUT_MS` | hard timeout for background Codex jobs delegated from voice (default 1800000) |
 | `GPT_LIVE_UI_SETTLE_MS` | maximum wait for a Discord progress edit during final cleanup (default 5000) |
 | `GPT_THOUGHT_LINGER_MS` | how long collapse keeps the thought-for / trace cards (default 120000) |
 | `GPT_MCP_URL` / `GPT_MCP_LABEL` | MCP server to auto-register tools from |

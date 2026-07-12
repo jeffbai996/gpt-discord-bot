@@ -89,6 +89,20 @@ export function buildToolOutput(callId: string, output: unknown): Record<string,
   }
 }
 
+export function buildBackgroundResult(jobId: string, result: string): Record<string, unknown> {
+  return {
+    type: 'conversation.item.create',
+    item: {
+      type: 'message',
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: `[Background Codex job ${jobId} completed]\n${result}\n\nTell the caller the outcome naturally and concisely. Mention failures or blockers plainly.`,
+      }],
+    },
+  }
+}
+
 /**
  * Parse one server event into a (kind, payload) the session can act on.
  * Pure — no emit — so it tests directly. Returns null for events we ignore.
@@ -136,6 +150,9 @@ export function parseServerEvent(raw: string | Buffer):
 
 export class RealtimeSession extends EventEmitter {
   private ws?: WebSocket
+  private userSpeaking = false
+  private responseActive = false
+  private readonly backgroundQueue: Array<{ jobId: string; result: string }> = []
   private readonly opts: Required<Omit<RealtimeOptions, 'instructions' | 'tools'>> &
     Pick<RealtimeOptions, 'instructions' | 'tools'>
 
@@ -180,11 +197,22 @@ export class RealtimeSession extends EventEmitter {
     if (!ev) return
     switch (ev.kind) {
       case 'audio': this.emit('audio', ev.audio); break
-      case 'speechStarted': this.emit('speechStarted'); break
-      case 'speechStopped': this.emit('speechStopped'); break
+      case 'speechStarted':
+        this.userSpeaking = true
+        this.emit('speechStarted')
+        break
+      case 'speechStopped':
+        this.userSpeaking = false
+        this.responseActive = true // server VAD creates the response automatically
+        this.emit('speechStopped')
+        break
       case 'transcript': this.emit('transcript', ev.text); break
       case 'toolCall': this.emit('toolCall', ev.call); break
-      case 'responseDone': this.emit('responseDone'); break
+      case 'responseDone':
+        this.responseActive = false
+        this.emit('responseDone')
+        this.flushBackgroundQueue()
+        break
       case 'error': this.emit('error', ev.error); break
     }
   }
@@ -195,6 +223,21 @@ export class RealtimeSession extends EventEmitter {
 
   sendToolResponse(callId: string, output: unknown): void {
     this.send(buildToolOutput(callId, output))
+    this.responseActive = true
+    this.send({ type: 'response.create' })
+  }
+
+  deliverBackgroundResult(jobId: string, result: string): void {
+    this.backgroundQueue.push({ jobId, result })
+    this.flushBackgroundQueue()
+  }
+
+  private flushBackgroundQueue(): void {
+    if (this.userSpeaking || this.responseActive) return
+    const next = this.backgroundQueue.shift()
+    if (!next) return
+    this.send(buildBackgroundResult(next.jobId, next.result))
+    this.responseActive = true
     this.send({ type: 'response.create' })
   }
 

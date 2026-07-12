@@ -25,6 +25,7 @@ import type { VoiceBasedChannel } from 'discord.js'
 
 import { RealtimeSession, type RealtimeTool, type ToolCall } from './realtime.ts'
 import { discordToOpenAI, openAIToDiscord } from './audio-bridge.ts'
+import type { DeferredToolJob } from '../tools/registry.ts'
 
 const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
 // TTS voice is independent of the realtime voice (the classic TTS voice set
@@ -42,7 +43,7 @@ export interface VoiceSessionOptions {
   voice?: string
   tools?: RealtimeTool[]
   /** Called when the model invokes a tool; return the result to feed back. */
-  onToolCall?: (call: ToolCall) => Promise<unknown>
+  onToolCall?: (call: ToolCall, defer: (job: DeferredToolJob) => void) => Promise<unknown>
   log?: (msg: string) => void
 }
 
@@ -163,11 +164,23 @@ export class VoiceSession {
       return
     }
     try {
-      const result = await this.opts.onToolCall(call)
+      const result = await this.opts.onToolCall(call, job => this.trackDeferredJob(job))
       this.realtime?.sendToolResponse(call.callId, result)
     } catch (e) {
       this.realtime?.sendToolResponse(call.callId, { error: (e as Error).message })
     }
+  }
+
+  private trackDeferredJob(job: DeferredToolJob): void {
+    this.log(`background job ${job.id} started (${job.tool})`)
+    void job.result.then(result => {
+      this.log(`background job ${job.id} completed (${job.tool})`)
+      this.realtime?.deliverBackgroundResult(job.id, result)
+    }, error => {
+      const message = error instanceof Error ? error.message : String(error)
+      this.log(`background job ${job.id} failed (${job.tool}): ${message}`)
+      this.realtime?.deliverBackgroundResult(job.id, `Failed: ${message}`)
+    })
   }
 
   /**

@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildSessionUpdate, buildAudioAppend, buildToolOutput, parseServerEvent,
+  buildSessionUpdate, buildAudioAppend, buildToolOutput, buildBackgroundResult,
+  parseServerEvent,
   RealtimeSession,
 } from '../src/voice/realtime.ts'
 
@@ -39,6 +40,16 @@ test('buildToolOutput shapes a function_call_output item', () => {
   assert.equal(m.item.type, 'function_call_output')
   assert.equal(m.item.call_id, 'call_1')
   assert.equal(m.item.output, JSON.stringify({ ok: true }))
+})
+
+test('buildBackgroundResult injects a completed job as conversation context', () => {
+  const m = buildBackgroundResult('job_42', 'tests pass') as any
+  assert.equal(m.type, 'conversation.item.create')
+  assert.equal(m.item.type, 'message')
+  assert.equal(m.item.role, 'user')
+  assert.match(m.item.content[0].text, /job_42/)
+  assert.match(m.item.content[0].text, /tests pass/)
+  assert.match(m.item.content[0].text, /tell the caller/i)
 })
 
 test('parseServerEvent: audio delta decodes base64', () => {
@@ -88,4 +99,42 @@ test('dispatch routes a server frame to the matching emitted event', () => {
   sess.dispatch('{"type":"input_audio_buffer.speech_started"}')
   assert.deepEqual(got, pcm)
   assert.equal(bargeIn, true)
+})
+
+test('background completion waits until the caller and active response are done', () => {
+  class CapturingSession extends RealtimeSession {
+    sent: Record<string, any>[] = []
+    protected override send(obj: Record<string, unknown>): void { this.sent.push(obj) }
+  }
+  const sess = new CapturingSession({ apiKey: 'x' })
+
+  sess.dispatch('{"type":"input_audio_buffer.speech_started"}')
+  sess.deliverBackgroundResult('job_busy', 'finished while Jeff was talking')
+  assert.equal(sess.sent.length, 0)
+
+  sess.dispatch('{"type":"input_audio_buffer.speech_stopped"}')
+  assert.equal(sess.sent.length, 0, 'server VAD response still owns the turn')
+
+  sess.dispatch('{"type":"response.done"}')
+  assert.equal(sess.sent.length, 2)
+  assert.equal(sess.sent[0].type, 'conversation.item.create')
+  assert.match(sess.sent[0].item.content[0].text, /job_busy/)
+  assert.equal(sess.sent[1].type, 'response.create')
+})
+
+test('background completions serialize instead of creating overlapping responses', () => {
+  class CapturingSession extends RealtimeSession {
+    sent: Record<string, any>[] = []
+    protected override send(obj: Record<string, unknown>): void { this.sent.push(obj) }
+  }
+  const sess = new CapturingSession({ apiKey: 'x' })
+
+  sess.deliverBackgroundResult('job_one', 'one')
+  sess.deliverBackgroundResult('job_two', 'two')
+  assert.equal(sess.sent.length, 2)
+  assert.match(sess.sent[0].item.content[0].text, /job_one/)
+
+  sess.dispatch('{"type":"response.done"}')
+  assert.equal(sess.sent.length, 4)
+  assert.match(sess.sent[2].item.content[0].text, /job_two/)
 })
