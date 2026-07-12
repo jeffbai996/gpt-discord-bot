@@ -43,7 +43,7 @@ import {
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
 } from './tool-trace.ts'
-import { formatLiveWorkMessage } from './live-ui.ts'
+import { formatHeartbeatFooter, formatLiveWorkMessage } from './live-ui.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -1127,8 +1127,7 @@ async function handleUserMessage(
       if (Date.now() - lastProgressAt < 12_000) return
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
-      const activity = event.idleMs < 1_000 ? 'activity just now' : `last activity ${fmtDur(event.idleMs)} ago`
-      const footer = `-# ✻ still working · ${fmtDur(event.elapsedMs)} elapsed · ${activity}`
+      const footer = formatHeartbeatFooter(event.elapsedMs, event.idleMs)
       queueLiveText(base, false, footer)
       return
     }
