@@ -3,10 +3,10 @@ import test from 'node:test'
 
 import { formatHeartbeatFooter, formatLiveWorkMessage } from '../src/live-ui.ts'
 
-test('renders heartbeat status in a Discord code block', () => {
+test('renders heartbeat status as one compact inline row', () => {
   assert.equal(
     formatHeartbeatFooter(33_000, 4_000),
-    '```\n✻ still working · 33s elapsed · last activity 4s ago\n```',
+    '`✻ 33s · active 4s ago`',
   )
 })
 
@@ -21,20 +21,20 @@ test('keeps the thinking header when only a heartbeat is available', () => {
   assert.equal(
     formatLiveWorkMessage({
       effortLabel: 'thinking',
-      footer: '```\n✻ still working · 30s elapsed · last activity 4s ago\n```',
+      footer: '`✻ 30s · active 4s ago`',
     }),
-    '💭 ✻ **thinking…**\n\n```\n✻ still working · 30s elapsed · last activity 4s ago\n```',
+    '💭 ✻ **thinking…**\n\n`✻ 30s · active 4s ago`',
   )
 })
 
-test('keeps commentary outside the heartbeat code block', () => {
+test('keeps commentary above the compact heartbeat row', () => {
   assert.equal(
     formatLiveWorkMessage({
       effortLabel: 'thinking',
       detail: 'Checking the actual repos.',
-      footer: '```\n✻ still working · 33s elapsed · last activity 4s ago\n```',
+      footer: '`✻ 33s · active 4s ago`',
     }),
-    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n```\n✻ still working · 33s elapsed · last activity 4s ago\n```',
+    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n`✻ 33s · active 4s ago`',
   )
 })
 

@@ -14,9 +14,9 @@ function formatDuration(ms: number): string {
 
 export function formatHeartbeatFooter(elapsedMs: number, idleMs: number): string {
   const activity = idleMs < 1_000
-    ? 'activity just now'
-    : `last activity ${formatDuration(idleMs)} ago`
-  return `\`\`\`\n✻ still working · ${formatDuration(elapsedMs)} elapsed · ${activity}\n\`\`\``
+    ? 'active now'
+    : `active ${formatDuration(idleMs)} ago`
+  return `\`✻ ${formatDuration(elapsedMs)} · ${activity}\``
 }
 
 export function formatLiveWorkMessage({
