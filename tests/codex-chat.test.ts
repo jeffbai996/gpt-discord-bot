@@ -267,6 +267,21 @@ test('codex process args use direct spawn with the prompt as one inert argv', ()
   ])
 })
 
+test('codex fresh image args end before the positional prompt', () => {
+  const args = buildCodexArgs({
+    prompt: 'describe the attached images',
+    model: 'gpt-test',
+    effort: 'medium',
+    outfile: '/tmp/final.txt',
+    imagePaths: ['/tmp/one.png', '/tmp/two.jpg'],
+  })
+
+  assert.deepEqual(args.slice(-8), [
+    '--image', '/tmp/one.png', '--image', '/tmp/two.jpg',
+    '--json', '-o', '/tmp/final.txt', 'describe the attached images',
+  ])
+})
+
 test('codex resume args preserve the session id without a shell wrapper', () => {
   const args = buildCodexArgs({
     prompt: 'continue',
@@ -280,8 +295,9 @@ test('codex resume args preserve the session id without a shell wrapper', () => 
     'exec', 'resume', '--skip-git-repo-check',
     '--dangerously-bypass-approvals-and-sandbox', '-c',
   ])
-  assert.deepEqual(args.slice(-6), [
-    '--image', '/tmp/one.png', '--image', '/tmp/two.jpg', 'session-123', 'continue',
+  assert.deepEqual(args.slice(-9), [
+    '--image', '/tmp/one.png', '--image', '/tmp/two.jpg',
+    '--json', '-o', '/tmp/final.txt', 'session-123', 'continue',
   ])
 })
 

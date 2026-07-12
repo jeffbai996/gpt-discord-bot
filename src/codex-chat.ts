@@ -142,10 +142,12 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
     '--dangerously-bypass-approvals-and-sandbox',
     '-c', `model="${input.model}"`,
     '-c', `model_reasoning_effort=${input.effort}`,
-    '--json',
-    '-o', input.outfile,
   )
+  // Fresh `codex exec --image` accepts one-or-more files and greedily consumes
+  // following positional arguments. Keep another option after the image list so
+  // the final prompt can never be mistaken for an image path.
   for (const imagePath of input.imagePaths ?? []) args.push('--image', imagePath)
+  args.push('--json', '-o', input.outfile)
   if (input.resumeSessionId) args.push(input.resumeSessionId)
   args.push(input.prompt)
   return args
