@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { formatResultTraceLine } from '../src/tool-trace.ts'
+import {
+  DEFAULT_TOOL_CALL_WIDTH,
+  DEFAULT_TOOL_OUTPUT_WIDTH,
+  formatResultTraceLine,
+} from '../src/tool-trace.ts'
+
+test('uses the reduced Discord trace widths', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 80)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 72)
+})
 
 test('puts the result line count at the right edge of the preview row', () => {
   const line = formatResultTraceLine('alpha', 12, 20)

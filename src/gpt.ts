@@ -38,7 +38,11 @@ import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
-import { formatResultTraceLine } from './tool-trace.ts'
+import {
+  DEFAULT_TOOL_CALL_WIDTH,
+  DEFAULT_TOOL_OUTPUT_WIDTH,
+  formatResultTraceLine,
+} from './tool-trace.ts'
 import { formatLiveWorkMessage } from './live-ui.ts'
 import OpenAI from 'openai'
 
@@ -151,13 +155,13 @@ const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
   ?? 750_000
 )
 const CODEX_FALLBACK_MIN_ELAPSED_MS = Number(process.env.GPT_CODEX_FALLBACK_MIN_ELAPSED_MS) || 90_000
-// Match the Claude bots' tool_watcher.py caps: tool-call header rows <= 83, and
-// stdout/result preview rows a touch narrower so the second trace line doesn't
-// wrap. NOTE: OUT_W is the preview WIDTH in chars, not a call count — a prior fix
+// Keep tool-call headers and stdout/result previews narrow enough that Discord's
+// code fence does not wrap on Jeff's client. Output rows need extra headroom.
+// NOTE: OUT_W is the preview WIDTH in chars, not a call count — a prior fix
 // misread "reduce ~10" and chopped this to 10, which made every ⎿ preview useless
-// ([{"channe…). Restored to a readable width (Jeff 2026-07-05: trim ~10 off 88).
-const ROW_W = 83
-const OUT_W = Number(process.env.GPT_OUT_W ?? 78)
+// ([{"channe…). Widths reduced again by 3 call cells / 6 output cells on 2026-07-12.
+const ROW_W = DEFAULT_TOOL_CALL_WIDTH
+const OUT_W = Number(process.env.GPT_OUT_W ?? DEFAULT_TOOL_OUTPUT_WIDTH)
 
 function capMegaLine(ln: string): string {
   return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln

@@ -1,3 +1,6 @@
+export const DEFAULT_TOOL_CALL_WIDTH = 80
+export const DEFAULT_TOOL_OUTPUT_WIDTH = 72
+
 export function formatResultTraceLine(
   resultPreview: string,
   resultLines: number,
