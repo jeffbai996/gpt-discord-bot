@@ -29,7 +29,7 @@ export function formatHeartbeatFooter(elapsedMs: number, idleMs: number, verb: s
   const activity = idleMs < 1_000
     ? 'active now'
     : `active ${formatDuration(idleMs)} ago`
-  return `\`✻ ${verb} · ${formatDuration(elapsedMs)} · ${activity}\``
+  return `\` ✻ ${verb} · ${formatDuration(elapsedMs)} · ${activity} \``
 }
 
 export function formatLiveWorkMessage({

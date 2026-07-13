@@ -8,10 +8,10 @@ test('picks one heartbeat verb from the compact status pool', () => {
   assert.equal(pickHeartbeatVerb(() => 0.999), 'scheming')
 })
 
-test('renders heartbeat status as one compact inline row', () => {
+test('renders heartbeat status as one compact inline row with one-cell side padding', () => {
   assert.equal(
     formatHeartbeatFooter(33_000, 4_000, 'cogitating'),
-    '`✻ cogitating · 33s · active 4s ago`',
+    '` ✻ cogitating · 33s · active 4s ago `',
   )
 })
 
