@@ -14,8 +14,30 @@ const HEARTBEAT_VERBS = [
   'scheming',
 ] as const
 
+const HEARTBEAT_GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸'] as const
+const HEARTBEAT_VERB_FRAMES = 4
+
 export function pickHeartbeatVerb(random: () => number = Math.random): string {
   return HEARTBEAT_VERBS[Math.floor(random() * HEARTBEAT_VERBS.length)] ?? HEARTBEAT_VERBS[0]
+}
+
+export function nextHeartbeatVerb(current: string): string {
+  const index = HEARTBEAT_VERBS.indexOf(current as typeof HEARTBEAT_VERBS[number])
+  return HEARTBEAT_VERBS[(index + 1) % HEARTBEAT_VERBS.length] ?? HEARTBEAT_VERBS[0]
+}
+
+export function pickHeartbeatGlyph(frame: number): string {
+  const index = Math.max(0, Math.floor(frame)) % HEARTBEAT_GLYPHS.length
+  return HEARTBEAT_GLYPHS[index] ?? HEARTBEAT_GLYPHS[0]
+}
+
+export function heartbeatVisual(frame: number, verb: string): { glyph: string; verb: string } {
+  return {
+    glyph: pickHeartbeatGlyph(frame),
+    verb: frame > 0 && frame % HEARTBEAT_VERB_FRAMES === 0
+      ? nextHeartbeatVerb(verb)
+      : verb,
+  }
 }
 
 function formatDuration(ms: number): string {
@@ -25,11 +47,16 @@ function formatDuration(ms: number): string {
     : `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
-export function formatHeartbeatFooter(elapsedMs: number, idleMs: number, verb: string): string {
+export function formatHeartbeatFooter(
+  elapsedMs: number,
+  idleMs: number,
+  verb: string,
+  glyph: string = HEARTBEAT_GLYPHS[0],
+): string {
   const activity = idleMs < 1_000
     ? 'active now'
     : `active ${formatDuration(idleMs)} ago`
-  return `\` ✻ ${verb} · ${formatDuration(elapsedMs)} · ${activity} \``
+  return `\` ${glyph} ${verb} · ${formatDuration(elapsedMs)} · ${activity} \``
 }
 
 export function formatLiveWorkMessage({

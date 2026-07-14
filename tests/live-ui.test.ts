@@ -1,17 +1,40 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { formatHeartbeatFooter, formatLiveWorkMessage, pickHeartbeatVerb } from '../src/live-ui.ts'
+import {
+  formatHeartbeatFooter,
+  formatLiveWorkMessage,
+  heartbeatVisual,
+  nextHeartbeatVerb,
+  pickHeartbeatGlyph,
+  pickHeartbeatVerb,
+} from '../src/live-ui.ts'
 
 test('picks one heartbeat verb from the compact status pool', () => {
   assert.equal(pickHeartbeatVerb(() => 0), 'cogitating')
   assert.equal(pickHeartbeatVerb(() => 0.999), 'scheming')
 })
 
+test('advances heartbeat verbs without repeating and wraps the pool', () => {
+  assert.equal(nextHeartbeatVerb('cogitating'), 'pondering')
+  assert.equal(nextHeartbeatVerb('scheming'), 'cogitating')
+})
+
+test('cycles the heartbeat glyph animation by frame', () => {
+  assert.equal(pickHeartbeatGlyph(0), '✻')
+  assert.equal(pickHeartbeatGlyph(1), '✢')
+  assert.equal(pickHeartbeatGlyph(6), '✻')
+})
+
+test('keeps the verb stable for four frames before advancing it', () => {
+  assert.deepEqual(heartbeatVisual(3, 'cogitating'), { glyph: '✶', verb: 'cogitating' })
+  assert.deepEqual(heartbeatVisual(4, 'cogitating'), { glyph: '✷', verb: 'pondering' })
+})
+
 test('renders heartbeat status as one compact inline row with one-cell side padding', () => {
   assert.equal(
-    formatHeartbeatFooter(33_000, 4_000, 'cogitating'),
-    '` ✻ cogitating · 33s · active 4s ago `',
+    formatHeartbeatFooter(33_000, 4_000, 'cogitating', '✶'),
+    '` ✶ cogitating · 33s · active 4s ago `',
   )
 })
 

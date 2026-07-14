@@ -43,7 +43,7 @@ import {
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
 } from './tool-trace.ts'
-import { formatHeartbeatFooter, formatLiveWorkMessage, pickHeartbeatVerb } from './live-ui.ts'
+import { formatHeartbeatFooter, formatLiveWorkMessage, heartbeatVisual, pickHeartbeatVerb } from './live-ui.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -809,7 +809,8 @@ async function handleUserMessage(
   // placeholder (Jeff 2026-06-24). 'none' effort just reads "thinking".
   const effortLabel = flags.reasoning && flags.reasoning !== 'none'
     ? `thinking with ${flags.reasoning} effort` : 'thinking'
-  const heartbeatVerb = pickHeartbeatVerb()
+  let heartbeatVerb = pickHeartbeatVerb()
+  let heartbeatFrame = 0
   let workMessage: Message | null = targetMessage
   let placeholderId: string | null = null
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
@@ -1125,10 +1126,15 @@ async function handleUserMessage(
     if (event.type === 'heartbeat') {
       // A model can be healthy but silent between public commentary events. Keep
       // proof-of-life visible independently of the model's willingness to narrate.
-      if (Date.now() - lastProgressAt < 12_000) return
+      // The placeholder spinner stops before this row is edited, so the two
+      // animations never compete for ownership of the same Discord message.
+      if (Date.now() - lastProgressAt < 5_000) return
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
-      const footer = formatHeartbeatFooter(event.elapsedMs, event.idleMs, heartbeatVerb)
+      const visual = heartbeatVisual(heartbeatFrame, heartbeatVerb)
+      heartbeatFrame++
+      heartbeatVerb = visual.verb
+      const footer = formatHeartbeatFooter(event.elapsedMs, event.idleMs, visual.verb, visual.glyph)
       queueLiveText(base, false, footer)
       return
     }

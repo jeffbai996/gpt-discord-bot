@@ -120,7 +120,7 @@ State (allowlist, persona, embeddings DB, summaries, pinned facts, the placehold
 | `GPT_CODEX_HELPER_BIN` | path to the separately installed privileged helper used by `codex_helper` |
 | `GPT_CODEX_DEFAULT_REPO` | repo under `~/repos` used when the read-only Codex tool gets no repo (default `gpt-bot`) |
 | `GPT_CODEX_CHAT` | set `0` to force the API engine everywhere |
-| `GPT_CODEX_HEARTBEAT_MS` | Discord proof-of-life pulse while Codex is silent (default 15000) |
+| `GPT_CODEX_HEARTBEAT_MS` | Discord proof-of-life animation while Codex is silent (default 5000) |
 | `GPT_CODEX_IDLE_TIMEOUT_MS` | meaningful-activity watchdog; malformed/noisy JSONL does not reset it (default 600000) |
 | `GPT_CODEX_CHAT_TIMEOUT_MS` | hard runaway fuse for a Codex turn, not the normal work limit (default 2700000) |
 | `GPT_CODEX_KILL_GRACE_MS` | maximum wait for a killed child to close before the queue force-settles (default 5000) |

@@ -42,7 +42,9 @@ const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v2
 const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 10 * 60_000
 const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 45 * 60_000
 const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 120_000
-const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 15_000
+// Five seconds keeps the live row visibly animated while remaining far below
+// Discord's REST edit pressure. discord.js still owns bucket-level throttling.
+const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 5_000
 const DEFAULT_KILL_GRACE_MS = Number(process.env.GPT_CODEX_KILL_GRACE_MS) || 5_000
 const MAX_STDERR_CHARS = Number(process.env.GPT_CODEX_STDERR_MAX_CHARS) || 64 * 1024
 
