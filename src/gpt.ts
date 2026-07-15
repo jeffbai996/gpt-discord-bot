@@ -824,7 +824,6 @@ async function handleUserMessage(
   let spinnerEditPromise: Promise<unknown> | null = null
   let progressTask: Promise<void> | null = null
   let lastProgressText = ''
-  let lastProgressAt = 0
   let liveUiClosed = false
   const LIVE_UI_SETTLE_MS = Number(process.env.GPT_LIVE_UI_SETTLE_MS) || 5_000
   const awaitBounded = async (promise: Promise<unknown> | null): Promise<boolean> => {
@@ -873,7 +872,7 @@ async function handleUserMessage(
   // animated placeholder. The typing heartbeat re-fires every 9s because
   // Discord auto-expires the indicator after ~10s.
   const PLACEHOLDER_DELAY_MS = parseInt(process.env.GPT_PLACEHOLDER_DELAY_MS ?? '2500', 10)
-  const HEARTBEAT_DELAY_MS = parseInt(process.env.GPT_CODEX_HEARTBEAT_DELAY_MS ?? '15000', 10)
+  const HEARTBEAT_DELAY_MS = parseInt(process.env.GPT_CODEX_HEARTBEAT_DELAY_MS ?? '60000', 10)
   let placeholderTimer: ReturnType<typeof setTimeout> | null = null
   let typingInterval: ReturnType<typeof setInterval> | null = null
   if (!targetMessage && message.channel.isSendable()) {
@@ -960,7 +959,6 @@ async function handleUserMessage(
     const detail = raw.trim()
     if (rememberProgress) {
       lastProgressText = detail
-      lastProgressAt = Date.now()
     }
     const display = formatLiveWorkMessage({ effortLabel, detail, footer })
     const prior = progressTask
@@ -1136,7 +1134,7 @@ async function handleUserMessage(
       // proof-of-life visible independently of the model's willingness to narrate.
       // The placeholder spinner stops before this row is edited, so the two
       // animations never compete for ownership of the same Discord message.
-      if (!shouldRenderHeartbeat(event.elapsedMs, Date.now() - lastProgressAt, HEARTBEAT_DELAY_MS)) return
+      if (!shouldRenderHeartbeat(event.elapsedMs, event.idleMs, HEARTBEAT_DELAY_MS)) return
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
       const visual = heartbeatVisual(heartbeatFrame, heartbeatVerb)

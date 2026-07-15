@@ -32,21 +32,19 @@ test('keeps the verb stable for four frames before advancing it', () => {
   assert.deepEqual(heartbeatVisual(4, 'cogitating'), { glyph: '✷', verb: 'pondering' })
 })
 
-test('delays the heartbeat row until the turn has actually lingered', () => {
-  assert.equal(shouldRenderHeartbeat(5_000, 30_000, 15_000), false)
-  assert.equal(shouldRenderHeartbeat(14_999, 30_000, 15_000), false)
-  assert.equal(shouldRenderHeartbeat(15_000, 30_000, 15_000), true)
+test('delays the heartbeat row until actual activity has been idle for 60 seconds', () => {
+  assert.equal(shouldRenderHeartbeat(120_000, 59_999, 60_000), false)
+  assert.equal(shouldRenderHeartbeat(120_000, 60_000, 60_000), true)
 })
 
-test('temporarily suppresses the heartbeat after fresh commentary', () => {
-  assert.equal(shouldRenderHeartbeat(30_000, 4_999, 15_000), false)
-  assert.equal(shouldRenderHeartbeat(30_000, 5_000, 15_000), true)
+test('turn age alone never triggers a heartbeat during active work', () => {
+  assert.equal(shouldRenderHeartbeat(600_000, 5_000, 60_000), false)
 })
 
 test('renders heartbeat status as one compact inline row with one-cell side padding', () => {
   assert.equal(
     formatHeartbeatFooter(33_000, 4_000, 'cogitating', '✶'),
-    '` ✶ cogitating · 33s · active 4s ago `',
+    '` ✶ still cogitating · 33s · active 4s ago `',
   )
 })
 
