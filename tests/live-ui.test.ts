@@ -8,6 +8,7 @@ import {
   nextHeartbeatVerb,
   pickHeartbeatGlyph,
   pickHeartbeatVerb,
+  shouldRenderHeartbeat,
 } from '../src/live-ui.ts'
 
 test('picks one heartbeat verb from the compact status pool', () => {
@@ -29,6 +30,17 @@ test('cycles the heartbeat glyph animation by frame', () => {
 test('keeps the verb stable for four frames before advancing it', () => {
   assert.deepEqual(heartbeatVisual(3, 'cogitating'), { glyph: '✶', verb: 'cogitating' })
   assert.deepEqual(heartbeatVisual(4, 'cogitating'), { glyph: '✷', verb: 'pondering' })
+})
+
+test('delays the heartbeat row until the turn has actually lingered', () => {
+  assert.equal(shouldRenderHeartbeat(5_000, 30_000, 15_000), false)
+  assert.equal(shouldRenderHeartbeat(14_999, 30_000, 15_000), false)
+  assert.equal(shouldRenderHeartbeat(15_000, 30_000, 15_000), true)
+})
+
+test('temporarily suppresses the heartbeat after fresh commentary', () => {
+  assert.equal(shouldRenderHeartbeat(30_000, 4_999, 15_000), false)
+  assert.equal(shouldRenderHeartbeat(30_000, 5_000, 15_000), true)
 })
 
 test('renders heartbeat status as one compact inline row with one-cell side padding', () => {

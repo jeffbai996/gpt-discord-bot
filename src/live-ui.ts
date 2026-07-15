@@ -16,6 +16,7 @@ const HEARTBEAT_VERBS = [
 
 const HEARTBEAT_GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸'] as const
 const HEARTBEAT_VERB_FRAMES = 4
+const HEARTBEAT_QUIET_MS = 5_000
 
 export function pickHeartbeatVerb(random: () => number = Math.random): string {
   return HEARTBEAT_VERBS[Math.floor(random() * HEARTBEAT_VERBS.length)] ?? HEARTBEAT_VERBS[0]
@@ -38,6 +39,14 @@ export function heartbeatVisual(frame: number, verb: string): { glyph: string; v
       ? nextHeartbeatVerb(verb)
       : verb,
   }
+}
+
+export function shouldRenderHeartbeat(
+  elapsedMs: number,
+  msSinceProgress: number,
+  delayMs: number,
+): boolean {
+  return elapsedMs >= delayMs && msSinceProgress >= HEARTBEAT_QUIET_MS
 }
 
 function formatDuration(ms: number): string {

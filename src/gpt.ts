@@ -43,7 +43,13 @@ import {
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
 } from './tool-trace.ts'
-import { formatHeartbeatFooter, formatLiveWorkMessage, heartbeatVisual, pickHeartbeatVerb } from './live-ui.ts'
+import {
+  formatHeartbeatFooter,
+  formatLiveWorkMessage,
+  heartbeatVisual,
+  pickHeartbeatVerb,
+  shouldRenderHeartbeat,
+} from './live-ui.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -866,6 +872,7 @@ async function handleUserMessage(
   // animated placeholder. The typing heartbeat re-fires every 9s because
   // Discord auto-expires the indicator after ~10s.
   const PLACEHOLDER_DELAY_MS = parseInt(process.env.GPT_PLACEHOLDER_DELAY_MS ?? '2500', 10)
+  const HEARTBEAT_DELAY_MS = parseInt(process.env.GPT_CODEX_HEARTBEAT_DELAY_MS ?? '15000', 10)
   let placeholderTimer: ReturnType<typeof setTimeout> | null = null
   let typingInterval: ReturnType<typeof setInterval> | null = null
   if (!targetMessage && message.channel.isSendable()) {
@@ -1128,7 +1135,7 @@ async function handleUserMessage(
       // proof-of-life visible independently of the model's willingness to narrate.
       // The placeholder spinner stops before this row is edited, so the two
       // animations never compete for ownership of the same Discord message.
-      if (Date.now() - lastProgressAt < 5_000) return
+      if (!shouldRenderHeartbeat(event.elapsedMs, Date.now() - lastProgressAt, HEARTBEAT_DELAY_MS)) return
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
       const visual = heartbeatVisual(heartbeatFrame, heartbeatVerb)
