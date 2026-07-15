@@ -24,6 +24,7 @@ import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { channelSessions } from './channel-sessions.ts'
+import { formatUsageCounter } from './usage-counter.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
 import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
@@ -1422,23 +1423,7 @@ async function handleUserMessage(
       // delta is this turn's marginal cost). Falls back to usage on the API path
       // where it's already per-turn. (Jeff 2026-06-25 "token up/down accurate")
       const u = result.usageDelta ?? result.usage
-      const n = (x: number) => x.toLocaleString('en-US')
-      // Headline line: the TOTALS — input ↑, output ↓, elapsed ◷.
-      const parts = [`↑ ${n(u.inputTokens)}`, `↓ ${n(u.outputTokens)}`,
-                     `◷ ${(result.durationMs / 1000).toFixed(1)}s`]
-      // Breakdown line beneath: the sub-counts of the headline totals, grouped
-      // because they're the same shape — cached is a slice of input (↑),
-      // reasoning is a slice of output (↓). Each renders only when nonzero; the
-      // whole line is omitted when both are zero (cheap non-reasoning turns).
-      const sub = [
-        ...(u.cachedInputTokens > 0 ? [`cached ↑ ${n(u.cachedInputTokens)}`] : []),
-        ...(u.reasoningTokens > 0 ? [`reasoning ↓ ${n(u.reasoningTokens)}`] : []),
-      ]
-      const subLine = (flags.counter === 'both' && sub.length) ? `\n\n-# \` ${sub.join(' · ')} \`` : ''
-      // Leading blank line so the footer sits a line below the reply body
-      // (not crammed against the last line of text). The non-verbose path
-      // returns '' so a quiet reply gets no trailing whitespace.
-      return `\n\n-# \` ${parts.join(' · ')} \`${subLine}`
+      return formatUsageCounter(flags.counter, u, result.durationMs)
     })()
 
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
