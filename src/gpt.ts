@@ -48,6 +48,7 @@ import {
   formatHeartbeatFooter,
   formatLiveWorkMessage,
   heartbeatVisual,
+  latestReasoningHeadline,
   pickHeartbeatVerb,
   shouldRenderHeartbeat,
 } from './live-ui.ts'
@@ -824,6 +825,7 @@ async function handleUserMessage(
   let spinnerEditPromise: Promise<unknown> | null = null
   let progressTask: Promise<void> | null = null
   let lastProgressText = ''
+  let liveHeadline = ''
   let liveUiClosed = false
   const LIVE_UI_SETTLE_MS = Number(process.env.GPT_LIVE_UI_SETTLE_MS) || 5_000
   const awaitBounded = async (promise: Promise<unknown> | null): Promise<boolean> => {
@@ -960,7 +962,7 @@ async function handleUserMessage(
     if (rememberProgress) {
       lastProgressText = detail
     }
-    const display = formatLiveWorkMessage({ effortLabel, detail, footer })
+    const display = formatLiveWorkMessage({ effortLabel, headline: liveHeadline, detail, footer })
     const prior = progressTask
     progressTask = (async () => {
       if (prior) await prior.catch(() => {})
@@ -1126,7 +1128,9 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'reasoning_progress') {
-      queueLiveText(`🧠 ${event.text}`, true)
+      liveHeadline = latestReasoningHeadline(event.text)
+      lastProgressText = ''
+      queueLiveText('', false)
       return
     }
     if (event.type === 'heartbeat') {

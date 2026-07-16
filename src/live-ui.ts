@@ -1,8 +1,19 @@
 interface LiveWorkMessageOptions {
   effortLabel: string
+  headline?: string
   detail?: string
   footer?: string
   maxLength?: number
+}
+
+export function latestReasoningHeadline(text: string): string {
+  const line = text.split(/\r?\n/).map(part => part.trim()).filter(Boolean).at(-1) ?? ''
+  return line
+    .replace(/^>\s*/, '')
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^🧠\s*/, '')
+    .replace(/^\*\*(.+)\*\*$/, '$1')
+    .trim()
 }
 
 const HEARTBEAT_VERBS = [
@@ -68,11 +79,12 @@ export function formatHeartbeatFooter(
 
 export function formatLiveWorkMessage({
   effortLabel,
+  headline = '',
   detail = '',
   footer = '',
   maxLength = 1900,
 }: LiveWorkMessageOptions): string {
-  const header = `💭 ✻ **${effortLabel}…**`
+  const header = `💭 ✻ **${headline.trim() || effortLabel}…**`
   const cleanDetail = detail.trim()
   const cleanFooter = footer.trim()
   const suffix = cleanFooter ? `\n\n${cleanFooter}` : ''

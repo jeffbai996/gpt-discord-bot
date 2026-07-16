@@ -5,6 +5,7 @@ import {
   formatHeartbeatFooter,
   formatLiveWorkMessage,
   heartbeatVisual,
+  latestReasoningHeadline,
   nextHeartbeatVerb,
   pickHeartbeatGlyph,
   pickHeartbeatVerb,
@@ -52,6 +53,31 @@ test('keeps the thinking header above live progress', () => {
   assert.equal(
     formatLiveWorkMessage({ effortLabel: 'thinking with max effort', detail: 'Checking the renderer.' }),
     '💭 ✻ **thinking with max effort…**\nChecking the renderer.',
+  )
+})
+
+test('uses the latest reasoning one-liner as the live header', () => {
+  assert.equal(
+    latestReasoningHeadline([
+      'Analyzing launchpad UI visibility states',
+      'Clarifying homepage mode UI restrictions',
+      'Investigating hidden transition class toggling',
+    ].join('\n')),
+    'Investigating hidden transition class toggling',
+  )
+  assert.equal(
+    formatLiveWorkMessage({
+      effortLabel: 'thinking with high effort',
+      headline: 'Investigating hidden transition class toggling',
+    }),
+    '💭 ✻ **Investigating hidden transition class toggling…**',
+  )
+})
+
+test('cleans reasoning markdown before promoting it to the live header', () => {
+  assert.equal(
+    latestReasoningHeadline('## **Analyzing the failure mode**'),
+    'Analyzing the failure mode',
   )
 })
 
