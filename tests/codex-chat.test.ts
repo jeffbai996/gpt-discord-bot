@@ -263,6 +263,7 @@ test('codex process args use direct spawn with the prompt as one inert argv', ()
   }), [
     'exec', '--skip-git-repo-check', '--dangerously-bypass-approvals-and-sandbox',
     '-c', 'model="gpt-test"', '-c', 'model_reasoning_effort=high',
+    '-c', 'model_reasoning_summary=detailed',
     '--json', '-o', '/tmp/final.txt', prompt,
   ])
 })
@@ -295,6 +296,10 @@ test('codex resume args preserve the session id without a shell wrapper', () => 
     'exec', 'resume', '--skip-git-repo-check',
     '--dangerously-bypass-approvals-and-sandbox', '-c',
   ])
+  assert.ok(
+    args.includes('model_reasoning_summary=detailed'),
+    'resumed turns must explicitly request a public reasoning summary',
+  )
   assert.deepEqual(args.slice(-9), [
     '--image', '/tmp/one.png', '--image', '/tmp/two.jpg',
     '--json', '-o', '/tmp/final.txt', 'session-123', 'continue',

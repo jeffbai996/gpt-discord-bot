@@ -144,6 +144,7 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
     '--dangerously-bypass-approvals-and-sandbox',
     '-c', `model="${input.model}"`,
     '-c', `model_reasoning_effort=${input.effort}`,
+    '-c', 'model_reasoning_summary=detailed',
   )
   // Fresh `codex exec --image` accepts one-or-more files and greedily consumes
   // following positional arguments. Keep another option after the image list so
