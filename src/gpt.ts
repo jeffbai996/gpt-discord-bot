@@ -822,10 +822,13 @@ async function handleUserMessage(
   let workMessage: Message | null = targetMessage
   let placeholderId: string | null = null
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
-  let spinnerEditPromise: Promise<unknown> | null = null
-  let progressTask: Promise<void> | null = null
+  let liveEditTask: Promise<void> | null = null
   let lastProgressText = ''
   let liveHeadline = ''
+  let liveDetail = ''
+  let liveFooter = ''
+  let spinnerGlyph = '✻'
+  let spinnerDots = '…'
   let liveUiClosed = false
   const LIVE_UI_SETTLE_MS = Number(process.env.GPT_LIVE_UI_SETTLE_MS) || 5_000
   const awaitBounded = async (promise: Promise<unknown> | null): Promise<boolean> => {
@@ -846,20 +849,13 @@ async function handleUserMessage(
   }
   const stopThinkingAnim = async () => {
     if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null }
-    const pending = spinnerEditPromise
-    spinnerEditPromise = null
+    const pending = liveEditTask
+    liveEditTask = null
     if (!await awaitBounded(pending)) abandonWedgedPlaceholder()
   }
   const settleLiveUi = async () => {
     liveUiClosed = true
     await stopThinkingAnim()
-    const settled = await awaitBounded(progressTask)
-    if (!settled) {
-      // A Discord REST edit that never settles must not wake up after the final
-      // render and overwrite it. Delete/abandon this placeholder; the final reply
-      // will be posted as a fresh message and any late edit will hit Unknown Message.
-      abandonWedgedPlaceholder()
-    }
   }
   const throwIfStopped = () => {
     if (stopController.signal.aborted) throw new CodexStoppedError(0)
@@ -884,24 +880,19 @@ async function handleUserMessage(
     }, 9000)
   }
 
-  // Start the placeholder spinner (idempotent). Animates the ellipsis (. .. …)
-  // + glyph every 1.5s so a non-streaming (codex) turn doesn't sit frozen.
+  // Start the placeholder spinner (idempotent). One render loop owns the whole
+  // live card, so the top glyph never freezes when reasoning/progress/footer
+  // content changes and parallel Discord edits cannot fight over the message.
   const startSpinner = () => {
-    if (liveUiClosed || thinkingAnim || !workMessage || targetMessage) return
+    if (liveUiClosed || thinkingAnim || !workMessage) return
     const GLYPHS = ['✻', '✢', '✱', '✶', '✷', '✸']
     const dots = ['.', '..', '…']
     let fi = 1
     thinkingAnim = setInterval(() => {
-      if (!workMessage || spinnerEditPromise) return
-      const sp = GLYPHS[fi % GLYPHS.length]
-      const d = dots[fi % dots.length]
+      spinnerGlyph = GLYPHS[fi % GLYPHS.length]
+      spinnerDots = dots[fi % dots.length]
       fi++
-      const i = currentStatus.indexOf(' ')
-      const emoji = i > 0 ? currentStatus.slice(0, i) : currentStatus
-      const text = i > 0 ? currentStatus.slice(i + 1) : ''
-      const edit = workMessage.edit(`${emoji} ${sp} **${text}${d}**`).catch(() => {})
-      spinnerEditPromise = edit
-      void edit.finally(() => { if (spinnerEditPromise === edit) spinnerEditPromise = null })
+      queueLiveRender()
     }, 1500)
   }
 
@@ -944,40 +935,50 @@ async function handleUserMessage(
   }
 
   if (targetMessage) {
-    // Regenerate / edit: reuse the existing bot message immediately, spinner on.
+    // Regenerate / edit: reuse the existing bot message and animate it too.
     startSpinner()
   } else {
     // Normal turn: dots now, placeholder only if still working after the delay.
     placeholderTimer = setTimeout(() => { void postPlaceholder() }, PLACEHOLDER_DELAY_MS)
   }
 
-  // Throttle Discord edits during streaming.
-  let lastEditAt = 0
+  // Serialize all live-card changes through one owner. Animation and streamed
+  // state are composed into the same edit tick, which also naturally coalesces
+  // bursts while Discord REST is busy.
   let lastEditedText = ''
-  const EDIT_INTERVAL_MS = 700
-
-  const queueLiveText = (raw: string, rememberProgress: boolean, footer = ''): void => {
+  const queueLiveRender = (): void => {
     if (liveUiClosed) return
-    const detail = raw.trim()
-    if (rememberProgress) {
-      lastProgressText = detail
-    }
-    const display = formatLiveWorkMessage({ effortLabel, headline: liveHeadline, detail, footer })
-    const prior = progressTask
-    progressTask = (async () => {
+    const prior = liveEditTask
+    const task = (async () => {
       if (prior) await prior.catch(() => {})
       if (liveUiClosed) return
       await postPlaceholder()
       if (!workMessage || liveUiClosed) return
-      await stopThinkingAnim()
+      const display = formatLiveWorkMessage({
+        effortLabel,
+        headline: liveHeadline,
+        detail: liveDetail,
+        footer: liveFooter,
+        spinnerGlyph,
+        spinnerDots,
+      })
       if (display === lastEditedText || liveUiClosed) return
-      lastEditAt = Date.now()
       lastEditedText = display
       const target = workMessage
       if (!await awaitBounded(target.edit(display)) && workMessage === target) {
         abandonWedgedPlaceholder()
       }
     })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
+    liveEditTask = task
+    void task.finally(() => { if (liveEditTask === task) liveEditTask = null })
+  }
+
+  const queueLiveText = (raw: string, rememberProgress: boolean, footer = ''): void => {
+    if (liveUiClosed) return
+    liveDetail = raw.trim()
+    liveFooter = footer.trim()
+    if (rememberProgress) lastProgressText = liveDetail
+    queueLiveRender()
   }
 
   const compactAndDropCodexSession = async (reason: string, inputTokens?: number) => {
@@ -1136,8 +1137,7 @@ async function handleUserMessage(
     if (event.type === 'heartbeat') {
       // A model can be healthy but silent between public commentary events. Keep
       // proof-of-life visible independently of the model's willingness to narrate.
-      // The placeholder spinner stops before this row is edited, so the two
-      // animations never compete for ownership of the same Discord message.
+      // The footer and top spinner are composed by the same render owner.
       if (!shouldRenderHeartbeat(event.elapsedMs, event.idleMs, HEARTBEAT_DELAY_MS)) return
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)

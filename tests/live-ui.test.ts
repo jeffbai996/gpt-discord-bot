@@ -56,7 +56,7 @@ test('keeps the thinking header above live progress', () => {
   )
 })
 
-test('uses the latest reasoning one-liner as the live header', () => {
+test('keeps the effort header and renders the latest reasoning one-liner beneath it', () => {
   assert.equal(
     latestReasoningHeadline([
       'Analyzing launchpad UI visibility states',
@@ -70,7 +70,20 @@ test('uses the latest reasoning one-liner as the live header', () => {
       effortLabel: 'thinking with high effort',
       headline: 'Investigating hidden transition class toggling',
     }),
-    '💭 ✻ **Investigating hidden transition class toggling…**',
+    '💭 ✻ **thinking with high effort…**\n> 🧠 *investigating hidden transition class toggling*',
+  )
+})
+
+test('renders the spinner frame and reasoning description in the same message tick', () => {
+  assert.equal(
+    formatLiveWorkMessage({
+      effortLabel: 'thinking with high effort',
+      headline: 'Checking Discord Edit Ownership',
+      detail: 'Inspecting the live renderer.',
+      spinnerGlyph: '✶',
+      spinnerDots: '..',
+    }),
+    '💭 ✶ **thinking with high effort..**\n> 🧠 *checking discord edit ownership*\nInspecting the live renderer.',
   )
 })
 

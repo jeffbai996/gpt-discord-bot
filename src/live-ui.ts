@@ -3,6 +3,8 @@ interface LiveWorkMessageOptions {
   headline?: string
   detail?: string
   footer?: string
+  spinnerGlyph?: string
+  spinnerDots?: string
   maxLength?: number
 }
 
@@ -82,15 +84,20 @@ export function formatLiveWorkMessage({
   headline = '',
   detail = '',
   footer = '',
+  spinnerGlyph = HEARTBEAT_GLYPHS[0],
+  spinnerDots = '…',
   maxLength = 1900,
 }: LiveWorkMessageOptions): string {
-  const header = `💭 ✻ **${headline.trim() || effortLabel}…**`
+  const header = `💭 ${spinnerGlyph} **${effortLabel}${spinnerDots}**`
+  const cleanHeadline = headline.trim().toLocaleLowerCase('en-US')
+  const reasoning = cleanHeadline ? `\n> 🧠 *${cleanHeadline}*` : ''
   const cleanDetail = detail.trim()
   const cleanFooter = footer.trim()
   const suffix = cleanFooter ? `\n\n${cleanFooter}` : ''
-  if (!cleanDetail) return header + suffix
+  const heading = header + reasoning
+  if (!cleanDetail) return heading + suffix
 
-  const prefix = `${header}\n`
+  const prefix = `${heading}\n`
   const available = Math.max(1, maxLength - prefix.length - suffix.length)
   const clippedDetail = cleanDetail.length > available
     ? cleanDetail.slice(0, Math.max(0, available - 1)) + '…'
