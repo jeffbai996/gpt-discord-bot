@@ -14,6 +14,8 @@ test('usage counter headlines uncached input without a label', () => {
   assert.match(footer, /↑ 66,889/)
   assert.doesNotMatch(footer, /fresh/)
   assert.match(footer, /cache ↑ 958,376/)
+  assert.match(footer, /◷ 145\.8s `\n-# ` cache/)
+  assert.doesNotMatch(footer, /◷ 145\.8s `\n\n-# ` cache/)
   assert.doesNotMatch(footer, /cached/)
   assert.doesNotMatch(footer, /↑ 1,025,265/)
 })

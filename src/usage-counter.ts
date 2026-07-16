@@ -26,6 +26,6 @@ export function formatUsageCounter(
     ...(usage.cachedInputTokens > 0 ? [`cache ↑ ${n(usage.cachedInputTokens)}`] : []),
     ...(usage.reasoningTokens > 0 ? [`reasoning ↓ ${n(usage.reasoningTokens)}`] : []),
   ]
-  const subLine = mode === 'both' && sub.length ? `\n\n-# \` ${sub.join(' · ')} \`` : ''
+  const subLine = mode === 'both' && sub.length ? `\n-# \` ${sub.join(' · ')} \`` : ''
   return `\n\n-# \` ${parts.join(' · ')} \`${subLine}`
 }
