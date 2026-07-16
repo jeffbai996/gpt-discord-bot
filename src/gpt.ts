@@ -47,6 +47,7 @@ import {
 import {
   formatHeartbeatFooter,
   formatLiveWorkMessage,
+  formatReasoningSnapshot,
   heartbeatVisual,
   latestReasoningHeadline,
   pickHeartbeatVerb,
@@ -288,32 +289,6 @@ function headingsToBold(t: string): string {
     }
   }
   return out.join('\n')
-}
-
-function formatThinkingText(text: string): string {
-  const lines = text.trim().split('\n')
-  const out: string[] = []
-  let previousWasHeading = false
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i].replace(/^>\s?/, '')
-    const heading = raw.match(/^[ \t]*#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/)
-      ?? raw.match(/^[ \t]*\*\*(.+?)\*\*[ \t]*$/)
-    if (heading) {
-      if (out.length && out[out.length - 1] !== '') out.push('')
-      out.push(`**${heading[1]}**`)
-      previousWasHeading = true
-      while (i + 1 < lines.length && lines[i + 1].trim() === '') i++
-      continue
-    }
-    if (raw.trim() === '') {
-      if (!previousWasHeading && out.length && out[out.length - 1] !== '') out.push('')
-      previousWasHeading = false
-      continue
-    }
-    out.push(raw)
-    previousWasHeading = false
-  }
-  return `>>> ${out.join('\n')}`
 }
 
 function formatDiff(unified: string): { badge: string; body: string[] } {
@@ -1131,7 +1106,8 @@ async function handleUserMessage(
     if (event.type === 'reasoning_progress') {
       liveHeadline = latestReasoningHeadline(event.text)
       lastProgressText = ''
-      queueLiveText('', false)
+      liveDetail = ''
+      queueLiveRender()
       return
     }
     if (event.type === 'heartbeat') {
@@ -1457,12 +1433,23 @@ async function handleUserMessage(
     // "thinking…" where it sat). The reply always posts as a fresh message below.
 
     // Cards posted in 'collapse' mode are shown live then deleted once the reply lands.
+    await settleLiveUi()
     const collapseMsgs: Message[] = []
+    let thinkingMsg: Message | null = null
     if (willThinking) {
-      const formatted = formatThinkingText(result.reasoning!)
-      for (const piece of chunk(`💭 **Thinking:**\n${formatted}`)) {
-        try { const tm = await message.channel.send(piece); if (flags.thinking === 'collapse') collapseMsgs.push(tm) } catch {}
+      const snapshot = formatReasoningSnapshot(result.reasoning!)
+      if (workMessage && !targetMessage) {
+        try {
+          await workMessage.edit(snapshot)
+          thinkingMsg = workMessage
+          workMessage = null
+        } catch {
+          try { thinkingMsg = await message.channel.send(snapshot) } catch {}
+        }
+      } else {
+        try { thinkingMsg = await message.channel.send(snapshot) } catch {}
       }
+      if (thinkingMsg && flags.thinking === 'collapse') collapseMsgs.push(thinkingMsg)
     }
 
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
@@ -1492,7 +1479,6 @@ async function handleUserMessage(
       liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
     }
 
-    await settleLiveUi()
     // "thought for Ns" sits ON TOP of the reply, in the SAME message block (Jeff
     // 2026-06-24) — small-text first line, then the answer. We reuse the placeholder
     // as the first message so the thought line replaces "thinking…" in place AND the

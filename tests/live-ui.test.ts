@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   formatHeartbeatFooter,
   formatLiveWorkMessage,
+  formatReasoningSnapshot,
   heartbeatVisual,
   latestReasoningHeadline,
   nextHeartbeatVerb,
@@ -85,6 +86,30 @@ test('renders the spinner frame and reasoning description in the same message ti
     }),
     '💭 ✶ **thinking with high effort..**\n> 🧠 *checking discord edit ownership*\nInspecting the live renderer.',
   )
+})
+
+test('collapses completed reasoning into one latest in-place brain line', () => {
+  assert.equal(
+    formatReasoningSnapshot([
+      'Checking the first failure mode',
+      'Comparing the second failure mode',
+      'Fixing the actual edit owner',
+    ].join('\n')),
+    '💭 **Thinking:**\n> 🧠 *fixing the actual edit owner*',
+  )
+})
+
+test('keeps the inactivity bar alongside the self-updating brain slot', () => {
+  const rendered = formatLiveWorkMessage({
+    effortLabel: 'thinking with high effort',
+    headline: latestReasoningHeadline('Old line\nNew line'),
+    footer: '` ✶ still cogitating · 1m 3s · active 1m 0s ago `',
+  })
+
+  assert.equal(rendered.match(/🧠/g)?.length, 1)
+  assert.match(rendered, /🧠 \*new line\*/)
+  assert.match(rendered, /still cogitating/)
+  assert.doesNotMatch(rendered, /old line/i)
 })
 
 test('cleans reasoning markdown before promoting it to the live header', () => {

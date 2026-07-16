@@ -18,6 +18,13 @@ export function latestReasoningHeadline(text: string): string {
     .trim()
 }
 
+export function formatReasoningSnapshot(text: string): string {
+  const headline = latestReasoningHeadline(text).toLocaleLowerCase('en-US')
+  return headline
+    ? `💭 **Thinking:**\n> 🧠 *${headline}*`
+    : '💭 **Thinking:**'
+}
+
 const HEARTBEAT_VERBS = [
   'cogitating',
   'pondering',
