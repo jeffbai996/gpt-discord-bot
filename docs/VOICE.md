@@ -23,7 +23,7 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 |-----|---------|-------|
 | `OPENAI_API_KEY` | (required) | already used by the bot |
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime` | the realtime model |
-| `OPENAI_REALTIME_VOICE` | `marin` | any OpenAI Realtime voice (`cedar`/`marin` = newest, most natural; `ballad` = British; `alloy`/`ash`/`verse`/`coral`/`sage` also valid. `arbor` is ChatGPT-app-only, NOT API.) |
+| `OPENAI_REALTIME_VOICE` | `ballad` | default when `/gpt voice join` omits `voice`; any supported OpenAI Realtime voice is valid |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | model for `/gpt voice speak` (verbatim TTS) |
 | `OPENAI_TTS_VOICE` | `alloy` | TTS voice (separate set from the realtime voices) |
 | `DISCORD_ADMIN_USER_ID` | — | only this user may run `/gpt voice` (billed per minute) |
@@ -32,7 +32,7 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 | `VOICE_THINK_HZ` / `_GAIN` / `_MS` / `_EVERY_MS` | `330` / `0.05` / `220` / `1100` | synth-fallback tone tuning (freq, amplitude, blip length, cadence). Ignored when `VOICE_THINK_FILE` is set. |
 
 ## Commands (`/gpt voice …`)
-- `/gpt voice join` — join your VC, start realtime voice-to-voice
+- `/gpt voice join [voice]` — join your VC, start realtime voice-to-voice; picker offers British `ballad` (default), `marin`, `cedar`, and `coral`
 - `/gpt voice leave` — leave + tear down
 - `/gpt voice speak <text>` — say a specific line verbatim (text → voice-back, via TTS)
 
@@ -45,16 +45,16 @@ a real VC + a billed Realtime session, so it's a manual test:
    intent is on. (No Discord dev-portal change needed — voice states is not a
    privileged intent.)
 3. Join a voice channel yourself, then run **`/gpt voice join`**.
+   Optionally pick a voice for this call; omitting it uses British `ballad`.
 4. Bot replies "In **<channel>** — talk to me." Speak; you should hear it reply
    in the OpenAI voice. Talk over it → it stops (barge-in).
 5. While joined, **`/gpt voice speak text:<line>`** makes it say that exact line.
 6. **`/gpt voice leave`** to end the session (stops billing).
 
-## Known v0.1 limitations
+## Known limitations
 - Playback uses a single PassThrough; on barge-in it resets cleanly, but rapid
   back-to-back interruptions may clip the first frames of the next reply.
-- Tool calls are plumbed (`onToolCall`) but no tools are wired in yet — pass
-  `tools` + `onToolCall` into the VoiceManager to enable.
-- The voice uses a generic spoken-mode instruction; wiring the full text persona
-  into the voice session is a follow-up.
 - Per-audio-minute billing — `/gpt voice` is owner-gated for that reason.
+- On join, the latest 20 messages from the command's text channel are appended
+  to the voice instructions in chronological order. History fetch is best-effort:
+  a Discord API failure is logged but does not block the call.

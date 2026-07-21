@@ -18,6 +18,7 @@ import type { RealtimeTool, ToolCall } from './realtime.ts'
 import type { PersonaLoader } from '../persona.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { DeferredToolJob } from '../tools/registry.ts'
+import { REALTIME_VOICE_CHOICES, resolveRealtimeVoice } from './voices.ts'
 
 // Appended to the bot's real persona for a live call. Mirrors gemma's voice
 // override: the text persona's "stay silent / opt out" etiquette is a bug on a
@@ -49,10 +50,30 @@ const VOICE_TOOL_DENY = new Set(
 export function addVoiceGroup(cmd: SlashCommandSubcommandsOnlyBuilder): void {
   cmd.addSubcommandGroup(g =>
     g.setName('voice').setDescription('Realtime voice (OpenAI)')
-      .addSubcommand(s => s.setName('join').setDescription('Join your voice channel and start talking'))
+      .addSubcommand(s => s.setName('join').setDescription('Join your voice channel and start talking')
+        .addStringOption(o => o.setName('voice')
+          .setDescription('Voice for this call (default: Ballad — British)')
+          .setRequired(false)
+          .addChoices(...REALTIME_VOICE_CHOICES)))
       .addSubcommand(s => s.setName('leave').setDescription('Leave the voice channel'))
       .addSubcommand(s => s.setName('speak').setDescription('Say a specific line out loud')
         .addStringOption(o => o.setName('text').setDescription('What to say').setRequired(true))))
+}
+
+export interface RecentVoiceMessage {
+  author: string
+  content: string
+}
+
+export function formatRecentConversation(messages: RecentVoiceMessage[]): string {
+  return messages
+    .map(message => `${message.author}: ${message.content}`.slice(0, 300))
+    .join('\n')
+}
+
+export function buildVoiceInstructions(personaInstructions: string, recentConversation: string): string {
+  if (!recentConversation) return personaInstructions
+  return `${personaInstructions}\n\n---\n\n## Recent conversation in this channel (newest last)\n\n${recentConversation}`
 }
 
 export interface VoiceManagerOptions {
@@ -80,13 +101,13 @@ export class VoiceManager {
     // Per-join overrides — the live persona + tools + dispatch are built at
     // join time (they depend on the channel/guild), overriding any constructor
     // defaults. Falls back to the constructor opts when not supplied.
-    overrides?: Pick<VoiceManagerOptions, 'instructions' | 'tools' | 'onToolCall'>,
+    overrides?: Pick<VoiceManagerOptions, 'instructions' | 'voice' | 'tools' | 'onToolCall'>,
   ): Promise<void> {
     if (this.sessions.has(guildId)) this.leave(guildId)
     const session = new VoiceSession({
       apiKey: this.opts.apiKey,
       instructions: overrides?.instructions ?? this.opts.instructions,
-      voice: this.opts.voice,
+      voice: resolveRealtimeVoice(overrides?.voice, this.opts.voice),
       tools: overrides?.tools ?? this.opts.tools,
       onToolCall: overrides?.onToolCall ?? this.opts.onToolCall,
       log: this.opts.log,
@@ -169,8 +190,26 @@ export async function executeVoiceCommand(
   // channel/guild + the voice override, the real tool registry (minus slow tools),
   // and a dispatch closure that runs tool calls through the same registry the text
   // bot uses. This is what makes voice-gpt speak as gpt and use gpt's tools.
-  const instructions =
+  const selectedVoice = interaction.options.getString('voice')
+  const voice = resolveRealtimeVoice(selectedVoice, process.env.OPENAI_REALTIME_VOICE)
+  const personaInstructions =
     `${persona.buildSystemPrompt(interaction.channelId, interaction.guildId)}\n\n---\n\n${VOICE_OVERRIDE}`
+  let recentConversation = ''
+  try {
+    const textChannel = interaction.channel
+    if (textChannel && 'messages' in textChannel) {
+      const recent = await textChannel.messages.fetch({ limit: 20 })
+      recentConversation = formatRecentConversation(
+        [...recent.values()].reverse().map(message => ({
+          author: message.author.username,
+          content: message.cleanContent,
+        })),
+      )
+    }
+  } catch (e) {
+    console.warn(`[voice] recent-history fetch failed: ${(e as Error).message}`)
+  }
+  const instructions = buildVoiceInstructions(personaInstructions, recentConversation)
   const tools = toolRegistry.toRealtimeTools().filter(t => !VOICE_TOOL_DENY.has(t.name))
   const ctx = { channelId: interaction.channelId, userId: interaction.user.id }
   const onToolCall = async (
@@ -182,8 +221,10 @@ export async function executeVoiceCommand(
     return await toolRegistry.dispatch(call.name, args, { ...ctx, defer })
   }
   try {
-    await manager.join(interaction.guildId, channel, { instructions, tools, onToolCall })
-    await interaction.editReply(`🎙️ In **${channel.name}** — talk to me. \`/gpt voice leave\` to stop.`)
+    await manager.join(interaction.guildId, channel, { instructions, voice, tools, onToolCall })
+    await interaction.editReply(
+      `🎙️ In **${channel.name}** with **${voice}** — talk to me. \`/gpt voice leave\` to stop.`,
+    )
   } catch (e) {
     manager.leave(interaction.guildId)
     await interaction.editReply(`Failed to start voice: ${(e as Error).message}`)
