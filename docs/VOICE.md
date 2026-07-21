@@ -23,7 +23,7 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 |-----|---------|-------|
 | `OPENAI_API_KEY` | (required) | already used by the bot |
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime` | the realtime model |
-| `OPENAI_REALTIME_VOICE` | `ballad` | default when `/gpt voice join` omits `voice`; any supported OpenAI Realtime voice is valid |
+| `OPENAI_REALTIME_VOICE` | `ballad` | fallback before `/gpt voice type` saves a preference |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | model for `/gpt voice speak` (verbatim TTS) |
 | `OPENAI_TTS_VOICE` | `alloy` | TTS voice (separate set from the realtime voices) |
 | `DISCORD_ADMIN_USER_ID` | — | only this user may run `/gpt voice` (billed per minute) |
@@ -32,24 +32,26 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 | `VOICE_THINK_HZ` / `_GAIN` / `_MS` / `_EVERY_MS` | `330` / `0.05` / `220` / `1100` | synth-fallback tone tuning (freq, amplitude, blip length, cadence). Ignored when `VOICE_THINK_FILE` is set. |
 
 ## Commands (`/gpt voice …`)
-- `/gpt voice join [voice]` — join your VC, start realtime voice-to-voice; picker offers British `ballad` (default), `marin`, `cedar`, and `coral`
+- `/gpt voice join` — join your VC and start realtime voice-to-voice with the saved voice
+- `/gpt voice type <voice>` — persist the voice for future calls; picker offers British `ballad` (default), `marin`, `cedar`, and `coral`
 - `/gpt voice leave` — leave + tear down
 - `/gpt voice speak <text>` — say a specific line verbatim (text → voice-back, via TTS)
 
 ## Live smoke test (the verification step)
-The audio math + protocol are unit-tested (170 tests green); the live loop needs
+The audio math + protocol are unit-tested; the live loop needs
 a real VC + a billed Realtime session, so it's a manual test:
 
 1. Ensure the bot role has **Connect** + **Speak** in the target voice channel.
 2. Restart gpt with this branch so `/gpt voice` registers and the `GuildVoiceStates`
    intent is on. (No Discord dev-portal change needed — voice states is not a
    privileged intent.)
-3. Join a voice channel yourself, then run **`/gpt voice join`**.
-   Optionally pick a voice for this call; omitting it uses British `ballad`.
-4. Bot replies "In **<channel>** — talk to me." Speak; you should hear it reply
+3. Optionally run **`/gpt voice type`** and pick a voice. The selection persists;
+   without one, the default is British `ballad`.
+4. Join a voice channel yourself, then run **`/gpt voice join`**.
+5. Bot replies "In **<channel>** — talk to me." Speak; you should hear it reply
    in the OpenAI voice. Talk over it → it stops (barge-in).
-5. While joined, **`/gpt voice speak text:<line>`** makes it say that exact line.
-6. **`/gpt voice leave`** to end the session (stops billing).
+6. While joined, **`/gpt voice speak text:<line>`** makes it say that exact line.
+7. **`/gpt voice leave`** to end the session (stops billing).
 
 ## Known limitations
 - Playback uses a single PassThrough; on barge-in it resets cleanly, but rapid

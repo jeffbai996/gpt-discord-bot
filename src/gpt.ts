@@ -463,7 +463,7 @@ const voiceManager = new VoiceManager({
   adminUserId: ADMIN_USER_ID ?? '',
   log: (m) => console.error(`[voice] ${m}`),
 })
-// Attach `/gpt voice join|leave|speak` onto the existing /gpt command builder.
+// Attach `/gpt voice join|type|leave|speak` onto the existing /gpt command builder.
 addVoiceGroup(gptCommand)
 
 // Memory store may be null if the native sqlite-vss / better-sqlite3 modules

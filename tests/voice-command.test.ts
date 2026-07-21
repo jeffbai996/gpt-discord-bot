@@ -1,5 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { SlashCommandBuilder } from 'discord.js'
 
 import {
@@ -10,29 +13,39 @@ import {
 } from '../src/voice/command.ts'
 import {
   BUILTIN_DEFAULT_REALTIME_VOICE,
+  getVoicePref,
   REALTIME_VOICE_CHOICES,
   resolveRealtimeVoice,
+  setVoicePref,
 } from '../src/voice/voices.ts'
 
-test('voice defaults to British Ballad unless config or join overrides it', () => {
+test('voice defaults to British Ballad unless config or persisted preference overrides it', () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpt-voice-pref-'))
   assert.equal(BUILTIN_DEFAULT_REALTIME_VOICE, 'ballad')
-  assert.equal(resolveRealtimeVoice(), 'ballad')
-  assert.equal(resolveRealtimeVoice(null, 'cedar'), 'cedar')
-  assert.equal(resolveRealtimeVoice('coral', 'cedar'), 'coral')
+  assert.equal(getVoicePref(stateDir), 'ballad')
+  assert.equal(getVoicePref(stateDir, 'cedar'), 'cedar')
+
+  setVoicePref('coral', stateDir)
+  assert.equal(getVoicePref(stateDir, 'cedar'), 'coral')
+  assert.equal(resolveRealtimeVoice(null, 'cedar', stateDir), 'coral')
+  assert.equal(resolveRealtimeVoice('marin', 'cedar', stateDir), 'marin')
+  assert.throws(() => setVoicePref('fake-voice', stateDir), /unknown voice/)
 })
 
-test('/gpt voice join exposes a curated optional voice picker', () => {
+test('/gpt voice type exposes the same dedicated picker shape as /gemini voice type', () => {
   const command = new SlashCommandBuilder().setName('gpt').setDescription('test')
   addVoiceGroup(command as any)
 
   const voiceGroup = (command.toJSON().options as any[]).find(option => option.name === 'voice')
   const join = voiceGroup.options.find((option: any) => option.name === 'join')
-  const picker = join.options.find((option: any) => option.name === 'voice')
+  const type = voiceGroup.options.find((option: any) => option.name === 'type')
+  const picker = type.options.find((option: any) => option.name === 'voice')
 
-  assert.equal(picker.required, false)
+  assert.deepEqual(join.options, [])
+  assert.equal(picker.required, true)
   assert.deepEqual(
     picker.choices.map((choice: any) => ({ name: choice.name, value: choice.value })),
-    REALTIME_VOICE_CHOICES.map(choice => ({ name: choice.name, value: choice.value })),
+    REALTIME_VOICE_CHOICES.map(choice => ({ name: choice.label, value: choice.value })),
   )
 })
 
@@ -53,7 +66,32 @@ test('voice instructions omit the recent-context section when history is unavail
   assert.equal(buildVoiceInstructions('persona rules', ''), 'persona rules')
 })
 
-test('voice join passes the selected voice and chronological Discord tail into the session', async () => {
+test('voice type persists the selected voice for subsequent calls', async () => {
+  const replies: any[] = []
+  const interaction = {
+    user: { id: 'owner' },
+    guildId: 'guild-1',
+    options: {
+      getSubcommand: () => 'type',
+      getString: () => 'coral',
+    },
+    reply: async (message: unknown) => { replies.push(message) },
+  }
+
+  await executeVoiceCommand(
+    interaction as any,
+    {} as any,
+    'owner',
+    {} as any,
+    {} as any,
+    { setVoice: voice => assert.equal(voice, 'coral') },
+  )
+
+  assert.match(replies[0].content, /voice → \*\*coral\*\*/)
+  assert.match(replies[0].content, /next call/)
+})
+
+test('voice join passes the persisted voice and chronological Discord tail into the session', async () => {
   let joinOverrides: any
   const manager = {
     join: async (_guildId: string, _channel: unknown, overrides: unknown) => {
@@ -76,7 +114,7 @@ test('voice join passes the selected voice and chronological Discord tail into t
     },
     options: {
       getSubcommand: () => 'join',
-      getString: (name: string) => name === 'voice' ? 'coral' : null,
+      getString: () => null,
     },
     reply: async () => {},
     editReply: async () => {},
@@ -84,7 +122,14 @@ test('voice join passes the selected voice and chronological Discord tail into t
   const persona = { buildSystemPrompt: () => 'persona rules' }
   const tools = { toRealtimeTools: () => [], dispatch: async () => null }
 
-  await executeVoiceCommand(interaction as any, manager as any, 'owner', persona as any, tools as any)
+  await executeVoiceCommand(
+    interaction as any,
+    manager as any,
+    'owner',
+    persona as any,
+    tools as any,
+    { getVoice: () => 'coral' },
+  )
 
   assert.equal(joinOverrides.voice, 'coral')
   assert.match(joinOverrides.instructions, /^persona rules/)

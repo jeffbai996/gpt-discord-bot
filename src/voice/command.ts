@@ -2,6 +2,7 @@
  * `/gpt voice …` subcommand group + per-guild session manager.
  *
  * /gpt voice join         — bot joins YOUR voice channel, starts realtime v2v
+ * /gpt voice type <voice> — persist the Realtime voice used by future calls
  * /gpt voice leave        — bot leaves and tears the session down
  * /gpt voice speak <text> — say a specific line verbatim (text -> voice-back)
  *
@@ -18,7 +19,12 @@ import type { RealtimeTool, ToolCall } from './realtime.ts'
 import type { PersonaLoader } from '../persona.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { DeferredToolJob } from '../tools/registry.ts'
-import { REALTIME_VOICE_CHOICES, resolveRealtimeVoice } from './voices.ts'
+import {
+  getVoicePref,
+  REALTIME_VOICE_CHOICES,
+  resolveRealtimeVoice,
+  setVoicePref,
+} from './voices.ts'
 
 // Appended to the bot's real persona for a live call. Mirrors gemma's voice
 // override: the text persona's "stay silent / opt out" etiquette is a bug on a
@@ -50,11 +56,15 @@ const VOICE_TOOL_DENY = new Set(
 export function addVoiceGroup(cmd: SlashCommandSubcommandsOnlyBuilder): void {
   cmd.addSubcommandGroup(g =>
     g.setName('voice').setDescription('Realtime voice (OpenAI)')
-      .addSubcommand(s => s.setName('join').setDescription('Join your voice channel and start talking')
+      .addSubcommand(s => s.setName('join').setDescription('Join your voice channel and start talking'))
+      .addSubcommand(s => s.setName('type').setDescription("Pick gpt's voice (applies to the next call)")
         .addStringOption(o => o.setName('voice')
-          .setDescription('Voice for this call (default: Ballad — British)')
-          .setRequired(false)
-          .addChoices(...REALTIME_VOICE_CHOICES)))
+          .setDescription('Which voice gpt speaks in')
+          .setRequired(true)
+          .addChoices(...REALTIME_VOICE_CHOICES.map(voice => ({
+            name: voice.label,
+            value: voice.value,
+          })))))
       .addSubcommand(s => s.setName('leave').setDescription('Leave the voice channel'))
       .addSubcommand(s => s.setName('speak').setDescription('Say a specific line out loud')
         .addStringOption(o => o.setName('text').setDescription('What to say').setRequired(true))))
@@ -148,6 +158,10 @@ export async function executeVoiceCommand(
   adminUserId: string,
   persona: PersonaLoader,
   toolRegistry: ToolRegistry,
+  voicePreference: {
+    getVoice?: () => string
+    setVoice?: (voice: string) => void
+  } = {},
 ): Promise<void> {
   if (interaction.user.id !== adminUserId) {
     await interaction.reply({ content: 'Voice is owner-only (billed per minute).', ephemeral: true })
@@ -159,6 +173,23 @@ export async function executeVoiceCommand(
   }
 
   const sub = interaction.options.getSubcommand()
+
+  if (sub === 'type') {
+    const voice = interaction.options.getString('voice', true)
+    const choice = REALTIME_VOICE_CHOICES.find(candidate => candidate.value === voice)
+    try {
+      const saveVoice = voicePreference.setVoice ?? setVoicePref
+      saveVoice(voice)
+    } catch (e) {
+      await interaction.reply({ content: `❌ couldn't set voice: ${(e as Error).message}`, ephemeral: true })
+      return
+    }
+    await interaction.reply({
+      content: `🎚️ voice → **${voice}**${choice ? ` (${choice.blurb})` : ''}. Applies to the next call; no restart needed.`,
+      ephemeral: true,
+    })
+    return
+  }
 
   if (sub === 'leave') {
     const left = manager.leave(interaction.guildId)
@@ -190,8 +221,7 @@ export async function executeVoiceCommand(
   // channel/guild + the voice override, the real tool registry (minus slow tools),
   // and a dispatch closure that runs tool calls through the same registry the text
   // bot uses. This is what makes voice-gpt speak as gpt and use gpt's tools.
-  const selectedVoice = interaction.options.getString('voice')
-  const voice = resolveRealtimeVoice(selectedVoice, process.env.OPENAI_REALTIME_VOICE)
+  const voice = (voicePreference.getVoice ?? getVoicePref)()
   const personaInstructions =
     `${persona.buildSystemPrompt(interaction.channelId, interaction.guildId)}\n\n---\n\n${VOICE_OVERRIDE}`
   let recentConversation = ''
