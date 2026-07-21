@@ -10,7 +10,7 @@ import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
-function fmtLimitLines(rl: RateLimits | null): string[] {
+export function fmtLimitLines(rl: RateLimits | null): string[] {
   if (!rl || (!rl.primary && !rl.secondary)) return ['limits:   (no codex snapshot yet — run a turn first)']
   const bar = (p: number) => { const f = Math.max(0, Math.min(10, Math.round(p / 10))); return '\u2588'.repeat(f) + '\u2591'.repeat(10 - f) }
   const nowSec = Math.floor(Date.now() / 1000)
@@ -34,9 +34,16 @@ function fmtLimitLines(rl: RateLimits | null): string[] {
     }
     return `${label} ${bar(w.usedPercent)} ${String(Math.round(w.usedPercent)).padStart(3)}%  \u00b7 resets in ${reset(w.resetsAt)}`
   }
+  const label = (w: RateWindow) => {
+    if (w.windowMinutes === 10_080) return 'weekly:'
+    if (w.windowMinutes === 300) return '5-hour:'
+    if (w.windowMinutes > 0 && w.windowMinutes % 1_440 === 0) return `${w.windowMinutes / 1_440}-day:`
+    if (w.windowMinutes > 0 && w.windowMinutes % 60 === 0) return `${w.windowMinutes / 60}-hour:`
+    return `${w.windowMinutes}-minute:`
+  }
   const out: string[] = []
-  const p = line('5-hour:', rl.primary); if (p) out.push(p)
-  const s = line('weekly:', rl.secondary); if (s) out.push(s)
+  const p = rl.primary ? line(label(rl.primary), rl.primary) : null; if (p) out.push(p)
+  const s = rl.secondary ? line(label(rl.secondary), rl.secondary) : null; if (s) out.push(s)
   return out
 }
 import { channelSessions } from './channel-sessions.ts'
@@ -91,7 +98,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('limits')
-    .setDescription('ChatGPT-sub usage left: the 5-hour + weekly rate-limit windows.')
+    .setDescription('ChatGPT-sub usage across the current rate-limit windows.')
   )
   .addSubcommand(s => s
     .setName('settings')
