@@ -56,6 +56,7 @@ import {
 import {
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
+  shouldLingerLiveEnd,
 } from './live-update.ts'
 import OpenAI from 'openai'
 
@@ -932,16 +933,11 @@ async function handleUserMessage(
   // lifecycle event per token; Discord should see one accumulated snapshot per
   // interval, never a queue of stale word-sized PATCH requests.
   let lastEditedText = ''
-  const queueLiveRender = (): void => {
+  const renderLiveNow = async (): Promise<void> => {
     if (liveUiClosed) return
-    liveRenderDirty = true
-    if (liveEditTask || liveRenderTimer) return
-    const delay = Math.max(0, LIVE_UPDATE_INTERVAL_MS - (Date.now() - lastLiveRenderAt))
-    liveRenderTimer = setTimeout(() => {
-      liveRenderTimer = null
-      if (liveUiClosed || !liveRenderDirty) return
-      liveRenderDirty = false
-      const task = (async () => {
+    if (liveEditTask) await liveEditTask.catch(() => {})
+    if (liveUiClosed) return
+    const task = (async () => {
       if (liveUiClosed) return
       await postPlaceholder()
       if (!workMessage || liveUiClosed) return
@@ -960,10 +956,26 @@ async function handleUserMessage(
       if (!await awaitBounded(target.edit(display)) && workMessage === target) {
         abandonWedgedPlaceholder()
       }
-      })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
-      liveEditTask = task
-      void task.finally(() => {
-        if (liveEditTask === task) liveEditTask = null
+    })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
+    liveEditTask = task
+    await task
+    if (liveEditTask === task) liveEditTask = null
+  }
+  const flushLiveRender = async (): Promise<void> => {
+    if (liveRenderTimer) { clearTimeout(liveRenderTimer); liveRenderTimer = null }
+    liveRenderDirty = false
+    await renderLiveNow()
+  }
+  const queueLiveRender = (): void => {
+    if (liveUiClosed) return
+    liveRenderDirty = true
+    if (liveEditTask || liveRenderTimer) return
+    const delay = Math.max(0, LIVE_UPDATE_INTERVAL_MS - (Date.now() - lastLiveRenderAt))
+    liveRenderTimer = setTimeout(() => {
+      liveRenderTimer = null
+      if (liveUiClosed || !liveRenderDirty) return
+      liveRenderDirty = false
+      void renderLiveNow().finally(() => {
         if (liveRenderDirty) queueLiveRender()
       })
     }, delay)
@@ -1455,7 +1467,16 @@ async function handleUserMessage(
 
     // Let the final live thinking/trace frame remain readable briefly after the
     // model finishes. Error and interruption branches bypass this delay.
-    if (!targetMessage && (workMessage || liveTraceMsgs.length) && LIVE_END_LINGER_MS > 0) {
+    const lingerLiveEnd = shouldLingerLiveEnd({
+      isRegeneration: !!targetMessage,
+      hasLiveState: !!workMessage || liveTraceMsgs.length > 0,
+    })
+    if (lingerLiveEnd && LIVE_END_LINGER_MS > 0) {
+      // The previous implementation started the timer while the final render
+      // was still queued. At the deadline, settleLiveUi cancelled that render,
+      // so the user only saw the penultimate frame. Flush first, then start the
+      // readable window.
+      await flushLiveRender()
       await new Promise<void>(resolve => { setTimeout(resolve, LIVE_END_LINGER_MS) })
     }
 
