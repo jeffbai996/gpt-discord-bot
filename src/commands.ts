@@ -47,6 +47,17 @@ export function fmtLimitLines(rl: RateLimits | null): string[] {
   return out
 }
 
+export function fmtContextPressureLine(
+  snapshot: Pick<RateLimits, 'lastInputTokens' | 'modelContextWindow'> | null,
+): string | null {
+  const input = snapshot?.lastInputTokens ?? 0
+  const window = snapshot?.modelContextWindow ?? 0
+  if (input <= 0 || window <= 0) return null
+  const compact = (x: number) => x >= 1_000 ? `${Math.round(x / 1_000)}k` : x.toLocaleString('en-US')
+  const percent = Math.round((input / window) * 100)
+  return `context:  ${compact(input)} / ${compact(window)} tok  (${percent}%)`
+}
+
 export function fmtClearAcknowledgement(channelId: string): string {
   return `🧹 Cleared <#${channelId}>. Only this channel was reset. The next turn starts fresh (Codex session dropped + prior messages won't be used as context).`
 }
@@ -371,6 +382,7 @@ export async function executeGptCommand(
       const up = `${Math.floor(upMin / 60)}h ${upMin % 60}m`
       const engines = Object.entries(g.byModel).map(([m, ct]) => `${m} ${ct}`).join(' · ') || '—'
       const rl = await readLatestRateLimits()
+      const contextPressure = fmtContextPressureLine(rl)
       const body = [
         '\ud83d\udcca @gpt usage — cumulative across restarts, all channels',
         '```',
@@ -384,6 +396,7 @@ export async function executeGptCommand(
         '',
         `engines:  ${engines}`,
         `uptime:   ${up}`,
+        ...(contextPressure ? [contextPressure] : []),
         '',
         ...fmtLimitLines(rl),
         '```',

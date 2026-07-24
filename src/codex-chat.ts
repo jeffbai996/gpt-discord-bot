@@ -538,7 +538,13 @@ export async function readSessionHistory(sessionId: string): Promise<Array<{ rol
 }
 
 export interface RateWindow { usedPercent: number; windowMinutes: number; resetsAt: number }
-export interface RateLimits { primary?: RateWindow; secondary?: RateWindow; planType?: string }
+export interface RateLimits {
+  primary?: RateWindow
+  secondary?: RateWindow
+  planType?: string
+  lastInputTokens?: number
+  modelContextWindow?: number
+}
 
 function findRateLimits(o: any): any {
   if (!o || typeof o !== 'object') return null
@@ -562,11 +568,19 @@ export async function readLatestRateLimits(): Promise<RateLimits | null> {
     for (let i = lines.length - 1; i >= 0; i--) {
       if (!lines[i].includes('rate_limits')) continue
       try {
-        const rl = findRateLimits(JSON.parse(lines[i]))
+        const event = JSON.parse(lines[i])
+        const rl = findRateLimits(event)
         if (rl) {
           const w = (x: any): RateWindow | undefined =>
             x ? { usedPercent: Number(x.used_percent), windowMinutes: Number(x.window_minutes), resetsAt: Number(x.resets_at) } : undefined
-          return { primary: w(rl.primary), secondary: w(rl.secondary), planType: rl.plan_type ?? undefined }
+          const info = event?.payload?.info
+          return {
+            primary: w(rl.primary),
+            secondary: w(rl.secondary),
+            planType: rl.plan_type ?? undefined,
+            lastInputTokens: Number(info?.last_token_usage?.input_tokens) || undefined,
+            modelContextWindow: Number(info?.model_context_window) || undefined,
+          }
         }
       } catch { /* skip non-JSON */ }
     }
