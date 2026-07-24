@@ -71,6 +71,35 @@ test('access: retired saved codexModel normalizes to current default', async () 
   assert.equal(flags.codexModel, 'gpt-5.6-sol')
 })
 
+test('access: migrates the old thinking collapse mode to live once', async () => {
+  const file = path.join(tmpDir, 'access.json')
+  await fs.writeFile(file, JSON.stringify({
+    users: {},
+    channels: {
+      c1: { enabled: true, requireMention: false, thinking: 'collapse', trace: 'collapse' },
+    },
+  }, null, 2))
+
+  const a = new AccessManager()
+  await a.load()
+
+  assert.equal(a.channelFlags('c1').thinking, 'live')
+  assert.equal(a.channelFlags('c1').trace, 'collapse')
+  const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+  assert.equal(migrated.version, 2)
+  assert.equal(migrated.channels.c1.thinking, 'live')
+})
+
+test('access: preserves new thinking collapse mode after migration', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c1', true, false)
+  await a.setChannelFlags('c1', { thinking: 'collapse' })
+
+  await a.load()
+  assert.equal(a.channelFlags('c1').thinking, 'collapse')
+})
+
 // NOTE: the per-channel API `model` override was removed 2026-06-29 (orphaned —
 // no slash setter; API model is env-driven via DEFAULT_MODEL, like gemma). The
 // old 'model=null clears override' test went with it.

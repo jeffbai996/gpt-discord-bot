@@ -5,6 +5,7 @@ import {
   formatHeartbeatFooter,
   formatLiveWorkMessage,
   formatReasoningSnapshot,
+  formatReasoningTraceSnapshot,
   heartbeatVisual,
   latestReasoningHeadline,
   nextHeartbeatVerb,
@@ -96,6 +97,35 @@ test('collapses completed reasoning into one latest in-place brain line', () => 
       'Fixing the actual edit owner',
     ].join('\n')),
     '💭 **Thinking:**\n> 🧠 *fixing the actual edit owner*',
+  )
+})
+
+test('collapse mode accumulates the whole reasoning trace line by line', () => {
+  assert.equal(
+    formatReasoningTraceSnapshot([
+      'Checking the first failure mode',
+      'Comparing the second failure mode\nFixing the actual edit owner',
+    ]),
+    [
+      '💭 **Thinking:**',
+      '> 🧠 *checking the first failure mode*',
+      '> 🧠 *comparing the second failure mode*',
+      '> 🧠 *fixing the actual edit owner*',
+    ].join('\n'),
+  )
+})
+
+test('live work message renders accumulated reasoning without replacing old lines', () => {
+  assert.equal(
+    formatLiveWorkMessage({
+      effortLabel: 'thinking with high effort',
+      reasoningTrace: ['First pass', 'Second pass'],
+    }),
+    [
+      '💭 ✻ **thinking with high effort…**',
+      '> 🧠 *first pass*',
+      '> 🧠 *second pass*',
+    ].join('\n'),
   )
 })
 

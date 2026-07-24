@@ -4,13 +4,14 @@ import os from 'os'
 import { DEFAULT_CODEX_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
 
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ThinkingMode = 'off' | 'on' | 'live' | 'collapse'
 
 export interface ChannelConfig {
   enabled: boolean
   requireMention: boolean
   reasoning?: ReasoningEffort
   trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
-  thinking?: 'off' | 'on' | 'collapse'   // default off — reasoning-summary card
+  thinking?: ThinkingMode                 // default off — reasoning-summary card
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
   codexModel?: CodexModel  // default gpt-5.6-sol — codex engine model only
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
@@ -23,7 +24,7 @@ export interface ChannelFlags {
   // removed the orphaned `model` field that had no slash setter.)
   reasoning: ReasoningEffort
   trace: 'off' | 'on' | 'collapse'
-  thinking: 'off' | 'on' | 'collapse'
+  thinking: ThinkingMode
   engine: 'codex' | 'api'
   codexModel: CodexModel
   counter: 'off' | 'token' | 'both'
@@ -34,6 +35,7 @@ export interface ChannelFlags {
 }
 
 export interface AccessFile {
+  version: 2
   users: Record<string, { allowed: boolean }>
   channels: Record<string, ChannelConfig>
 }
@@ -44,16 +46,22 @@ export interface CanHandleInput {
   isMention: boolean
 }
 
-const EMPTY: AccessFile = { users: {}, channels: {} }
+const EMPTY: AccessFile = { version: 2, users: {}, channels: {} }
 const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
 
-// trace/thinking went boolean -> 'off'|'on'|'collapse'. Old saved configs may still
-// hold a boolean — map false->off, true->on so a legacy `false` doesn't read as "on".
+// Trace and thinking used to be booleans. Old saved configs may still hold one,
+// so map false->off and true->on rather than letting legacy false read as "on".
 type TriState = 'off' | 'on' | 'collapse'
 function normTri(v: unknown): TriState {
   if (v === true) return 'on'
   if (v === false || v == null) return 'off'
   return (v === 'on' || v === 'collapse') ? v : 'off'
+}
+
+function normThinking(v: unknown): ThinkingMode {
+  if (v === true) return 'on'
+  if (v === false || v == null) return 'off'
+  return (v === 'on' || v === 'live' || v === 'collapse') ? v : 'off'
 }
 
 function normCodexModel(v: unknown): CodexModel {
@@ -71,7 +79,7 @@ export type CodexModel = OpenAIModel
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
   trace: 'off' as 'off' | 'on' | 'collapse',
-  thinking: 'off' as 'off' | 'on' | 'collapse',
+  thinking: 'off' as ThinkingMode,
   engine: 'codex' as 'codex' | 'api',
   codexModel: DEFAULT_CODEX_MODEL as CodexModel,
   counter: 'both' as 'off' | 'token' | 'both',
@@ -92,10 +100,21 @@ export class AccessManager {
     try {
       const raw = await fs.readFile(this.file, 'utf8')
       const parsed = JSON.parse(raw) as Partial<AccessFile>
-      this.data = {
-        users: parsed.users ?? {},
-        channels: parsed.channels ?? {}
+      const needsThinkingModeMigration = parsed.version !== 2
+      const channels = parsed.channels ?? {}
+      if (needsThinkingModeMigration) {
+        for (const channel of Object.values(channels)) {
+          // In v1, "collapse" was the one-line live view. Preserve that
+          // behavior while freeing the name for the accumulated trace.
+          if (channel.thinking === 'collapse') channel.thinking = 'live'
+        }
       }
+      this.data = {
+        version: 2,
+        users: parsed.users ?? {},
+        channels,
+      }
+      if (needsThinkingModeMigration) await this.save()
     } catch (e: any) {
       if (e.code === 'ENOENT') {
         this.data = { ...EMPTY }
@@ -159,7 +178,7 @@ export class AccessManager {
       requireMention,
       reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
-      thinking: normTri(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
+      thinking: normThinking(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
       codexModel: normCodexModel(flags?.codexModel ?? existing?.codexModel),
       counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,

@@ -48,3 +48,10 @@ test('completed reasoning reuses one snapshot instead of spraying message chunks
   assert.match(branch, /workMessage\.edit/)
   assert.doesNotMatch(branch, /for \(const piece of chunk|channel\.send\(piece\)/)
 })
+
+test('thinking collapse uses the accumulated trace while live uses the latest thought', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /flags\.thinking === 'collapse'\s*\?\s*formatReasoningTraceSnapshot/)
+  assert.match(source, /reasoningTrace:\s*flags\.thinking === 'collapse'/)
+})

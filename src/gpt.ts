@@ -48,6 +48,7 @@ import {
   formatHeartbeatFooter,
   formatLiveWorkMessage,
   formatReasoningSnapshot,
+  formatReasoningTraceSnapshot,
   heartbeatVisual,
   latestReasoningHeadline,
   pickHeartbeatVerb,
@@ -808,6 +809,7 @@ async function handleUserMessage(
   let lastLiveRenderAt = 0
   let lastProgressText = ''
   let liveHeadline = ''
+  const liveReasoningTrace: string[] = []
   let liveDetail = ''
   let liveFooter = ''
   let spinnerGlyph = '✻'
@@ -943,7 +945,8 @@ async function handleUserMessage(
       if (!workMessage || liveUiClosed) return
       const display = formatLiveWorkMessage({
         effortLabel,
-        headline: liveHeadline,
+        headline: flags.thinking === 'collapse' ? '' : liveHeadline,
+        reasoningTrace: flags.thinking === 'collapse' ? liveReasoningTrace : [],
         detail: liveDetail,
         footer: liveFooter,
         spinnerGlyph,
@@ -1137,7 +1140,8 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'reasoning_progress') {
-      liveHeadline = latestReasoningHeadline(event.text)
+      if (flags.thinking === 'collapse') liveReasoningTrace.push(event.text)
+      else if (flags.thinking !== 'off') liveHeadline = latestReasoningHeadline(event.text)
       lastProgressText = ''
       liveDetail = ''
       queueLiveRender()
@@ -1485,7 +1489,9 @@ async function handleUserMessage(
     const collapseMsgs: Message[] = []
     let thinkingMsg: Message | null = null
     if (willThinking) {
-      const snapshot = formatReasoningSnapshot(result.reasoning!)
+      const snapshot = flags.thinking === 'collapse'
+        ? formatReasoningTraceSnapshot(liveReasoningTrace.length ? liveReasoningTrace : [result.reasoning!])
+        : formatReasoningSnapshot(result.reasoning!)
       if (workMessage && !targetMessage) {
         try {
           await workMessage.edit(snapshot)
@@ -1497,7 +1503,7 @@ async function handleUserMessage(
       } else {
         try { thinkingMsg = await message.channel.send(snapshot) } catch {}
       }
-      if (thinkingMsg && flags.thinking === 'collapse') collapseMsgs.push(thinkingMsg)
+      if (thinkingMsg && (flags.thinking === 'live' || flags.thinking === 'collapse')) collapseMsgs.push(thinkingMsg)
     }
 
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`

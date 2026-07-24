@@ -1,6 +1,7 @@
 interface LiveWorkMessageOptions {
   effortLabel: string
   headline?: string
+  reasoningTrace?: string[]
   detail?: string
   footer?: string
   spinnerGlyph?: string
@@ -8,9 +9,9 @@ interface LiveWorkMessageOptions {
   maxLength?: number
 }
 
-export function latestReasoningHeadline(text: string): string {
-  const line = text.split(/\r?\n/).map(part => part.trim()).filter(Boolean).at(-1) ?? ''
+function cleanReasoningLine(line: string): string {
   return line
+    .trim()
     .replace(/^>\s*/, '')
     .replace(/^#{1,6}\s+/, '')
     .replace(/^🧠\s*/, '')
@@ -18,11 +19,29 @@ export function latestReasoningHeadline(text: string): string {
     .trim()
 }
 
+export function reasoningTraceLines(parts: string[]): string[] {
+  return parts
+    .flatMap(part => part.split(/\r?\n/))
+    .map(cleanReasoningLine)
+    .filter(Boolean)
+}
+
+export function latestReasoningHeadline(text: string): string {
+  const line = text.split(/\r?\n/).map(part => part.trim()).filter(Boolean).at(-1) ?? ''
+  return cleanReasoningLine(line)
+}
+
 export function formatReasoningSnapshot(text: string): string {
   const headline = latestReasoningHeadline(text).toLocaleLowerCase('en-US')
   return headline
     ? `💭 **Thinking:**\n> 🧠 *${headline}*`
     : '💭 **Thinking:**'
+}
+
+export function formatReasoningTraceSnapshot(parts: string[]): string {
+  const lines = reasoningTraceLines(parts)
+    .map(line => `> 🧠 *${line.toLocaleLowerCase('en-US')}*`)
+  return ['💭 **Thinking:**', ...lines].join('\n')
 }
 
 const HEARTBEAT_VERBS = [
@@ -89,6 +108,7 @@ export function formatHeartbeatFooter(
 export function formatLiveWorkMessage({
   effortLabel,
   headline = '',
+  reasoningTrace = [],
   detail = '',
   footer = '',
   spinnerGlyph = HEARTBEAT_GLYPHS[0],
@@ -97,7 +117,11 @@ export function formatLiveWorkMessage({
 }: LiveWorkMessageOptions): string {
   const header = `💭 ${spinnerGlyph} **${effortLabel}${spinnerDots}**`
   const cleanHeadline = headline.trim().toLocaleLowerCase('en-US')
-  const reasoning = cleanHeadline ? `\n> 🧠 *${cleanHeadline}*` : ''
+  const accumulated = reasoningTraceLines(reasoningTrace)
+    .map(line => `> 🧠 *${line.toLocaleLowerCase('en-US')}*`)
+  const reasoning = accumulated.length
+    ? `\n${accumulated.join('\n')}`
+    : cleanHeadline ? `\n> 🧠 *${cleanHeadline}*` : ''
   const cleanDetail = detail.trim()
   const cleanFooter = footer.trim()
   const suffix = cleanFooter ? `\n\n${cleanFooter}` : ''

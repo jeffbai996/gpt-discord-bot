@@ -200,13 +200,14 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('thinking')
-    .setDescription('Reasoning-summary card for this channel: off | on | collapse.')
+    .setDescription('Reasoning display for this channel: off | on | live | collapse.')
     .addStringOption(o => o
-      .setName('value').setDescription('off | on | collapse').setRequired(true)
+      .setName('value').setDescription('off | on | live | collapse').setRequired(true)
       .addChoices(
         { name: 'off', value: 'off' },
         { name: 'on — keep the reasoning card', value: 'on' },
-        { name: 'collapse — show live, delete after the reply', value: 'collapse' },
+        { name: 'live — show only the current thought', value: 'live' },
+        { name: 'collapse — stream the full trace, then collapse', value: 'collapse' },
       )
     )
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -531,14 +532,21 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
       }
-      if (!['off', 'on', 'collapse'].includes(value)) {
-        return interaction.reply({ content: `❌ \`${subcommand}\` must be off | on | collapse (got \`${value}\`)`, ephemeral: true })
+      const valid = subcommand === 'thinking'
+        ? ['off', 'on', 'live', 'collapse']
+        : ['off', 'on', 'collapse']
+      if (!valid.includes(value)) {
+        return interaction.reply({ content: `❌ \`${subcommand}\` must be ${valid.join(' | ')} (got \`${value}\`)`, ephemeral: true })
       }
       try {
-        const tri = value as 'off' | 'on' | 'collapse'
+        const tri = value as 'off' | 'on' | 'live' | 'collapse'
         const updated = await access.setChannelFlags(channel.id,
-          subcommand === 'trace' ? { trace: tri } : { thinking: tri })
-        const note = value === 'collapse' ? ' — shown live, deleted after the reply' : ''
+          subcommand === 'trace'
+            ? { trace: tri as 'off' | 'on' | 'collapse' }
+            : { thinking: tri })
+        const note = subcommand === 'thinking' && value === 'live'
+          ? ' — current thought shown live, then removed'
+          : value === 'collapse' ? ' — full trace shown live, then collapsed' : ''
         return interaction.reply({ content: `✅ <#${channel.id}> \`${subcommand}\` = \`${value}\`${note}. (trace=${updated.trace}, thinking=${updated.thinking})`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
