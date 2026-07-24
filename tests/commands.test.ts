@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fmtLimitLines } from '../src/commands.ts'
+import { fmtClearAcknowledgement, fmtLimitLines } from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 
@@ -32,4 +32,11 @@ test('limits labels other windows from their actual duration', () => {
 
   assert.match(lines[0], /^1-day:/)
   assert.match(lines[1], /^2-hour:/)
+})
+
+test('clear acknowledgement identifies the reset channel', () => {
+  const message = fmtClearAcknowledgement('123456789')
+
+  assert.match(message, /<#123456789>/)
+  assert.match(message, /Only this channel was reset\./)
 })

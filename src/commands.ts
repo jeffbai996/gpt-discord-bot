@@ -46,6 +46,11 @@ export function fmtLimitLines(rl: RateLimits | null): string[] {
   const s = rl.secondary ? line(label(rl.secondary), rl.secondary) : null; if (s) out.push(s)
   return out
 }
+
+export function fmtClearAcknowledgement(channelId: string): string {
+  return `🧹 Cleared <#${channelId}>. Only this channel was reset. The next turn starts fresh (Codex session dropped + prior messages won't be used as context).`
+}
+
 import { channelSessions } from './channel-sessions.ts'
 import { activeTurns } from './active-turns.ts'
 
@@ -300,7 +305,7 @@ export async function executeGptCommand(
       // whether a codex session object existed. Always confirm (Jeff 2026-06-27).
       channelSessions.clear(interaction.channelId)
       return interaction.reply({
-        content: '🧹 Cleared — the next turn starts fresh (codex session dropped + prior messages won\'t be used as context).',
+        content: fmtClearAcknowledgement(interaction.channelId),
         ephemeral: true,
       })
     }
