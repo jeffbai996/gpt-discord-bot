@@ -53,6 +53,10 @@ import {
   pickHeartbeatVerb,
   shouldRenderHeartbeat,
 } from './live-ui.ts'
+import {
+  resolveLiveEndLinger,
+  resolveLiveUpdateInterval,
+} from './live-update.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -798,6 +802,9 @@ async function handleUserMessage(
   let placeholderId: string | null = null
   let thinkingAnim: ReturnType<typeof setInterval> | null = null
   let liveEditTask: Promise<void> | null = null
+  let liveRenderTimer: ReturnType<typeof setTimeout> | null = null
+  let liveRenderDirty = false
+  let lastLiveRenderAt = 0
   let lastProgressText = ''
   let liveHeadline = ''
   let liveDetail = ''
@@ -806,6 +813,8 @@ async function handleUserMessage(
   let spinnerDots = '…'
   let liveUiClosed = false
   const LIVE_UI_SETTLE_MS = Number(process.env.GPT_LIVE_UI_SETTLE_MS) || 5_000
+  const LIVE_UPDATE_INTERVAL_MS = resolveLiveUpdateInterval(process.env.GPT_LIVE_UPDATE_INTERVAL_MS)
+  const LIVE_END_LINGER_MS = resolveLiveEndLinger(process.env.GPT_LIVE_END_LINGER_MS)
   const awaitBounded = async (promise: Promise<unknown> | null): Promise<boolean> => {
     if (!promise) return true
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -824,6 +833,8 @@ async function handleUserMessage(
   }
   const stopThinkingAnim = async () => {
     if (thinkingAnim) { clearInterval(thinkingAnim); thinkingAnim = null }
+    if (liveRenderTimer) { clearTimeout(liveRenderTimer); liveRenderTimer = null }
+    liveRenderDirty = false
     const pending = liveEditTask
     liveEditTask = null
     if (!await awaitBounded(pending)) abandonWedgedPlaceholder()
@@ -868,7 +879,7 @@ async function handleUserMessage(
       spinnerDots = dots[fi % dots.length]
       fi++
       queueLiveRender()
-    }, 1500)
+    }, LIVE_UPDATE_INTERVAL_MS)
   }
 
   // Post the 💭 placeholder bubble + start its spinner, once. Called either by
@@ -917,15 +928,20 @@ async function handleUserMessage(
     placeholderTimer = setTimeout(() => { void postPlaceholder() }, PLACEHOLDER_DELAY_MS)
   }
 
-  // Serialize all live-card changes through one owner. Animation and streamed
-  // state are composed into the same edit tick, which also naturally coalesces
-  // bursts while Discord REST is busy.
+  // Serialize and coalesce all live-card changes. Model streams can emit a
+  // lifecycle event per token; Discord should see one accumulated snapshot per
+  // interval, never a queue of stale word-sized PATCH requests.
   let lastEditedText = ''
   const queueLiveRender = (): void => {
     if (liveUiClosed) return
-    const prior = liveEditTask
-    const task = (async () => {
-      if (prior) await prior.catch(() => {})
+    liveRenderDirty = true
+    if (liveEditTask || liveRenderTimer) return
+    const delay = Math.max(0, LIVE_UPDATE_INTERVAL_MS - (Date.now() - lastLiveRenderAt))
+    liveRenderTimer = setTimeout(() => {
+      liveRenderTimer = null
+      if (liveUiClosed || !liveRenderDirty) return
+      liveRenderDirty = false
+      const task = (async () => {
       if (liveUiClosed) return
       await postPlaceholder()
       if (!workMessage || liveUiClosed) return
@@ -939,13 +955,18 @@ async function handleUserMessage(
       })
       if (display === lastEditedText || liveUiClosed) return
       lastEditedText = display
+      lastLiveRenderAt = Date.now()
       const target = workMessage
       if (!await awaitBounded(target.edit(display)) && workMessage === target) {
         abandonWedgedPlaceholder()
       }
-    })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
-    liveEditTask = task
-    void task.finally(() => { if (liveEditTask === task) liveEditTask = null })
+      })().catch(e => { console.error('[live-ui] progress edit failed:', e) })
+      liveEditTask = task
+      void task.finally(() => {
+        if (liveEditTask === task) liveEditTask = null
+        if (liveRenderDirty) queueLiveRender()
+      })
+    }, delay)
   }
 
   const queueLiveText = (raw: string, rememberProgress: boolean, footer = ''): void => {
@@ -1431,6 +1452,12 @@ async function handleUserMessage(
     // NOTE: workMessage (the "thinking…" placeholder) is NOT reused for the reply
     // anymore — it gets edited into the "thought for Ns" line in place (replacing
     // "thinking…" where it sat). The reply always posts as a fresh message below.
+
+    // Let the final live thinking/trace frame remain readable briefly after the
+    // model finishes. Error and interruption branches bypass this delay.
+    if (!targetMessage && (workMessage || liveTraceMsgs.length) && LIVE_END_LINGER_MS > 0) {
+      await new Promise<void>(resolve => { setTimeout(resolve, LIVE_END_LINGER_MS) })
+    }
 
     // Cards posted in 'collapse' mode are shown live then deleted once the reply lands.
     await settleLiveUi()
