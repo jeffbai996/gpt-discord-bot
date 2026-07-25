@@ -364,7 +364,7 @@ function parseFunctionCallArgs(raw: unknown): Record<string, unknown> {
 function responseFunctionCallEvent(payload: any): { status: string; tool?: { name: string; args: string } } | null {
   const name = String(payload?.name ?? '').trim()
   if (!name) return null
-  const args = parseFunctionCallArgs(payload?.arguments)
+  const args = parseFunctionCallArgs(payload?.arguments ?? payload?.input)
   if (name === 'exec_command') {
     return { status: '🛠️ running', tool: { name: 'shell', args: cleanCmd(String(args.cmd ?? args.command ?? '')) } }
   }
@@ -403,7 +403,8 @@ export function liveEvent(ev: any): { status: string; tool?: { name: string; arg
   if (ev?.type === 'event_msg' && ev.payload?.type === 'function_call') {
     return responseFunctionCallEvent(ev.payload)
   }
-  if (ev?.type === 'response_item' && ev.payload?.type === 'function_call') {
+  if (ev?.type === 'response_item'
+      && (ev.payload?.type === 'function_call' || ev.payload?.type === 'custom_tool_call')) {
     return responseFunctionCallEvent(ev.payload)
   }
 
@@ -461,7 +462,8 @@ export function isMeaningfulCodexActivity(ev: any): boolean {
       || ev.type === 'turn.completed'
       || ev.type === 'turn.failed') return true
   if ((ev.type === 'item.started' || ev.type === 'item.completed') && ev.item) return true
-  if (ev.type === 'response_item' && ev.payload?.type === 'function_call') return true
+  if (ev.type === 'response_item'
+      && (ev.payload?.type === 'function_call' || ev.payload?.type === 'custom_tool_call')) return true
   if (ev.type === 'event_msg') {
     return ev.payload?.type === 'agent_message'
       || ev.payload?.type === 'mcp_tool_call_begin'

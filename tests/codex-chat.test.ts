@@ -44,6 +44,7 @@ test('codex liveness: only meaningful state transitions refresh the idle watchdo
     { type: 'item.completed', item: { type: 'agent_message', text: 'progress' } },
     { type: 'turn.completed', usage: {} },
     { type: 'event_msg', payload: { type: 'agent_message', phase: 'commentary', message: 'progress' } },
+    { type: 'response_item', payload: { type: 'custom_tool_call', name: 'exec', input: 'text("ok")' } },
   ]) assert.equal(isMeaningfulCodexActivity(event), true, JSON.stringify(event))
 
   for (const event of [
@@ -139,6 +140,26 @@ test('liveEvent: surfaces generic Codex response_item function calls', () => {
     tool: {
       name: 'view_image',
       args: '{"path":"/tmp/shot.jpg"}',
+    },
+  })
+})
+
+test('liveEvent: surfaces unified exec custom tool calls from resumed Codex sessions', () => {
+  const ev = liveEvent({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      call_id: 'call-1',
+      name: 'exec',
+      input: 'const result = await tools.exec_command({"cmd":"npm test"}); text(result.output);',
+    },
+  })
+
+  assert.deepEqual(ev, {
+    status: '🔧 tooling',
+    tool: {
+      name: 'exec',
+      args: '{"arguments":"const result = await tools.exec_command({\\"cmd\\":\\"npm test\\"}); text(result.output);"}',
     },
   })
 })
