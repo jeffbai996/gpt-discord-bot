@@ -31,17 +31,23 @@ export function latestReasoningHeadline(text: string): string {
   return cleanReasoningLine(line)
 }
 
-export function formatReasoningSnapshot(text: string): string {
+export function formatReasoningSnapshot(
+  text: string,
+  header: string = '💭 **Thinking:**',
+): string {
   const headline = latestReasoningHeadline(text).toLocaleLowerCase('en-US')
   return headline
-    ? `💭 **Thinking:**\n> 🧠 *${headline}*`
-    : '💭 **Thinking:**'
+    ? `${header}\n> 🧠 *${headline}*`
+    : header
 }
 
-export function formatReasoningTraceSnapshot(parts: string[]): string {
+export function formatReasoningTraceSnapshot(
+  parts: string[],
+  header: string = '💭 **Thinking:**',
+): string {
   const lines = reasoningTraceLines(parts)
     .map(line => `> 🧠 *${line.toLocaleLowerCase('en-US')}*`)
-  return ['💭 **Thinking:**', ...lines].join('\n')
+  return [header, ...lines].join('\n')
 }
 
 const HEARTBEAT_VERBS = [

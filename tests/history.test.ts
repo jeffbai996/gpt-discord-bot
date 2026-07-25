@@ -22,6 +22,17 @@ test('stripBotMetadata: drops trace and thinking cards', () => {
   assert.equal(stripBotMetadata('💭 **Thinking:**\n> checking the repo'), '')
 })
 
+test('stripBotMetadata: removes transient brain lines merged into a reply', () => {
+  assert.equal(
+    stripBotMetadata([
+      '💭 ✓ **thought for 19s**',
+      '> 🧠 *fixing the final-state owner*',
+      'The answer stays in history.',
+    ].join('\n')),
+    'The answer stays in history.',
+  )
+})
+
 test('stripToolTraceCard: strips leading trace card from reply text', () => {
   const input = `🔧 **Tool trace**
 \`\`\`diff

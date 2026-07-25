@@ -964,11 +964,6 @@ async function handleUserMessage(
     await task
     if (liveEditTask === task) liveEditTask = null
   }
-  const flushLiveRender = async (): Promise<void> => {
-    if (liveRenderTimer) { clearTimeout(liveRenderTimer); liveRenderTimer = null }
-    liveRenderDirty = false
-    await renderLiveNow()
-  }
   const queueLiveRender = (): void => {
     if (liveUiClosed) return
     liveRenderDirty = true
@@ -1454,56 +1449,19 @@ async function handleUserMessage(
       return
     }
 
-    // Thinking + trace cards belong ABOVE the reply (the intended "here's my
-    // reasoning / what I ran, then the answer" order). The reply normally reuses
-    // the streaming placeholder, which was posted at TURN START and so sits at
-    // the top — editing it there would push these cards below the reply (the
-    // old "reasoning under the output" report; it affects every
-    // model that emits a reasoning summary or runs a tool). Fix: when a card
-    // will post and the placeholder is ours, drop it and let the reply repost as
-    // a fresh message BELOW the cards. (Expansion flow edits an existing message
-    // we can't reorder, so it keeps cards-after — an accepted edge case.)
     const willThinking = flags.thinking !== 'off' && !!result.reasoning?.trim() && message.channel.isSendable()
     const willTrace = flags.trace !== 'off' && result.toolCalls.length > 0 && message.channel.isSendable()
-    // NOTE: workMessage (the "thinking…" placeholder) is NOT reused for the reply
-    // anymore — it gets edited into the "thought for Ns" line in place (replacing
-    // "thinking…" where it sat). The reply always posts as a fresh message below.
-
-    // Let the final live thinking/trace frame remain readable briefly after the
-    // model finishes. Error and interruption branches bypass this delay.
-    const lingerLiveEnd = shouldLingerLiveEnd({
-      isRegeneration: !!targetMessage,
-      hasLiveState: !!workMessage || liveTraceMsgs.length > 0,
-    })
-    if (lingerLiveEnd && LIVE_END_LINGER_MS > 0) {
-      // The previous implementation started the timer while the final render
-      // was still queued. At the deadline, settleLiveUi cancelled that render,
-      // so the user only saw the penultimate frame. Flush first, then start the
-      // readable window.
-      await flushLiveRender()
-      await new Promise<void>(resolve => { setTimeout(resolve, LIVE_END_LINGER_MS) })
-    }
-
-    // Cards posted in 'collapse' mode are shown live then deleted once the reply lands.
     await settleLiveUi()
     const collapseMsgs: Message[] = []
-    let thinkingMsg: Message | null = null
+    const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
+    let completedThinking = thoughtLine
     if (willThinking) {
-      const snapshot = flags.thinking === 'collapse'
-        ? formatReasoningTraceSnapshot(liveReasoningTrace.length ? liveReasoningTrace : [result.reasoning!])
-        : formatReasoningSnapshot(result.reasoning!)
-      if (workMessage && !targetMessage) {
-        try {
-          await workMessage.edit(snapshot)
-          thinkingMsg = workMessage
-          workMessage = null
-        } catch {
-          try { thinkingMsg = await message.channel.send(snapshot) } catch {}
-        }
-      } else {
-        try { thinkingMsg = await message.channel.send(snapshot) } catch {}
-      }
-      if (thinkingMsg && (flags.thinking === 'live' || flags.thinking === 'collapse')) collapseMsgs.push(thinkingMsg)
+      completedThinking = flags.thinking === 'collapse'
+        ? formatReasoningTraceSnapshot(
+            liveReasoningTrace.length ? liveReasoningTrace : [result.reasoning!],
+            thoughtLine,
+          )
+        : formatReasoningSnapshot(result.reasoning!, thoughtLine)
     }
 
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
@@ -1540,17 +1498,15 @@ async function handleUserMessage(
     // line indefinitely ONLY when trace='on'; for trace 'collapse'/'off' it's a
     // transient duration tag, stripped after a 60s linger (Jeff 2026-06-24).
     // N = total turn time (codex has no per-item timing).
-    const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
     const persist = flags.trace === 'on'
-    const firstChunkLimit = Math.max(1000, 2000 - thoughtLine.length - 16)
+    const firstChunkLimit = Math.max(1000, 2000 - completedThinking.length - 16)
     const parts = chunk(body, firstChunkLimit)
-    const firstWithThought = `${thoughtLine}\n${parts[0] ?? ''}`
+    const firstWithThought = `${completedThinking}\n${parts[0] ?? ''}`
     let mergedMsg: Message | null = null
-    // Cards (trace / thinking) post ABOVE the reply. The placeholder sat at the top
-    // since turn start, so reusing it for the reply would force the reply above those
-    // cards. When a card posted, drop the placeholder and let the reply repost as a
-    // fresh message BELOW the cards (Jeff 2026-06-24).
-    if ((willTrace || willThinking) && workMessage && !targetMessage) {
+    // Tool cards belong above the reply. Thinking no longer gets stranded in its
+    // own card: its final brain line stays directly under "thought for" in this
+    // merged reply until the short live linger expires.
+    if (willTrace && workMessage && !targetMessage) {
       try { await workMessage.delete() } catch {}
       workMessage = null
     }
@@ -1566,6 +1522,20 @@ async function handleUserMessage(
       } else if (message.channel.isSendable()) {
         await message.channel.send(parts[i])
       }
+    }
+    // `live` and `collapse` keep the completed brain line(s) attached to the
+    // answer for the short live linger, then remove only those quote lines.
+    // `on` intentionally keeps its reasoning visible.
+    const transientThinking = flags.thinking === 'live' || flags.thinking === 'collapse'
+    const lingerCompletedThinking = shouldLingerLiveEnd({
+      isRegeneration: !!targetMessage,
+      hasLiveState: transientThinking && willThinking,
+    })
+    if (lingerCompletedThinking && mergedMsg) {
+      if (LIVE_END_LINGER_MS > 0) {
+        await new Promise<void>(resolve => { setTimeout(resolve, LIVE_END_LINGER_MS) })
+      }
+      try { await mergedMsg.edit(`${thoughtLine}\n${parts[0] ?? ''}`) } catch {}
     }
     // Attach any screenshots a tool produced this turn (Playwright browser_take_
     // screenshot → saved to disk → path collected on result.files). Sent as a
@@ -1585,8 +1555,7 @@ async function handleUserMessage(
       deferredActions.schedule(client, { channelId: mergedMsg.channelId, messageId: mergedMsg.id, action: 'strip', content: parts[0] ?? '', dueAt: Date.now() + lingerMs })
     }
 
-    // Collapse: keep the trace/thinking card(s) up for a readable 60s linger (same
-    // window as the thought-for line), THEN delete for a clean channel (Jeff 2026-06-24).
+    // Collapse: keep tool-trace cards up for the configured linger, then delete.
     const toCollapse: Message[] = [...collapseMsgs]
     if (flags.trace === 'collapse' && liveTraceMsgs.length) toCollapse.push(...liveTraceMsgs)
     if (toCollapse.length) {

@@ -97,9 +97,15 @@ export function stripBotMetadata(text: string): string {
   if (/^💭 \*\*Thinking:\*\*/.test(text)) return ''
   const lines = text.split('\n')
   const out: string[] = []
+  let droppingThoughtTrace = false
   for (const line of lines) {
     if (line.startsWith('-# ')) continue
-    if (/^💭 ✓ \*\*thought for .+\*\*$/.test(line)) continue
+    if (/^💭 ✓ \*\*thought for .+\*\*$/.test(line)) {
+      droppingThoughtTrace = true
+      continue
+    }
+    if (droppingThoughtTrace && /^>\s*🧠\s/.test(line)) continue
+    droppingThoughtTrace = false
     out.push(line)
   }
   return out.join('\n').trim()

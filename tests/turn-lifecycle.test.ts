@@ -37,7 +37,7 @@ test('partial output has no write access to the thought message', async () => {
   assert.doesNotMatch(branch, /workMessage\.edit|queueLiveText|postPlaceholder/)
 })
 
-test('completed reasoning reuses one snapshot instead of spraying message chunks', async () => {
+test('completed reasoning is merged beneath the thought duration instead of stranded above', async () => {
   const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
   const start = source.indexOf('if (willThinking)')
   const end = source.indexOf('\n    // Tool-trace card', start)
@@ -45,8 +45,8 @@ test('completed reasoning reuses one snapshot instead of spraying message chunks
 
   assert.ok(start >= 0)
   assert.match(branch, /formatReasoningSnapshot/)
-  assert.match(branch, /workMessage\.edit/)
-  assert.doesNotMatch(branch, /for \(const piece of chunk|channel\.send\(piece\)/)
+  assert.match(branch, /thoughtLine/)
+  assert.doesNotMatch(branch, /channel\.send|workMessage\.edit/)
 })
 
 test('thinking collapse uses the accumulated trace while live uses the latest thought', async () => {

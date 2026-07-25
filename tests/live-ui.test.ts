@@ -100,6 +100,16 @@ test('collapses completed reasoning into one latest in-place brain line', () => 
   )
 })
 
+test('completed live reasoning keeps the brain line under the thought duration', () => {
+  assert.equal(
+    formatReasoningSnapshot(
+      'Fixing the actual edit owner',
+      '💭 ✓ **thought for 19s**',
+    ),
+    '💭 ✓ **thought for 19s**\n> 🧠 *fixing the actual edit owner*',
+  )
+})
+
 test('collapse mode accumulates the whole reasoning trace line by line', () => {
   assert.equal(
     formatReasoningTraceSnapshot([
@@ -111,6 +121,20 @@ test('collapse mode accumulates the whole reasoning trace line by line', () => {
       '> 🧠 *checking the first failure mode*',
       '> 🧠 *comparing the second failure mode*',
       '> 🧠 *fixing the actual edit owner*',
+    ].join('\n'),
+  )
+})
+
+test('completed collapse reasoning keeps every brain line under the thought duration', () => {
+  assert.equal(
+    formatReasoningTraceSnapshot(
+      ['First pass', 'Second pass'],
+      '💭 ✓ **thought for 19s**',
+    ),
+    [
+      '💭 ✓ **thought for 19s**',
+      '> 🧠 *first pass*',
+      '> 🧠 *second pass*',
     ].join('\n'),
   )
 })
