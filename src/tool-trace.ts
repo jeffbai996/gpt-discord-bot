@@ -1,5 +1,16 @@
 export const DEFAULT_TOOL_CALL_WIDTH = 80
 export const DEFAULT_TOOL_OUTPUT_WIDTH = 72
+const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
+
+export function resolveTraceFailsafeMs(
+  raw: string | undefined,
+  turnTimeoutMs: number,
+): number {
+  const parsed = Number(raw)
+  const configured = Number.isFinite(parsed) && parsed >= 0 ? parsed : 180_000
+  const safeTurnWindow = Math.max(0, turnTimeoutMs) + TRACE_FAILSAFE_GRACE_MS
+  return Math.max(configured, safeTurnWindow)
+}
 
 export function formatResultTraceLine(
   resultPreview: string,

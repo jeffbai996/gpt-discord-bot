@@ -1,6 +1,6 @@
 const DEFAULT_INTERVAL_MS = 1500
 const DEFAULT_END_LINGER_MS = 5000
-const DEFAULT_PROGRESS_DWELL_CAP_MS = 12_000
+const DEFAULT_PROGRESS_DWELL_CAP_MS = 15_000
 
 export function resolveLiveUpdateInterval(raw: string | undefined): number {
   const parsed = Number(raw)

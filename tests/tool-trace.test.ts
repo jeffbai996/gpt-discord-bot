@@ -5,6 +5,7 @@ import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
+  resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
 test('uses the reduced Discord trace widths', () => {
@@ -30,4 +31,13 @@ test('moves single-line result markers right without adding a count', () => {
   const line = formatResultTraceLine('alpha', 1, 20)
 
   assert.equal(line, ' ⎿ alpha')
+})
+
+test('trace failsafe cannot expire before a live turn can finish', () => {
+  assert.equal(resolveTraceFailsafeMs(undefined, 45 * 60_000), 50 * 60_000)
+  assert.equal(resolveTraceFailsafeMs('180000', 45 * 60_000), 50 * 60_000)
+})
+
+test('trace failsafe honors a longer explicit cleanup window', () => {
+  assert.equal(resolveTraceFailsafeMs('3600000', 45 * 60_000), 60 * 60_000)
 })

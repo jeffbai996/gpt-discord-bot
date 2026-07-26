@@ -11,12 +11,18 @@ import { gptCommand, executeGptCommand } from './commands.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent, RespondResult, ToolCall } from './openai.ts'
-import { isInFlightStatusPing, respondViaCodex } from './codex-chat.ts'
+import {
+  CodexInterruptedError,
+  CodexProcessDiedError,
+  CodexStoppedError,
+  codexTimeoutMs,
+  isInFlightStatusPing,
+  respondViaCodex,
+} from './codex-chat.ts'
 import { codexFallbackWaitMs } from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
-import { CodexInterruptedError, CodexProcessDiedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
 import { LatestQueueMarker } from './queue-marker.ts'
@@ -44,6 +50,7 @@ import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
+  resolveTraceFailsafeMs,
 } from './tool-trace.ts'
 import {
   formatHeartbeatFooter,
@@ -1020,18 +1027,19 @@ async function handleUserMessage(
   let liveTracePending = false
   let liveTraceDirty = false
   let liveTraceClosed = false
-  // Failsafe cleanup for collapse mode: the normal 60s-linger delete is only
-  // scheduled at END of turn. If the process dies mid-turn (e.g. a restart) the
-  // live cards would be orphaned forever (Jeff 2026-07-05: "tool trace failed to
-  // clear"). So the moment a card is first POSTED in collapse mode, we register a
-  // durable, generous-TTL delete on disk — DeferredActions.rearm() fires it after a
-  // restart. The end-of-turn 60s delete for the same message id is a harmless
-  // duplicate (run() no-ops when the message is already gone).
+  // Failsafe cleanup for collapse mode: the normal linger delete is only scheduled
+  // at END of turn. If the process dies mid-turn, DeferredActions.rearm() still
+  // removes the orphan after a restart. The lease must outlive the turn watchdog:
+  // the old fixed three-minute TTL deleted healthy trace cards during long repo
+  // work, after which later edits targeted already-deleted Discord messages.
   const failsafeArmed = new Set<string>()
   const armTraceFailsafe = (m: Message) => {
     if (flags.trace !== 'collapse' || failsafeArmed.has(m.id)) return
     failsafeArmed.add(m.id)
-    const ttl = Number(process.env.GPT_TRACE_FAILSAFE_MS) || 180_000
+    const ttl = resolveTraceFailsafeMs(
+      process.env.GPT_TRACE_FAILSAFE_MS,
+      codexTimeoutMs({ userMessage: userText, extraText }),
+    )
     deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + ttl })
   }
   const flushLiveTrace = () => {
