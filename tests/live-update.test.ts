@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  liveProgressDwellMs,
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
   shouldLingerLiveEnd,
@@ -23,4 +24,12 @@ test('end linger applies only when a normal turn rendered live state', () => {
   assert.equal(shouldLingerLiveEnd({ isRegeneration: false, hasLiveState: true }), true)
   assert.equal(shouldLingerLiveEnd({ isRegeneration: false, hasLiveState: false }), false)
   assert.equal(shouldLingerLiveEnd({ isRegeneration: true, hasLiveState: true }), false)
+})
+
+test('substantial progress gets a bounded read-time dwell', () => {
+  assert.equal(liveProgressDwellMs('short status'), 0)
+  assert.equal(liveProgressDwellMs('first line\nsecond line'), 4000)
+  assert.equal(liveProgressDwellMs('x'.repeat(300)), 6000)
+  assert.equal(liveProgressDwellMs('x'.repeat(1000)), 12000)
+  assert.equal(liveProgressDwellMs('x'.repeat(1000), 8000), 8000)
 })

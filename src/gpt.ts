@@ -56,6 +56,7 @@ import {
   shouldRenderHeartbeat,
 } from './live-ui.ts'
 import {
+  liveProgressDwellMs,
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
   shouldLingerLiveEnd,
@@ -808,6 +809,7 @@ async function handleUserMessage(
   let liveRenderTimer: ReturnType<typeof setTimeout> | null = null
   let liveRenderDirty = false
   let lastLiveRenderAt = 0
+  let liveProgressHoldUntil = 0
   let lastProgressText = ''
   let liveHeadline = ''
   const liveReasoningTrace: string[] = []
@@ -843,7 +845,11 @@ async function handleUserMessage(
     liveEditTask = null
     if (!await awaitBounded(pending)) abandonWedgedPlaceholder()
   }
-  const settleLiveUi = async () => {
+  const settleLiveUi = async (respectProgressDwell = false) => {
+    if (respectProgressDwell) {
+      const remaining = liveProgressHoldUntil - Date.now()
+      if (remaining > 0) await sleep(remaining)
+    }
     liveUiClosed = true
     await stopThinkingAnim()
   }
@@ -956,6 +962,7 @@ async function handleUserMessage(
       if (display === lastEditedText || liveUiClosed) return
       lastEditedText = display
       lastLiveRenderAt = Date.now()
+      liveProgressHoldUntil = lastLiveRenderAt + liveProgressDwellMs(liveDetail)
       const target = workMessage
       if (!await awaitBounded(target.edit(display)) && workMessage === target) {
         abandonWedgedPlaceholder()
@@ -969,7 +976,8 @@ async function handleUserMessage(
     if (liveUiClosed) return
     liveRenderDirty = true
     if (liveEditTask || liveRenderTimer) return
-    const delay = Math.max(0, LIVE_UPDATE_INTERVAL_MS - (Date.now() - lastLiveRenderAt))
+    const intervalAt = lastLiveRenderAt + LIVE_UPDATE_INTERVAL_MS
+    const delay = Math.max(0, Math.max(intervalAt, liveProgressHoldUntil) - Date.now())
     liveRenderTimer = setTimeout(() => {
       liveRenderTimer = null
       if (liveUiClosed || !liveRenderDirty) return
@@ -1333,7 +1341,7 @@ async function handleUserMessage(
     // transient bubble) and the typing heartbeat, alongside the spinner.
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
-    await settleLiveUi()
+    await settleLiveUi(true)
     if (stopController.signal.aborted) throw new CodexStoppedError(result.durationMs)
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
@@ -1571,12 +1579,18 @@ async function handleUserMessage(
     }
   } catch (e: any) {
     if (e instanceof CodexStoppedError) {
-      await applyLifecycle(message, 'interrupted')
+      const steered = activeTurns.consumeSteered(channelId)
+      await applyLifecycle(message, steered ? 'silenced' : 'interrupted')
       await settleLiveUi()
       await deleteLiveTrace()
       try {
-        if (workMessage) await workMessage.edit(INTERRUPTED_MARKER)
-        else await message.react('✗')
+        if (steered) {
+          if (workMessage) await workMessage.delete()
+        } else if (workMessage) {
+          await workMessage.edit(INTERRUPTED_MARKER)
+        } else {
+          await message.react('✗')
+        }
       } catch {}
       return
     }

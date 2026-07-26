@@ -28,6 +28,7 @@ export const BARGE_BUSY_RECOVERY_MS = 120_000
 class ActiveTurns {
   private killers = new Map<string, Killer>()
   private stopped = new Set<string>()
+  private steered = new Set<string>()
   private startedAt = new Map<string, number>()
   private busyTool = new Map<string, BusyTool>()
   private pendingStops = new Map<string, PendingStop>()
@@ -53,6 +54,7 @@ class ActiveTurns {
     this.generations.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
+    this.steered.delete(channelId)
     this.clearPendingStop(channelId)
     this.resolveIdleIfNeeded()
   }
@@ -103,7 +105,12 @@ class ActiveTurns {
   stopFor(channelId: string, opts: { clearQueue: boolean }): boolean {
     const k = this.killers.get(channelId)
     if (!k) return false
-    if (opts.clearQueue) this.stopped.add(channelId)
+    if (opts.clearQueue) {
+      this.stopped.add(channelId)
+      this.steered.delete(channelId)
+    } else {
+      this.steered.add(channelId)
+    }
     this.clearPendingStop(channelId)
     try { k() } catch { /* best-effort */ }
     // Aborting the Codex child only starts teardown. Keep the turn registered
@@ -150,6 +157,13 @@ class ActiveTurns {
   consumeStopped(channelId: string): boolean {
     if (this.stopped.has(channelId)) { this.stopped.delete(channelId); return true }
     return false
+  }
+
+  /** Discord renderer: was this turn replaced by newer queued input? */
+  consumeSteered(channelId: string): boolean {
+    if (!this.steered.has(channelId)) return false
+    this.steered.delete(channelId)
+    return true
   }
 
   isActive(channelId: string): boolean {
