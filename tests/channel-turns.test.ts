@@ -26,6 +26,24 @@ test('queues repeated steering FIFO and batches it after the active turn', async
   assert.deepEqual(seen, [['A'], ['B', 'C']])
 })
 
+test('waits for a quiet window so a human-speed burst becomes one FIFO batch', async () => {
+  const first = deferred()
+  const seen: string[][] = []
+  const runner = new ChannelTurnRunner<string>(async (_channelId, batch) => {
+    seen.push(batch)
+    if (batch[0] === 'A') await first.promise
+  }, () => false, 20)
+
+  const leader = runner.submit('channel', 'A')
+  assert.equal(await runner.submit('channel', 'B'), 'queued')
+  first.resolve()
+  await new Promise(resolve => setTimeout(resolve, 5))
+  assert.equal(await runner.submit('channel', 'C'), 'queued')
+  await leader
+
+  assert.deepEqual(seen, [['A'], ['B', 'C']])
+})
+
 test('restart waits for runner cleanup and queued batches, without API fallback', async () => {
   const codex = deferred()
   const cleanup = deferred()

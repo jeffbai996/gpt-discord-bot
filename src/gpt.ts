@@ -19,6 +19,7 @@ import { applyLifecycle } from './reactions/lifecycle.ts'
 import { CodexInterruptedError, CodexProcessDiedError, CodexStoppedError } from './codex-chat.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
+import { LatestQueueMarker } from './queue-marker.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
 import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
@@ -571,15 +572,14 @@ const client = new Client({
 })
 
 const shutdownGate = new ShutdownGate()
+const queueMarker = new LatestQueueMarker(() => client.user?.id)
+const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 1_000
 interface QueuedChannelTurn { message: Message; target: Message | null }
 const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
   async (channelId, batch) => {
     const carrier = batch[batch.length - 1]
     const combined = batch.map(item => item.message.content).filter(Boolean).join('\n')
-    const botId = client.user?.id
-    if (botId) for (const item of batch) {
-      void item.message.reactions.cache.get('\u{1F557}')?.users.remove(botId).catch(() => {})
-    }
+    await queueMarker.clear(channelId)
     logTurnLifecycle({
       event: 'channel_batch_started',
       channelId,
@@ -593,6 +593,7 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
     )
   },
   channelId => activeTurns.consumeStopped(channelId),
+  QUEUE_SETTLE_MS,
 )
 const restartCoordinator = new RestartCoordinator(
   () => Promise.all([activeTurns.waitForIdle(), channelTurns.waitForIdle()]).then(() => {}),
@@ -1620,7 +1621,7 @@ async function runChannelTurn(message: Message, target: Message | null): Promise
   const cid = message.channel.id
   const outcome = await channelTurns.submit(cid, { message, target })
   if (outcome === 'queued') {
-    void message.react('\u{1F557}').catch(() => {})
+    void queueMarker.mark(cid, message)
     logTurnLifecycle({
       event: 'turn_queued', channelId: cid, queueDepth: channelTurns.queueDepth(cid),
     })
@@ -1672,7 +1673,7 @@ client.on('messageCreate', async (message: Message) => {
       logTurnLifecycle({
         event: 'barge_queued', channelId, queueDepth, stopReason: 'deferred_barge',
       })
-      void message.react('\u{23ED}\u{FE0F}').catch(() => {})  // ⏭️ "barging — cutting in"
+      void queueMarker.mark(channelId, message)
       return
     }
   }
