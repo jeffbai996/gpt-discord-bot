@@ -1,9 +1,37 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
+})
+
+test('codex silence: a clean empty reply for a message addressing someone else does not trigger fallback', () => {
+  const message = '<@111111111111111111> 我觉得这个功能可以加，您觉得呢'
+  assert.match(message, /<@111111111111111111>/)
+  assert.equal(isIntentionalCodexSilence('', {
+    code: 0,
+    signal: null,
+    stopReason: null,
+    forced: false,
+  }), true)
+})
+
+test('codex silence: failed or terminated processes are never treated as intentional silence', () => {
+  for (const result of [
+    { code: 1, signal: null, stopReason: null, forced: false },
+    { code: null, signal: 'SIGKILL' as const, stopReason: null, forced: false },
+    { code: null, signal: 'SIGKILL' as const, stopReason: 'hard' as const, forced: false },
+    { code: null, signal: null, stopReason: null, forced: false, error: new Error('spawn failed') },
+  ]) {
+    assert.equal(isIntentionalCodexSilence('', result), false)
+  }
+  assert.equal(isIntentionalCodexSilence('real reply', {
+    code: 0,
+    signal: null,
+    stopReason: null,
+    forced: false,
+  }), false)
 })
 
 test('codex commentary: surfaces in-flight progress text', () => {

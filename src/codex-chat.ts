@@ -5,7 +5,7 @@ import path from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { activeTurns } from './active-turns.ts'
 import { killProcessTree } from './kill-tree.ts'
-import { spawnSupervisedProcess } from './process-supervisor.ts'
+import { spawnSupervisedProcess, type ProcessSupervisorResult } from './process-supervisor.ts'
 import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
@@ -125,6 +125,17 @@ export function codexWatchdogPolicy(input: Pick<CodexChatInput, 'userMessage' | 
 
 export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): number {
   return codexWatchdogPolicy(input).hardTimeoutMs
+}
+
+export function isIntentionalCodexSilence(
+  reply: string,
+  processResult: ProcessSupervisorResult | null,
+): boolean {
+  return !reply.trim()
+    && processResult?.code === 0
+    && processResult.signal === null
+    && processResult.stopReason === null
+    && !processResult.error
 }
 
 export interface CodexArgsInput {
@@ -346,9 +357,9 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
 
 // Run a chat turn through the Codex CLI instead of the OpenAI API. Returns a
 // RespondResult shaped exactly like openai.respond(), so gpt.ts can use it
-// interchangeably. THROWS on any failure (timeout, empty answer, exec error)
-// so the caller can apply its explicit fallback policy — this never silently
-// returns junk.
+// interchangeably. THROWS on process failures and timeouts so the caller can
+// apply its explicit fallback policy. A clean exit with no answer is deliberate
+// model silence and returns an empty reply for gpt.ts to remove the placeholder.
 
 function parseFunctionCallArgs(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>
@@ -788,14 +799,16 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     logOutcome('error', detail)
     throw new CodexProcessDiedError(Date.now() - t0, detail)
   }
-  if (!reply) {
+  if (isIntentionalCodexSilence(reply, processResult)) {
     logOutcome('empty', `no answer (lines=${lines.length})`)
-    throw new CodexProcessDiedError(
-      Date.now() - t0,
-      `codex chat produced no answer (timedOut=${timedOut}, lines=${lines.length})`,
-    )
+  } else if (!reply) {
+    // Defensive: all known unsuccessful process states are handled above. Do
+    // not silently accept an unknown completion shape as intentional silence.
+    logOutcome('error', `no answer from unclassified completion (lines=${lines.length})`)
+    throw new Error(`codex chat produced no answer from an unclassified completion (lines=${lines.length})`)
+  } else {
+    logOutcome('completed')
   }
-  logOutcome('completed')
 
   input.onEvent?.({ type: 'done' })
 
