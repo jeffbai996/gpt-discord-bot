@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines } from '../src/commands.ts'
+import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, gptCommand } from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 
@@ -51,4 +51,12 @@ test('clear acknowledgement identifies the reset channel', () => {
 
   assert.match(message, /<#123456789>/)
   assert.match(message, /cleared — next turn starts fresh\./)
+})
+
+test('/gpt plan is a one-shot read-only planning command', () => {
+  const json = gptCommand.toJSON()
+  const plan = json.options?.find((option: any) => option.name === 'plan')
+
+  assert.ok(plan)
+  assert.match(plan.description, /next message read-only/i)
 })

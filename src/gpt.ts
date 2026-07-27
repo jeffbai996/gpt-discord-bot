@@ -47,6 +47,12 @@ import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
 import {
+  executePlanInstruction,
+  PLAN_ONLY_INSTRUCTION,
+  PlanModeStore,
+  revisionInstruction,
+} from './plan-mode.ts'
+import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatResultTraceLine,
@@ -583,13 +589,21 @@ const client = new Client({
 })
 
 const shutdownGate = new ShutdownGate()
+const plans = new PlanModeStore()
 const queueMarker = new LatestQueueMarker(() => client.user?.id)
 const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 1_000
-interface QueuedChannelTurn { message: Message; target: Message | null }
+interface QueuedChannelTurn {
+  message: Message
+  target: Message | null
+  contentOverride?: string
+}
 const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
   async (channelId, batch) => {
     const carrier = batch[batch.length - 1]
-    const combined = batch.map(item => item.message.content).filter(Boolean).join('\n')
+    const combined = batch
+      .map(item => item.contentOverride ?? item.message.content)
+      .filter(Boolean)
+      .join('\n')
     await queueMarker.clear(channelId)
     logTurnLifecycle({
       event: 'channel_batch_started',
@@ -695,7 +709,7 @@ client.on('interactionCreate', async interaction => {
     await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '', persona, toolRegistry)
     return
   }
-  await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer })
+  await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer, plans })
 })
 
 // Core message-handling pipeline. Reused by:
@@ -738,6 +752,7 @@ async function handleUserMessage(
   // When a batched-queue turn folds several messages together, the combined
   // text comes in via contentOverride; otherwise use the message's own content.
   const userText = contentOverride ?? message.content
+  const planArm = plans.consumeArm(channelId, userId)
   const flags = access.channelFlags(channelId)
   // API-engine model is env-driven (DEFAULT_MODEL / GPT_MODEL), not per-channel —
   // matches gemma's API model. The per-channel `model` override was removed
@@ -804,6 +819,12 @@ async function handleUserMessage(
   if (expansion) {
     extraText = (extraText ? extraText + '\n\n' : '') +
       '[Expansion request: the user wants you to go deeper on your most recent reply in this channel — add detail, examples, or counter-points. Don\'t repeat what you already said; build on it.]'
+  }
+  if (planArm) {
+    const instruction = planArm.kind === 'revise'
+      ? revisionInstruction(planArm.priorPlan ?? '')
+      : PLAN_ONLY_INSTRUCTION
+    extraText = (extraText ? extraText + '\n\n' : '') + instruction
   }
 
   // "thinking with [effort] effort…" — surface the reasoning effort in the live
@@ -1232,6 +1253,7 @@ async function handleUserMessage(
           resumeSessionId,
           signal: stopController.signal,
           onEvent,
+          readOnly: !!planArm,
         })
         if (result.threadId) channelSessions.set(channelId, result.threadId)
         // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
@@ -1266,11 +1288,20 @@ async function handleUserMessage(
         setEnginePresence(false)
       } catch (e) {
         if (e instanceof CodexStoppedError) {
-          // /gpt stop — user aborted this turn. No API fallback; keep the session/context.
+          // A deferred barge and an explicit /gpt stop both abort the Codex
+          // child, but only the explicit stop should leave an Interrupted
+          // tombstone. Steering silently retires the superseded UI and clears
+          // its lifecycle reactions before the queued replacement takes over.
+          const steered = activeTurns.consumeSteered(channelId)
+          await applyLifecycle(message, steered ? 'silenced' : 'interrupted')
           await settleLiveUi()
           await deleteLiveTrace()
-          if (workMessage) { await workMessage.edit(INTERRUPTED_MARKER).catch(() => {}) }
-          try { await message.react('✗') } catch {}
+          if (steered) {
+            if (workMessage) await workMessage.delete().catch(() => {})
+          } else {
+            if (workMessage) await workMessage.edit(INTERRUPTED_MARKER).catch(() => {})
+            try { await message.react('✗') } catch {}
+          }
           return
         }
         // An intentional restart must never become an API fallback. Deploys now
@@ -1557,6 +1588,23 @@ async function handleUserMessage(
       }
       try { await mergedMsg.edit(`${thoughtLine}\n${parts[0] ?? ''}`) } catch {}
     }
+    // Settle the plan card only after the live-thinking linger. Otherwise a
+    // late linger edit can overwrite the user's approved/revise/cancel outcome.
+    // Plan cards stay stable instead of receiving the normal deferred strip.
+    if (planArm && mergedMsg) {
+      await mergedMsg.edit(parts[0] ?? '').catch(() => {})
+      plans.registerPending({
+        messageId: mergedMsg.id,
+        channelId,
+        requesterId: userId,
+        sourceMessageId: message.id,
+        planText: result.reply?.trim() || parts.join('\n').trim(),
+        createdAt: Date.now(),
+      })
+      for (const emoji of ['✅', '✏️', '❌']) {
+        await mergedMsg.react(emoji).catch(() => {})
+      }
+    }
     // Attach any screenshots a tool produced this turn (Playwright browser_take_
     // screenshot → saved to disk → path collected on result.files). Sent as a
     // follow-up message so it works regardless of the edit-vs-reply branch above,
@@ -1570,7 +1618,7 @@ async function handleUserMessage(
     }
     // Transient thought line: after the linger, strip just the thought prefix from
     // the merged message, leaving the reply body intact.
-    if (!persist && mergedMsg) {
+    if (!persist && mergedMsg && !planArm) {
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
       deferredActions.schedule(client, { channelId: mergedMsg.channelId, messageId: mergedMsg.id, action: 'strip', content: parts[0] ?? '', dueAt: Date.now() + lingerMs })
     }
@@ -1642,9 +1690,13 @@ async function handleUserMessage(
 // messages queue; when it finishes, ALL queued messages are batched into one
 // follow-up turn (repeated until the queue drains). Cross-channel stays
 // parallel — only same-channel pile-ups serialize. (Jeff 2026-06-25)
-async function runChannelTurn(message: Message, target: Message | null): Promise<void> {
+async function runChannelTurn(
+  message: Message,
+  target: Message | null,
+  contentOverride?: string,
+): Promise<void> {
   const cid = message.channel.id
-  const outcome = await channelTurns.submit(cid, { message, target })
+  const outcome = await channelTurns.submit(cid, { message, target, contentOverride })
   if (outcome === 'queued') {
     void queueMarker.mark(cid, message)
     logTurnLifecycle({
@@ -1722,6 +1774,45 @@ client.on('messageCreate', async (message: Message) => {
 })
 
 client.on('messageReactionAdd', async (reaction, user) => {
+  if (reaction.partial) {
+    try { await reaction.fetch() } catch { return }
+  }
+  if (user.partial) {
+    try { await user.fetch() } catch { return }
+  }
+  const emoji = reaction.emoji.name
+  const planAction = emoji === '✅' ? 'execute'
+    : emoji === '✏️' ? 'revise'
+      : emoji === '❌' ? 'cancel'
+        : null
+  if (planAction && !user.bot && reaction.message.author?.id === client.user?.id) {
+    const picked = plans.takeAction(reaction.message.id, user.id, planAction)
+    if (picked.status === 'forbidden') return
+    if (picked.status === 'expired') {
+      await reaction.message.reply({ content: '⌛ That plan expired. Run `/gpt plan` again.', allowedMentions: { repliedUser: false } }).catch(() => {})
+      return
+    }
+    if (picked.status === 'accepted') {
+      await reaction.message.reactions.removeAll().catch(() => {})
+      if (planAction === 'cancel') {
+        await reaction.message.edit(`${reaction.message.content}\n\n❌ **plan cancelled**`).catch(() => {})
+        return
+      }
+      if (planAction === 'revise') {
+        await reaction.message.edit(`${reaction.message.content}\n\n✏️ **revision armed — send the changes**`).catch(() => {})
+        return
+      }
+      await reaction.message.edit(`${reaction.message.content}\n\n✅ **approved — executing**`).catch(() => {})
+      try {
+        const source = await reaction.message.channel.messages.fetch(picked.plan.sourceMessageId)
+        await runChannelTurn(source, null, executePlanInstruction(picked.plan.planText))
+      } catch (e) {
+        console.error('[plan] execute failed:', e)
+        await reaction.message.reply({ content: '❌ Could not resume that plan.', allowedMentions: { repliedUser: false } }).catch(() => {})
+      }
+      return
+    }
+  }
   await handleReaction(reaction, user, {
     client,
     access,

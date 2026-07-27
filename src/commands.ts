@@ -7,6 +7,7 @@ import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
+import type { PlanModeStore } from './plan-mode.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -117,6 +118,10 @@ export const gptCommand = new SlashCommandBuilder()
     .setName('compact')
     .setDescription('Force a context-summary rollup now, regardless of the message threshold')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('plan')
+    .setDescription('Plan the next message read-only, then offer Execute / Revise / Cancel.')
   )
   .addSubcommand(s => s
     .setName('stop')
@@ -251,6 +256,7 @@ export interface CommandDeps {
   // Optional — present only when the SQLite-backed summarization scheduler
   // wired up successfully. /gpt compact reports gracefully when null.
   summarizer: { runForChannel(channelId: string): Promise<{ messageCount: number } | null> } | null
+  plans?: PlanModeStore
 }
 
 export async function executeGptCommand(
@@ -294,6 +300,17 @@ export async function executeGptCommand(
       const filename = interaction.options.getString('filename', true)
       await persona.load(filename)
       return interaction.reply({ content: `✅ Persona swapped to \`${filename}\`.`, ephemeral: true })
+    }
+
+    if (subcommand === 'plan') {
+      if (!deps.plans) {
+        return interaction.reply({ content: '⚠️ Plan mode is unavailable on this runtime.', ephemeral: true })
+      }
+      deps.plans.arm(interaction.channelId, interaction.user.id)
+      return interaction.reply({
+        content: '🗺️ Plan mode armed for your next message. That turn is read-only; react ✅ to execute, ✏️ to revise, or ❌ to cancel.',
+        ephemeral: true,
+      })
     }
 
     if (subcommand === 'history') {

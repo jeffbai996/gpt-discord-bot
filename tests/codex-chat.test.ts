@@ -355,6 +355,21 @@ test('codex resume args preserve the session id without a shell wrapper', () => 
   ])
 })
 
+test('codex plan args are read-only and never use the bypass flag', () => {
+  const args = buildCodexArgs({
+    prompt: 'inspect and plan',
+    model: 'gpt-test',
+    effort: 'high',
+    outfile: '/tmp/final.txt',
+    resumeSessionId: 'session-123',
+    readOnly: true,
+  })
+
+  assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'), false)
+  assert.ok(args.includes('sandbox_mode="read-only"'))
+  assert.ok(args.includes('approval_policy="never"'))
+})
+
 test('codexTimeoutMs: bare status pokes still fail fast', () => {
   // No question, no work verb — just "are you alive" noise. Keep these quick.
   for (const m of ['you alive?', 'ping', 'where did you go', 'you pooping out again lol']) {

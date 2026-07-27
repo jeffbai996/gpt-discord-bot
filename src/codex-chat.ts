@@ -71,6 +71,7 @@ export interface CodexChatInput {
   codexModel?: string
   extraText?: string
   imagePaths?: string[]
+  readOnly?: boolean
   channelId?: string
   turnGeneration?: number
   resumeSessionId?: string
@@ -145,6 +146,7 @@ export interface CodexArgsInput {
   outfile: string
   resumeSessionId?: string
   imagePaths?: string[]
+  readOnly?: boolean
 }
 
 export function buildCodexArgs(input: CodexArgsInput): string[] {
@@ -152,7 +154,9 @@ export function buildCodexArgs(input: CodexArgsInput): string[] {
   if (input.resumeSessionId) args.push('resume')
   args.push(
     '--skip-git-repo-check',
-    '--dangerously-bypass-approvals-and-sandbox',
+    ...(input.readOnly
+      ? ['-c', 'sandbox_mode="read-only"', '-c', 'approval_policy="never"']
+      : ['--dangerously-bypass-approvals-and-sandbox']),
     '-c', `model="${input.model}"`,
     '-c', `model_reasoning_effort=${input.effort}`,
     '-c', 'model_reasoning_summary=detailed',
@@ -639,6 +643,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     outfile,
     resumeSessionId: input.resumeSessionId,
     imagePaths: input.imagePaths,
+    readOnly: input.readOnly,
   })
   const supervisor = spawnSupervisedProcess(CODEX_BIN, args, {
     cwd: '/tmp',
