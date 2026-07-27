@@ -37,6 +37,7 @@ import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
 import { PinnedFactsStore } from './pinned-facts.ts'
 import { PendingPlaceholders } from './pending-placeholders.ts'
+import { RestartInbox } from './restart-inbox.ts'
 import { DeferredActions } from './deferred-actions.ts'
 import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
@@ -460,6 +461,7 @@ const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
 const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md'))
 const pendingPlaceholders = new PendingPlaceholders(path.join(STATE_DIR, 'pending-placeholders.json'))
+const restartInbox = new RestartInbox(path.join(STATE_DIR, 'restart-inbox.json'))
 initGlobalStats(path.join(STATE_DIR, 'global-stats.json'))
 const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
 persona.setPinnedFactsStore(pinnedFacts)
@@ -621,11 +623,16 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
   QUEUE_SETTLE_MS,
 )
 const restartCoordinator = new RestartCoordinator(
-  () => Promise.all([activeTurns.waitForIdle(), channelTurns.waitForIdle()]).then(() => {}),
+  () => Promise.all([
+    shutdownGate.waitForIdle(),
+    activeTurns.waitForIdle(),
+    channelTurns.waitForIdle(),
+  ]).then(() => {}),
   () => {
     logTurnLifecycle({ event: 'restart_launching', restartPhase: 'launching' })
     scheduleSelfRestart('gpt', 250)
   },
+  () => shutdownGate.beginDrain(),
 )
 
 function requestGracefulRestart(): void {
@@ -634,13 +641,12 @@ function requestGracefulRestart(): void {
     console.error('[restart] request coalesced; restart already pending')
     return
   }
-  shutdownGate.beginDrain()
   logTurnLifecycle({
     event: 'restart_requested',
-    restartPhase: 'draining',
+    restartPhase: 'pending',
     queueDepth: channelTurns.totalQueueDepth(),
   })
-  console.error('[restart] requested; draining active turns before asking systemd to restart')
+  console.error('[restart] requested; accepting work until all turns are idle')
 }
 
 function installGracefulShutdown(): void {
@@ -653,7 +659,11 @@ function installGracefulShutdown(): void {
       t.unref?.()
     })
     logTurnLifecycle({ event: 'shutdown_requested', signal, restartPhase: 'draining' })
-    const idle = Promise.all([activeTurns.waitForIdle(), channelTurns.waitForIdle()])
+    const idle = Promise.all([
+      shutdownGate.waitForIdle(),
+      activeTurns.waitForIdle(),
+      channelTurns.waitForIdle(),
+    ])
       .then(() => 'idle' as const)
     Promise.race([idle, timer])
       .then(reason => {
@@ -691,6 +701,13 @@ client.once('ready', async () => {
   try {
     const n = await pendingPlaceholders.sweep(client)
     if (n) console.error(`swept ${n} interrupted placeholder(s) from a prior run`)
+    const replayed = await restartInbox.replay(async (channelId, messageId) => {
+      const channel = await client.channels.fetch(channelId)
+      if (!channel?.isTextBased()) throw new Error(`deferred channel ${channelId} is unavailable`)
+      const message = await channel.messages.fetch(messageId)
+      await dispatchInboundMessage(message)
+    })
+    if (replayed) console.error(`replayed ${replayed} message(s) deferred during restart`)
     deferredActions.rearm(client)
   } catch (e) {
     console.error('placeholder sweep failed:', e)
@@ -1725,10 +1742,21 @@ async function runChannelTurn(
   }
 }
 
-client.on('messageCreate', async (message: Message) => {
+async function dispatchInboundMessage(message: Message): Promise<void> {
   if (message.author.bot) return
-  if (shutdownGate.isDraining()) return
+  const release = shutdownGate.enter()
+  if (!release) {
+    restartInbox.defer(message.channel.id, message.id)
+    return
+  }
+  try {
+    await handleInboundMessage(message)
+  } finally {
+    release()
+  }
+}
 
+async function handleInboundMessage(message: Message): Promise<void> {
   const channelId = message.channel.id
   const userId = message.author.id
   const isMention = client.user ? message.mentions.users.has(client.user.id) : false
@@ -1791,7 +1819,9 @@ client.on('messageCreate', async (message: Message) => {
   }
 
   await runChannelTurn(message, target)
-})
+}
+
+client.on('messageCreate', dispatchInboundMessage)
 
 client.on('messageReactionAdd', async (reaction, user) => {
   if (reaction.partial) {

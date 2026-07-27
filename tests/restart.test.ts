@@ -105,6 +105,48 @@ describe('RestartCoordinator', () => {
     await Promise.resolve()
     assert.equal(launches, 1)
   })
+
+  test('closes intake only after active work becomes idle', async () => {
+    let resolveIdle!: () => void
+    const idle = new Promise<void>(resolve => { resolveIdle = resolve })
+    const gate = new ShutdownGate()
+    const coordinator = new RestartCoordinator(
+      () => idle,
+      () => {},
+      () => gate.beginDrain(),
+    )
+
+    coordinator.request()
+    assert.equal(gate.isDraining(), false, 'restart pending must still accept new turns')
+    resolveIdle()
+    await idle
+    await Promise.resolve()
+    assert.equal(gate.isDraining(), true, 'the final launch window closes intake')
+  })
+
+  test('a cross-channel arrival while restart is pending extends the drain', async () => {
+    const gate = new ShutdownGate()
+    const firstDone = gate.enter()
+    assert.ok(firstDone)
+    let launches = 0
+    const coordinator = new RestartCoordinator(
+      () => gate.waitForIdle(),
+      () => { launches++ },
+      () => gate.beginDrain(),
+    )
+
+    coordinator.request()
+    const secondDone = gate.enter()
+    assert.ok(secondDone, 'pending restart still accepts another channel')
+    firstDone()
+    await Promise.resolve()
+    assert.equal(launches, 0)
+
+    secondDone()
+    await Promise.resolve()
+    assert.equal(launches, 1)
+    assert.equal(gate.enter(), null, 'only the final exit window rejects live intake')
+  })
 })
 
 describe('ShutdownGate', () => {

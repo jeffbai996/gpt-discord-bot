@@ -21,16 +21,39 @@ type RestartLauncher = () => void
 
 /**
  * Tracks two distinct shutdown phases:
- * - draining stops new Discord work while an in-band restart waits for turns;
+ * - draining stops new Discord work only for the final restart/exit window;
  * - exiting lets the later systemd SIGTERM run cleanup exactly once.
  *
- * A single boolean cannot represent both phases: SIGUSR2 enters drain mode
- * before systemd sends SIGTERM, so treating "already draining" as "already
- * exiting" leaves the service stuck in stop-sigterm.
+ * Accepted handlers hold a lease. A pending restart waits for those leases,
+ * so intake stays open until closing it and launching the restart can happen
+ * back-to-back in the same microtask.
  */
 export class ShutdownGate {
   private draining = false
   private exiting = false
+  private active = 0
+  private readonly idleWaiters = new Set<() => void>()
+
+  enter(): (() => void) | null {
+    if (this.draining) return null
+    this.active++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.active--
+      if (this.active === 0) {
+        const waiters = [...this.idleWaiters]
+        this.idleWaiters.clear()
+        for (const resolve of waiters) resolve()
+      }
+    }
+  }
+
+  waitForIdle(): Promise<void> {
+    if (this.active === 0) return Promise.resolve()
+    return new Promise(resolve => this.idleWaiters.add(resolve))
+  }
 
   beginDrain(): boolean {
     if (this.draining) return false
@@ -62,13 +85,17 @@ export class RestartCoordinator {
   constructor(
     private readonly waitForIdle: WaitForIdle,
     private readonly launch: RestartLauncher,
+    private readonly closeIntake: () => void = () => {},
   ) {}
 
   request(): boolean {
     if (this.pending) return false
     this.pending = true
     void this.waitForIdle()
-      .then(() => this.launch())
+      .then(() => {
+        this.closeIntake()
+        this.launch()
+      })
       .catch(err => {
         this.pending = false
         console.error('[restart] failed while waiting for idle:', err)
