@@ -59,11 +59,33 @@ export function fmtContextPressureLine(
 }
 
 export function fmtClearAcknowledgement(channelId: string): string {
-  return `🧹 Cleared <#${channelId}>. Only this channel was reset. The next turn starts fresh (Codex session dropped + prior messages won't be used as context).`
+  return `🧹 <#${channelId}> cleared — next turn starts fresh.`
 }
 
 import { channelSessions } from './channel-sessions.ts'
 import { activeTurns } from './active-turns.ts'
+
+// The one settings card. /gpt settings renders it, and every setter ack
+// appends it after a one-line "what changed" — same pattern as gem-bot
+// (Jeff 2026-07-27 copy-edit run: the card replaces prose flag dumps).
+function settingsCard(access: AccessManager, channelId: string): string {
+  const f = access.channelFlags(channelId)
+  const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
+  const rows: Array<[string, string]> = [
+    ['engine', `${f.engine} (default codex)`],
+    ['codex model', `${f.codexModel} (default ${DEFAULT_CODEX_MODEL})`],
+    ['api model', `${process.env.GPT_MODEL || DEFAULT_OPENAI_MODEL} (env, global)`],
+    ['effort', `${f.reasoning} (default high)`],
+    ['thinking', `${f.thinking} (default off)`],
+    ['trace', `${f.trace} (default off)`],
+    ['counter', `${f.counter} (default both)`],
+    ['require @', f.requireMention ? 'yes' : 'no'],
+    ['collapse linger', `${Math.round(lingerMs / 1000)}s`],
+  ]
+  const pad = Math.max(...rows.map(([k]) => k.length))
+  const body = rows.map(([k, v]) => `${k.padEnd(pad)} : ${v}`).join('\n')
+  return `⚙️ **gpt settings** — <#${channelId}>\n\`\`\`\n${body}\n\`\`\``
+}
 
 export const gptCommand = new SlashCommandBuilder()
   .setName('gpt')
@@ -262,9 +284,8 @@ export async function executeGptCommand(
       const enabled = interaction.options.getBoolean('enabled', true)
       const requireMention = interaction.options.getBoolean('require_mention', true)
       await access.setChannel(channel.id, enabled, requireMention)
-      const flags = access.channelFlags(channel.id)
       return interaction.reply({
-        content: `✅ <#${channel.id}> configured. enabled=${enabled}, requireMention=${requireMention}. flags: engine=${flags.engine}, codexModel=${flags.codexModel}, reasoning=${flags.reasoning}, counter=${flags.counter}, trace=${flags.trace}, thinking=${flags.thinking} — change via the \`/gpt\` subcommands.`,
+        content: `✅ <#${channel.id}> ${enabled ? 'enabled' : 'disabled'}\n${settingsCard(access, channel.id)}`,
         ephemeral: true
       })
     }
@@ -357,7 +378,7 @@ export async function executeGptCommand(
         return interaction.reply({ content: `❌ \`model\` must be one of: ${CODEX_MODELS.join(' | ')} (got \`${value}\`)`, ephemeral: true })
       }
       const updated = await access.setChannelFlags(channel.id, { codexModel: value as CodexModel })
-      return interaction.reply({ content: `✅ <#${channel.id}> codex model = \`${updated.codexModel}\` (codex engine only; API path unchanged).`, ephemeral: true })
+      return interaction.reply({ content: `✅ codex model → \`${updated.codexModel}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
     }
 
     if (subcommand === 'limits') {
@@ -414,23 +435,7 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
       }
-      const f = access.channelFlags(channel.id)
-      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
-      const rows: Array<[string, string]> = [
-        ['engine', `${f.engine} (default codex)`],
-        ['codex model', `${f.codexModel} (default ${DEFAULT_CODEX_MODEL})`],
-        ['api model', `${process.env.GPT_MODEL || DEFAULT_OPENAI_MODEL} (env, global)`],
-        ['effort', `${f.reasoning} (default high)`],
-        ['thinking', `${f.thinking} (default off)`],
-        ['trace', `${f.trace} (default off)`],
-        ['counter', `${f.counter} (default both)`],
-        ['require @', f.requireMention ? 'yes' : 'no'],
-        ['collapse linger', `${Math.round(lingerMs / 1000)}s`],
-      ]
-      const pad = Math.max(...rows.map(([k]) => k.length))
-      const cardBody = rows.map(([k, v]) => `${k.padEnd(pad)} : ${v}`).join('\n')
-      const card = `⚙️ **gpt settings** — <#${channel.id}>\n\`\`\`\n${cardBody}\n\`\`\``
-      return interaction.reply({ content: card, ephemeral: true })
+      return interaction.reply({ content: settingsCard(access, channel.id), ephemeral: true })
     }
 
     if (subcommand === 'cache') {
@@ -483,7 +488,7 @@ export async function executeGptCommand(
       }
       try {
         const updated = await access.setChannelFlags(channel.id, { reasoning: value as ReasoningEffort })
-        return interaction.reply({ content: `<#${channel.id}> reasoning effort set to ${updated.reasoning} (${updated.codexModel}/codex)`, ephemeral: true })
+        return interaction.reply({ content: `✅ effort → \`${updated.reasoning}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -500,7 +505,7 @@ export async function executeGptCommand(
       }
       try {
         const updated = await access.setChannelFlags(channel.id, { counter: value })
-        return interaction.reply({ content: `<#${channel.id}> footer counter set to ${updated.counter}`, ephemeral: true })
+        return interaction.reply({ content: `✅ counter → \`${updated.counter}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -517,10 +522,7 @@ export async function executeGptCommand(
       }
       try {
         const updated = await access.setChannelFlags(channel.id, { engine: value })
-        const note = value === 'codex'
-          ? 'codex (flat sub) - falls back to the API on error/rate-limit'
-          : 'api (metered OpenAI) - bypasses codex entirely'
-        return interaction.reply({ content: `<#${channel.id}> chat engine set to ${updated.engine} - ${note}`, ephemeral: true })
+        return interaction.reply({ content: `✅ engine → \`${updated.engine}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -544,10 +546,8 @@ export async function executeGptCommand(
           subcommand === 'trace'
             ? { trace: tri as 'off' | 'on' | 'collapse' }
             : { thinking: tri })
-        const note = subcommand === 'thinking' && value === 'live'
-          ? ' — current thought shown live, then removed'
-          : value === 'collapse' ? ' — full trace shown live, then collapsed' : ''
-        return interaction.reply({ content: `✅ <#${channel.id}> \`${subcommand}\` = \`${value}\`${note}. (trace=${updated.trace}, thinking=${updated.thinking})`, ephemeral: true })
+        const shown = subcommand === 'trace' ? updated.trace : updated.thinking
+        return interaction.reply({ content: `✅ ${subcommand} → \`${shown}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }
@@ -564,7 +564,7 @@ export async function executeGptCommand(
       }
       try {
         const updated = await access.setChannelFlags(channel.id, { requireMention: value === 'on' })
-        return interaction.reply({ content: `✅ <#${channel.id}> require-mention = \`${value}\` (${updated.requireMention}).`, ephemeral: true })
+        return interaction.reply({ content: `✅ require @ → \`${updated.requireMention ? 'yes' : 'no'}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }

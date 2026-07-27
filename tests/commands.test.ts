@@ -50,5 +50,5 @@ test('clear acknowledgement identifies the reset channel', () => {
   const message = fmtClearAcknowledgement('123456789')
 
   assert.match(message, /<#123456789>/)
-  assert.match(message, /Only this channel was reset\./)
+  assert.match(message, /cleared — next turn starts fresh\./)
 })
