@@ -8,8 +8,8 @@ import {
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('uses the reduced Discord trace widths', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 80)
+test('keeps the full Discord tool-call row within 76 columns', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 76)
   assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 72)
 })
 

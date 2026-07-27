@@ -10,8 +10,8 @@ export interface ChannelConfig {
   enabled: boolean
   requireMention: boolean
   reasoning?: ReasoningEffort
-  trace?: 'off' | 'on' | 'collapse'      // default off — diff-style tool-trace card
-  thinking?: ThinkingMode                 // default off — reasoning-summary card
+  trace?: 'off' | 'on' | 'collapse'      // default collapse — transient diff-style tool trace
+  thinking?: ThinkingMode                 // default live — latest reasoning headline
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
   codexModel?: CodexModel  // default gpt-5.6-sol — codex engine model only
   counter?: 'off' | 'token' | 'both'  // footer: off | token-only | token+cached/reasoning
@@ -78,8 +78,8 @@ export type CodexModel = OpenAIModel
 
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
-  trace: 'off' as 'off' | 'on' | 'collapse',
-  thinking: 'off' as ThinkingMode,
+  trace: 'collapse' as 'off' | 'on' | 'collapse',
+  thinking: 'live' as ThinkingMode,
   engine: 'codex' as 'codex' | 'api',
   codexModel: DEFAULT_CODEX_MODEL as CodexModel,
   counter: 'both' as 'off' | 'token' | 'both',

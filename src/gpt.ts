@@ -239,7 +239,10 @@ function splitTraceBlocks(rawLines: string[]): string[][] {
 // cannot be separated from its `[N lines]` continuation. Keep each card under
 // Discord's 2000-char limit with headroom for headers/fences and message edits.
 function renderTraceCards(rawLines: string[]): string[] {
-  const lines = rawLines.map(l => padTraceLine(capMegaLine(l)))
+  const lines = rawLines.map(l => {
+    const padded = padTraceLine(capMegaLine(l))
+    return padded.length > ROW_W ? padded.slice(0, ROW_W - 1) + '…' : padded
+  })
   const blocks = splitTraceBlocks(lines)
   const pages: string[][] = []
   let page: string[] = []

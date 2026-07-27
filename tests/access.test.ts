@@ -48,6 +48,15 @@ test('access: setChannelFlags preserves enabled/requireMention', async () => {
   assert.equal(a.canHandle({ channelId: 'c1', userId: 'u1', isMention: true }), true)
 })
 
+test('access: unconfigured channels default to live thinking and collapsing trace', async () => {
+  const a = new AccessManager()
+  await a.load()
+
+  const flags = a.channelFlags('unconfigured')
+  assert.equal(flags.thinking, 'live')
+  assert.equal(flags.trace, 'collapse')
+})
+
 test('access: max is a valid reasoning effort', async () => {
   const a = new AccessManager()
   await a.load()
