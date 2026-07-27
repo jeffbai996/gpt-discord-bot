@@ -26,10 +26,10 @@ test('end linger applies only when a normal turn rendered live state', () => {
   assert.equal(shouldLingerLiveEnd({ isRegeneration: true, hasLiveState: true }), false)
 })
 
-test('substantial progress gets up to fifteen seconds of read time', () => {
+test('substantial progress gets paragraph-scale read time', () => {
   assert.equal(liveProgressDwellMs('short status'), 0)
-  assert.equal(liveProgressDwellMs('first line\nsecond line'), 4000)
-  assert.equal(liveProgressDwellMs('x'.repeat(300)), 6000)
-  assert.equal(liveProgressDwellMs('x'.repeat(1000)), 15000)
+  assert.equal(liveProgressDwellMs('first line\nsecond line'), 10_000)
+  assert.equal(liveProgressDwellMs('word '.repeat(50)), 15_000)
+  assert.equal(liveProgressDwellMs('word '.repeat(100)), 30_000)
   assert.equal(liveProgressDwellMs('x'.repeat(1000), 8000), 8000)
 })

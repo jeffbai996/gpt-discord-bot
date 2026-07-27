@@ -115,6 +115,9 @@ export interface RespondResult extends ParsedResponse {
   // for gpt.ts to ATTACH to the Discord reply. Optional/empty when no tool emitted
   // a file (so other RespondResult producers needn't set it).
   files?: string[]
+  // Bot-created copies that are safe to remove after Discord accepts them.
+  // Original tool files must never be listed here.
+  temporaryFiles?: string[]
 }
 
 export class OpenAIRequestRejected extends Error {

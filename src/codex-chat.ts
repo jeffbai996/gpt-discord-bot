@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline'
-import { rm, readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -526,6 +526,101 @@ async function readRolloutDiffs(threadId: string): Promise<Array<{ path: string;
   return out
 }
 
+const ATTACHABLE_IMAGE_TOOL_RE = /(?:^|_)(?:imagegen|image_generation|take_screenshot|screenshot)$/i
+
+function isAttachableImageTool(payload: any): boolean {
+  const namespace = String(payload?.namespace ?? '').toLowerCase()
+  const name = String(payload?.name ?? '').toLowerCase()
+  if (namespace === 'image_gen') return true
+  if (name === 'view_image') return false
+  return ATTACHABLE_IMAGE_TOOL_RE.test(name)
+}
+
+export function generatedImageDataUrlsFromRollout(
+  jsonl: string,
+  startedAtMs: number,
+): string[] {
+  const rows: any[] = []
+  for (const line of jsonl.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const row = JSON.parse(line)
+      const timestamp = Date.parse(String(row?.timestamp ?? ''))
+      if (Number.isFinite(timestamp) && timestamp >= startedAtMs) rows.push(row)
+    } catch { /* skip malformed rollout rows */ }
+  }
+
+  const attachableCalls = new Set<string>()
+  for (const row of rows) {
+    const payload = row?.payload
+    if (row?.type !== 'response_item') continue
+    if (payload?.type !== 'function_call' && payload?.type !== 'custom_tool_call') continue
+    if (!isAttachableImageTool(payload)) continue
+    const callId = String(payload.call_id ?? '')
+    if (callId) attachableCalls.add(callId)
+  }
+
+  const urls: string[] = []
+  for (const row of rows) {
+    const payload = row?.payload
+    if (row?.type !== 'response_item') continue
+    if (payload?.type !== 'function_call_output' && payload?.type !== 'custom_tool_call_output') continue
+    if (!attachableCalls.has(String(payload.call_id ?? ''))) continue
+    const output = Array.isArray(payload.output) ? payload.output : []
+    for (const item of output) {
+      const url = typeof item?.image_url === 'string' ? item.image_url : ''
+      if (url.startsWith('data:image/')) urls.push(url)
+    }
+  }
+  return [...new Set(urls)]
+}
+
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+}
+
+export async function materializeGeneratedImages(dataUrls: string[]): Promise<string[]> {
+  if (!dataUrls.length) return []
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'gpt-codex-output-'))
+  const files: string[] = []
+  try {
+    for (const [index, dataUrl] of dataUrls.entries()) {
+      const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=\s]+)$/i.exec(dataUrl)
+      if (!match) continue
+      const mime = match[1].toLowerCase()
+      const ext = IMAGE_EXTENSIONS[mime]
+      if (!ext) continue
+      const file = path.join(dir, `generated-${index + 1}.${ext}`)
+      await writeFile(file, Buffer.from(match[2], 'base64'))
+      files.push(file)
+    }
+    if (!files.length) await rm(dir, { recursive: true, force: true })
+    return files
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+    throw error
+  }
+}
+
+async function readRolloutGeneratedImages(threadId: string, startedAtMs: number): Promise<string[]> {
+  const base = path.join(os.homedir(), '.codex', 'sessions')
+  let entries: string[] = []
+  try { entries = (await readdir(base, { recursive: true })) as string[] } catch { return [] }
+  const rel = entries.find(entry => entry.endsWith(`${threadId}.jsonl`))
+  if (!rel) return []
+  try {
+    const jsonl = await readFile(path.join(base, rel), 'utf8')
+    return await materializeGeneratedImages(
+      generatedImageDataUrlsFromRollout(jsonl, startedAtMs),
+    )
+  } catch {
+    return []
+  }
+}
+
 // Extract the user/assistant conversation from a codex session rollout, for
 // /gpt history. event_msg events carry the clean turns (user_message /
 // agent_message); developer/permissions noise is skipped. Oldest-first; [] if
@@ -816,6 +911,9 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
 
   input.onEvent?.({ type: 'done' })
+  const generatedFiles = threadId
+    ? await readRolloutGeneratedImages(threadId, t0)
+    : []
 
   return {
     react: null,
@@ -827,5 +925,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     reasoning: parsed.reasoning,
     toolCalls: parsed.toolCalls,
     threadId,
+    files: generatedFiles,
+    temporaryFiles: generatedFiles,
   }
 }

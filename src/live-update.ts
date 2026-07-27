@@ -1,6 +1,8 @@
 const DEFAULT_INTERVAL_MS = 1500
 const DEFAULT_END_LINGER_MS = 10_000
-const DEFAULT_PROGRESS_DWELL_CAP_MS = 15_000
+const DEFAULT_PROGRESS_DWELL_CAP_MS = 30_000
+const MIN_PROGRESS_DWELL_MS = 10_000
+const READING_MS_PER_WORD = 300
 
 export function resolveLiveUpdateInterval(raw: string | undefined): number {
   const parsed = Number(raw)
@@ -26,5 +28,9 @@ export function liveProgressDwellMs(
 ): number {
   const clean = text.trim()
   if (clean.length < 240 && !clean.includes('\n')) return 0
-  return Math.min(Math.max(0, capMs), Math.max(4_000, clean.length * 20))
+  const words = clean.split(/\s+/).filter(Boolean).length
+  return Math.min(
+    Math.max(0, capMs),
+    Math.max(MIN_PROGRESS_DWELL_MS, words * READING_MS_PER_WORD),
+  )
 }

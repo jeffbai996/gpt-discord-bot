@@ -800,6 +800,7 @@ async function handleUserMessage(
   const attachments = [...message.attachments.values()]
   let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []
   let imagePaths: string[] = []
+  let temporaryResultFiles: string[] = []
   let extraText = ''
   if (attachments.length > 0) {
     await applyLifecycle(message, 'ingesting')
@@ -1385,6 +1386,7 @@ async function handleUserMessage(
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     await settleLiveUi(true)
     if (stopController.signal.aborted) throw new CodexStoppedError(result.durationMs)
+    temporaryResultFiles = result.temporaryFiles ?? []
     // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
     recordCacheTurn(channelId, result)
     result.reply = stripToolTraceCard(result.reply ?? '')
@@ -1492,11 +1494,22 @@ async function handleUserMessage(
     // line after them so `**Heading**` sits directly above its body.
     const body = stripToolTraceCard(headingsToBold((result.reply ?? '').trim())) + verbose + (verbose ? '\n\u200b' : '')
 
-    if (!body.trim()) {
+    if (!body.trim() && !result.files?.length) {
       await applyLifecycle(message, 'silenced')
       if (workMessage && !targetMessage) {
         try { await workMessage.delete() } catch {}
       }
+      return
+    }
+    if (!body.trim() && result.files?.length) {
+      if (workMessage && !targetMessage) {
+        try { await workMessage.delete() } catch {}
+        workMessage = null
+      }
+      if (message.channel.isSendable()) {
+        await message.channel.send({ files: result.files.slice(0, 10) })
+      }
+      await applyLifecycle(message, 'replied')
       return
     }
 
@@ -1671,6 +1684,13 @@ async function handleUserMessage(
     } catch {}
   } finally {
     await cleanupAttachmentFiles(imagePaths).catch(e => console.error('attachment cleanup failed:', e))
+    const temporaryDirs = new Set(temporaryResultFiles.map(file => path.dirname(file)))
+    for (const file of temporaryResultFiles) {
+      await fs.promises.rm(file, { force: true }).catch(e => console.error('result-file cleanup failed:', e))
+    }
+    for (const dir of temporaryDirs) {
+      await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     await settleLiveUi()
