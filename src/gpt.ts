@@ -58,6 +58,7 @@ import {
 import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
+  formatUnifiedDiffTrace,
   truncateDisplayWidth,
   formatResultTraceLine,
   resolveTraceFailsafeMs,
@@ -319,46 +320,6 @@ function headingsToBold(t: string): string {
   return out.join('\n')
 }
 
-function formatDiff(unified: string): { badge: string; body: string[] } {
-  let adds = 0, dels = 0
-  const rows: Array<{ marker: '+' | '-' | ' '; lineNo: number | null; text: string }> = []
-  let oldLine = 0
-  let newLine = 0
-  for (const l of unified.replace(/\n+$/, '').split('\n')) {
-    if (l.startsWith('+++') || l.startsWith('---')) continue
-    if (l.startsWith('@@')) {
-      const m = l.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
-      if (m) {
-        oldLine = Number(m[1])
-        newLine = Number(m[2])
-      }
-      continue
-    }
-    if (l.startsWith('\\')) continue
-    if (l.startsWith('+')) {
-      adds++
-      rows.push({ marker: '+', lineNo: newLine || null, text: l.slice(1) })
-      if (newLine) newLine++
-    } else if (l.startsWith('-')) {
-      dels++
-      rows.push({ marker: '-', lineNo: oldLine || null, text: l.slice(1) })
-      if (oldLine) oldLine++
-    } else {
-      const text = l.startsWith(' ') ? l.slice(1) : l
-      rows.push({ marker: ' ', lineNo: newLine || oldLine || null, text })
-      if (oldLine) oldLine++
-      if (newLine) newLine++
-    }
-  }
-  const width = Math.max(2, ...rows.map(r => r.lineNo ? String(r.lineNo).length : 0))
-  const body = rows.map((r) => {
-    const gap = r.marker === ' ' ? ' ' : '  '
-    if (!r.lineNo) return `${r.marker}${gap}${' '.repeat(width)} ${r.text}`
-    return `${r.marker}${gap}${String(r.lineNo).padStart(width)} ${r.text}`
-  })
-  return { badge: `[+${adds}, -${dels}]`, body }
-}
-
 // Canonical tool-trace lines from toolCalls, shared by the live + final renders.
 // File edits show the [+N, -M] badge and the diff body; other tools keep [Nms].
 function buildTraceLines(toolCalls: ToolCall[]): string[] {
@@ -384,7 +345,7 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
     lines.push(`${prefix}${nm}(${dig})${tail}${ms}`)
     if (call.diff) {
       // One leading cell here plus renderTraceCard's pad gives ⎿ a 2-cell indent.
-      const { badge, body } = formatDiff(call.diff)
+      const { badge, body } = formatUnifiedDiffTrace(call.diff)
       lines.push(` ⎿ ${badge}`)
       // Collapse to a preview so a big edit doesn't wall the card (Claude-bot style).
       const shown = body.length > MAX_DIFF_BODY_LINES ? body.slice(0, MAX_DIFF_BODY_LINES) : body

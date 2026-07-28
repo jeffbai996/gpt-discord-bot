@@ -4,21 +4,38 @@ import test from 'node:test'
 import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
+  formatUnifiedDiffTrace,
   formatResultTraceLine,
   displayWidth,
   truncateDisplayWidth,
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('keeps every Discord trace row within the mobile one-line fence width', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 58)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 54)
+test('fills the Claude trace width without overrunning one line', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 79)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 75)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {
-  const line = truncateDisplayWidth('a'.repeat(53) + '❌中文', 58)
-  assert.equal(displayWidth(line), 58)
-  assert.equal(line, 'a'.repeat(53) + '❌中…')
+  const line = truncateDisplayWidth('a'.repeat(74) + '❌中文', 79)
+  assert.equal(displayWidth(line), 79)
+  assert.equal(line, 'a'.repeat(74) + '❌中…')
+})
+
+test('formats diff markers with one space before the line number', () => {
+  const formatted = formatUnifiedDiffTrace(
+    '@@ -152,2 +153,3 @@\n-old\n+new\n context\n+tail\n',
+  )
+
+  assert.deepEqual(formatted, {
+    badge: '[+2, -1]',
+    body: [
+      '- 152 old',
+      '+ 153 new',
+      '  154 context',
+      '+ 155 tail',
+    ],
+  })
 })
 
 test('puts the result line count at the right edge of the preview row', () => {
