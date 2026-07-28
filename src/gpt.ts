@@ -7,6 +7,7 @@ import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
+import { closeDanglingInlineCode } from './discord-markdown.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
@@ -1519,7 +1520,8 @@ async function handleUserMessage(
     // Discord has no h1-h6 headings; markdown '#'..'######' render as a
     // literal '#### text'. Convert heading lines to bold and swallow the blank
     // line after them so `**Heading**` sits directly above its body.
-    const body = stripToolTraceCard(headingsToBold((result.reply ?? '').trim())) + verbose + (verbose ? '\n\u200b' : '')
+    const replyBody = closeDanglingInlineCode((result.reply ?? '').trim())
+    const body = stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim() && !result.files?.length) {
       await applyLifecycle(message, 'silenced')

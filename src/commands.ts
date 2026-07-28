@@ -300,7 +300,7 @@ export async function executeGptCommand(
         ? ` (was ${previous.enabled ? 'enabled' : 'disabled'} · require @ ${previous.requireMention ? 'yes' : 'no'})`
         : ''
       return interaction.reply({
-        content: `✅ <#${channel.id}> ${enabled ? 'enabled' : 'disabled'} · require @ ${requireMention ? 'yes' : 'no'}${was}\n${settingsCard(access, channel.id)}`,
+        content: `✅ <#${channel.id}> ${enabled ? 'enabled' : 'disabled'} · require @ ${requireMention ? 'yes' : 'no'}${was}\n\n${settingsCard(access, channel.id)}`,
         ephemeral: true
       })
     }
@@ -405,7 +405,7 @@ export async function executeGptCommand(
       }
       const previous = access.channelFlags(channel.id).codexModel
       const updated = await access.setChannelFlags(channel.id, { codexModel: value as CodexModel })
-      return interaction.reply({ content: `${fmtSettingChange('codex model', updated.codexModel!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
+      return interaction.reply({ content: `${fmtSettingChange('codex model', updated.codexModel!, previous)}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
     }
 
     if (subcommand === 'limits') {
@@ -516,7 +516,7 @@ export async function executeGptCommand(
       try {
         const previous = access.channelFlags(channel.id).reasoning
         const updated = await access.setChannelFlags(channel.id, { reasoning: value as ReasoningEffort })
-        return interaction.reply({ content: `${fmtSettingChange('effort', updated.reasoning!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('effort', updated.reasoning!, previous)}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -534,7 +534,7 @@ export async function executeGptCommand(
       try {
         const previous = access.channelFlags(channel.id).counter
         const updated = await access.setChannelFlags(channel.id, { counter: value })
-        return interaction.reply({ content: `${fmtSettingChange('counter', updated.counter!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('counter', updated.counter!, previous)}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -552,7 +552,7 @@ export async function executeGptCommand(
       try {
         const previous = access.channelFlags(channel.id).engine
         const updated = await access.setChannelFlags(channel.id, { engine: value })
-        return interaction.reply({ content: `${fmtSettingChange('engine', updated.engine!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('engine', updated.engine!, previous)}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -578,7 +578,7 @@ export async function executeGptCommand(
             ? { trace: tri as 'off' | 'on' | 'collapse' }
             : { thinking: tri })
         const shown = subcommand === 'trace' ? updated.trace : updated.thinking
-        return interaction.reply({ content: `${fmtSettingChange(subcommand, String(shown), String(previous))}\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange(subcommand, String(shown), String(previous))}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }
@@ -596,7 +596,7 @@ export async function executeGptCommand(
       try {
         const previous = access.channelFlags(channel.id).requireMention ? 'yes' : 'no'
         const updated = await access.setChannelFlags(channel.id, { requireMention: value === 'on' })
-        return interaction.reply({ content: `${fmtSettingChange('require @', updated.requireMention ? 'yes' : 'no', previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('require @', updated.requireMention ? 'yes' : 'no', previous)}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }
