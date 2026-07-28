@@ -27,7 +27,7 @@ import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
 import { FAST_FORWARD_REACTION, LatestQueueMarker } from './queue-marker.ts'
-import { steeredMarker } from './steering.ts'
+import { renderSteeredMessage } from './steering.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
 import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
@@ -1323,7 +1323,7 @@ async function handleUserMessage(
           await deleteLiveTrace()
           if (steeredAfter !== null) {
             if (workMessage) await workMessage.edit(
-              `${workMessage.content}\n${steeredMarker(steeredAfter)}`.trim(),
+              renderSteeredMessage(workMessage.content, steeredAfter),
             ).catch(() => {})
           } else {
             if (workMessage) await workMessage.edit(INTERRUPTED_MARKER).catch(() => {})
@@ -1685,7 +1685,7 @@ async function handleUserMessage(
       try {
         if (steeredAfter !== null) {
           if (workMessage) await workMessage.edit(
-            `${workMessage.content}\n${steeredMarker(steeredAfter)}`.trim(),
+            renderSteeredMessage(workMessage.content, steeredAfter),
           )
         } else if (workMessage) {
           await workMessage.edit(INTERRUPTED_MARKER)

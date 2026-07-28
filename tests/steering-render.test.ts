@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-test('steering appends elapsed time instead of rendering Interrupted', () => {
+test('steering replaces the live header instead of rendering Interrupted', () => {
   const source = fs.readFileSync(new URL('../src/gpt.ts', import.meta.url), 'utf8')
   const stoppedBranch = source.slice(
     source.indexOf('if (e instanceof CodexStoppedError) {'),
@@ -11,5 +11,5 @@ test('steering appends elapsed time instead of rendering Interrupted', () => {
 
   assert.match(stoppedBranch, /consumeSteered/)
   assert.match(stoppedBranch, /steeredAfter !== null \? 'silenced' : 'interrupted'/)
-  assert.match(stoppedBranch, /steeredMarker\(steeredAfter\)/)
+  assert.match(stoppedBranch, /renderSteeredMessage\(workMessage\.content, steeredAfter\)/)
 })
