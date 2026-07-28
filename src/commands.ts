@@ -104,7 +104,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('channel')
-    .setDescription('Enable a channel + set its mention rule. Other flags via the /gpt subcommands.')
+    .setDescription('Enable a channel and set its mention rule')
     .addChannelOption(o => o.setName('channel').setDescription('The channel to configure').setRequired(true))
     .addBooleanOption(o => o.setName('enabled').setDescription('Enable bot in this channel').setRequired(true))
     .addBooleanOption(o => o.setName('require_mention').setDescription('Require explicit mention').setRequired(true))
@@ -121,36 +121,36 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('plan')
-    .setDescription('Plan the next message read-only, then offer Execute / Revise / Cancel.')
+    .setDescription('Plan the next message read-only')
   )
   .addSubcommand(s => s
     .setName('stop')
-    .setDescription('Abort the in-flight turn in this channel (kill a stuck codex turn).')
+    .setDescription('Stop the active turn')
   )
   .addSubcommand(s => s
     .setName('clear')
-    .setDescription('Reset this channel — the next codex turn starts from a blank slate.')
+    .setDescription('Reset this channel')
   )
   .addSubcommand(s => s
     .setName('history')
-    .setDescription('Print this channel\'s codex session conversation (inline, or .md if long).')
+    .setDescription('Show session history')
   )
   .addSubcommand(s => s
     .setName('stats')
-    .setDescription('Token usage + $-equivalent (gpt-5.6-sol rates; flat sub = ~$0 actual) since boot.')
+    .setDescription('Show token usage since boot')
   )
   .addSubcommand(s => s
     .setName('limits')
-    .setDescription('ChatGPT-sub usage across the current rate-limit windows.')
+    .setDescription('Show ChatGPT subscription usage')
   )
   .addSubcommand(s => s
     .setName('settings')
-    .setDescription('Show every resolved setting for this channel (read-only).')
+    .setDescription('Show this channel’s settings')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
     .setName('model')
-    .setDescription('Codex engine model (5.6 Sol default). Omit value to read current.')
+    .setDescription('Set or show the Codex model')
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
         { name: 'gpt-5.5 — previous flagship', value: 'gpt-5.5' },
@@ -162,12 +162,12 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('cache')
-    .setDescription('Show recent prompt-cache hit telemetry for this channel (rolling window of last 50 turns).')
+    .setDescription('Show prompt-cache telemetry')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
     .setName('effort')
-    .setDescription('Reasoning effort for this channel (gpt-5.6-sol / codex), up through max.')
+    .setDescription('Set or show reasoning effort')
     .addStringOption(o => o
       .setName('value')
       .setDescription('none | low | medium | high | xhigh | max')
@@ -185,7 +185,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('counter')
-    .setDescription('Footer counter for this channel: off | token | both.')
+    .setDescription('Set or show the footer counter')
     .addStringOption(o => o
       .setName('value')
       .setDescription('off | token | both')
@@ -200,7 +200,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('engine')
-    .setDescription('Set this channel chat engine: codex (flat sub) or api (metered).')
+    .setDescription('Set or show the chat engine')
     .addStringOption(o => o
       .setName('value')
       .setDescription('codex | api')
@@ -214,7 +214,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('trace')
-    .setDescription('Tool-trace card for this channel: off | on | collapse.')
+    .setDescription('Set or show tool traces')
     .addStringOption(o => o
       .setName('value').setDescription('off | on | collapse').setRequired(true)
       .addChoices(
@@ -227,7 +227,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('thinking')
-    .setDescription('Reasoning display for this channel: off | on | live | collapse.')
+    .setDescription('Set or show reasoning display')
     .addStringOption(o => o
       .setName('value').setDescription('off | on | live | collapse').setRequired(true)
       .addChoices(
@@ -241,7 +241,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('mention')
-    .setDescription('Require an @-mention before responding in this channel: on | off.')
+    .setDescription('Set or show mention gating')
     .addStringOption(o => o
       .setName('value').setDescription('on | off').setRequired(true)
       .addChoices(
@@ -308,7 +308,7 @@ export async function executeGptCommand(
       }
       deps.plans.arm(interaction.channelId, interaction.user.id)
       return interaction.reply({
-        content: '🗺️ Plan mode armed for your next message. That turn is read-only; react ✅ to execute, ✏️ to revise, or ❌ to cancel.',
+        content: '🗺️ Plan armed · next message is read-only\nReact ✅ to execute · ✏️ to revise · ❌ to cancel',
         ephemeral: true,
       })
     }
@@ -316,7 +316,7 @@ export async function executeGptCommand(
     if (subcommand === 'history') {
       const sid = channelSessions.get(interaction.channelId)
       if (!sid) {
-        return interaction.reply({ content: 'ℹ️ No active session in this channel yet — nothing to show.', ephemeral: true })
+        return interaction.reply({ content: 'ℹ️ No session history', ephemeral: true })
       }
       await interaction.deferReply({ ephemeral: true })
       const turns = await readSessionHistory(sid)
@@ -344,7 +344,7 @@ export async function executeGptCommand(
       const parentId = interaction.channel?.isThread() ? interaction.channel.parentId : null
       const stoppedChannelId = activeTurns.stopResolvable([interaction.channelId, parentId])
       return interaction.reply({
-        content: stoppedChannelId ? INTERRUPTED_MARKER : 'ℹ️ Nothing is running in this channel right now.',
+        content: stoppedChannelId ? INTERRUPTED_MARKER : 'ℹ️ Nothing running here',
         ephemeral: true,
       })
     }

@@ -164,11 +164,11 @@ export async function executeVoiceCommand(
   } = {},
 ): Promise<void> {
   if (interaction.user.id !== adminUserId) {
-    await interaction.reply({ content: 'Voice is owner-only (billed per minute).', ephemeral: true })
+    await interaction.reply({ content: 'Voice is owner-only · billed per minute', ephemeral: true })
     return
   }
   if (!interaction.guildId) {
-    await interaction.reply({ content: 'Voice only works in a server channel.', ephemeral: true })
+    await interaction.reply({ content: 'Voice requires a server channel', ephemeral: true })
     return
   }
 
@@ -185,7 +185,7 @@ export async function executeVoiceCommand(
       return
     }
     await interaction.reply({
-      content: `🎚️ voice → **${voice}**${choice ? ` (${choice.blurb})` : ''}. Applies to the next call; no restart needed.`,
+      content: `🎚️ voice → **${voice}**${choice ? ` (${choice.blurb})` : ''} · next call`,
       ephemeral: true,
     })
     return
@@ -193,7 +193,7 @@ export async function executeVoiceCommand(
 
   if (sub === 'leave') {
     const left = manager.leave(interaction.guildId)
-    await interaction.reply({ content: left ? '👋 Left voice.' : 'Not in a voice channel.', ephemeral: true })
+    await interaction.reply({ content: left ? '👋 Left voice' : 'Not in a voice channel', ephemeral: true })
     return
   }
 
@@ -202,7 +202,7 @@ export async function executeVoiceCommand(
     await interaction.reply({ content: '🗣️ Speaking…', ephemeral: true })
     try {
       const spoke = await manager.speak(interaction.guildId, text)
-      await interaction.editReply(spoke ? '🗣️ Done.' : 'Not in a voice channel — run `/gpt voice join` first.')
+      await interaction.editReply(spoke ? '🗣️ Done' : 'Join voice first with `/gpt voice join`')
     } catch (e) {
       await interaction.editReply(`Speak failed: ${(e as Error).message}`)
     }
@@ -213,7 +213,7 @@ export async function executeVoiceCommand(
   const member = interaction.member as GuildMember | null
   const channel = member?.voice?.channel
   if (!channel) {
-    await interaction.reply({ content: 'Join a voice channel first, then run `/gpt voice join`.', ephemeral: true })
+    await interaction.reply({ content: 'Join voice first with `/gpt voice join`', ephemeral: true })
     return
   }
   await interaction.reply({ content: `🎙️ Joining **${channel.name}**…`, ephemeral: true })

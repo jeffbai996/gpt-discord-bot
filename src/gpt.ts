@@ -1809,7 +1809,7 @@ async function handleInboundMessage(message: Message): Promise<void> {
   // prevents mid-output death while still letting the queued message cut in.
   {
     if (channelTurns.isRunning(channelId) && activeTurns.isActive(channelId) && isInFlightStatusPing(message.content)) {
-      void replyOrSend(message, 'still working — not stuck. latest progress is in the live reply above.')
+      void replyOrSend(message, 'Still working — progress above')
         .catch(() => {})
       return
     }
@@ -1867,7 +1867,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
     const picked = plans.takeAction(reaction.message.id, user.id, planAction)
     if (picked.status === 'forbidden') return
     if (picked.status === 'expired') {
-      await reaction.message.reply({ content: '⌛ That plan expired. Run `/gpt plan` again.', allowedMentions: { repliedUser: false } }).catch(() => {})
+      await reaction.message.reply({ content: '⌛ Plan expired — run `/gpt plan` again', allowedMentions: { repliedUser: false } }).catch(() => {})
       return
     }
     if (picked.status === 'accepted') {
@@ -1886,7 +1886,7 @@ client.on('messageReactionAdd', async (reaction, user) => {
         await runChannelTurn(source, null, executePlanInstruction(picked.plan.planText))
       } catch (e) {
         console.error('[plan] execute failed:', e)
-        await reaction.message.reply({ content: '❌ Could not resume that plan.', allowedMentions: { repliedUser: false } }).catch(() => {})
+        await reaction.message.reply({ content: '❌ Couldn’t resume plan', allowedMentions: { repliedUser: false } }).catch(() => {})
       }
       return
     }
