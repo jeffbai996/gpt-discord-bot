@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { parseOffice } from 'officeparser'
+import { extensionMime, extractLocalText, isLocallyExtractable, officeParserType } from './attachment-text.ts'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
 // on guild boost tier; the smaller cap protects against "user dropped a 4-hour
@@ -43,6 +44,14 @@ const OFFICE_MIMES = new Set([
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'application/vnd.ms-excel',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/epub+zip',
+  'application/vnd.ms-word.document.macroenabled.12',
+  'application/vnd.ms-word.template.macroenabled.12',
+  'application/vnd.ms-powerpoint.presentation.macroenabled.12',
+  'application/vnd.ms-powerpoint.template.macroenabled.12',
+  'application/vnd.ms-powerpoint.slideshow.macroenabled.12',
+  'application/vnd.ms-excel.sheet.macroenabled.12',
+  'application/vnd.ms-excel.template.macroenabled.12',
   'application/vnd.oasis.opendocument.text',
   'application/vnd.oasis.opendocument.presentation',
   'application/vnd.oasis.opendocument.spreadsheet',
@@ -65,6 +74,7 @@ const EXTENSION_MIMES: Record<string, string> = {
   '.odp': 'application/vnd.oasis.opendocument.presentation',
   '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
   '.pdf': 'application/pdf',
+  '.epub': 'application/epub+zip',
 }
 
 function resolvedMime(contentType: string | null, name: string): string {
@@ -73,7 +83,7 @@ function resolvedMime(contentType: string | null, name: string): string {
   // that case the filename extension is more informative than the declaration.
   if (declared && declared !== 'application/octet-stream') return declared
   const dot = name.lastIndexOf('.')
-  return dot >= 0 ? (EXTENSION_MIMES[name.slice(dot).toLowerCase()] ?? '') : ''
+  return dot >= 0 ? (EXTENSION_MIMES[name.slice(dot).toLowerCase()] ?? extensionMime(name)) : ''
 }
 
 type SkipReason =
@@ -159,10 +169,11 @@ export async function processAttachments(
       continue
     }
 
-    if (TEXT_MIMES.has(mime) || mime.startsWith('text/')) {
+    if (TEXT_MIMES.has(mime) || mime.startsWith('text/') || isLocallyExtractable(name, mime)) {
       try {
-        const buf = await downloadToBuffer(att.url, TEXT_INLINE_BYTE_CAP)
-        const text = buf.toString('utf8')
+        const localExtraction = isLocallyExtractable(name, mime)
+        const buf = await downloadToBuffer(att.url, localExtraction ? MAX_BYTES : TEXT_INLINE_BYTE_CAP)
+        const text = localExtraction ? extractLocalText(buf, name) : buf.toString('utf8')
         textBlocks.push(`[attached file: ${name}]\n\`\`\`\n${text}\n\`\`\``)
       } catch (e) {
         console.error('text fetch failed for', name, e)
@@ -174,7 +185,7 @@ export async function processAttachments(
     if (OFFICE_MIMES.has(mime)) {
       try {
         const buf = await downloadToBuffer(att.url, MAX_BYTES)
-        const ast = await parseOffice(buf, { fileType: path.extname(name).slice(1).toLowerCase() as any })
+        const ast = await parseOffice(buf, { fileType: (officeParserType(name) ?? path.extname(name).slice(1).toLowerCase()) as any })
         const text = ast.toText().trim().slice(0, DOCUMENT_TEXT_CHAR_CAP)
         if (!text) throw new Error('document contained no extractable text')
         textBlocks.push(`[attached document: ${name}]\n${text}`)

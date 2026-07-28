@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { access } from 'node:fs/promises'
 import { cleanupAttachmentFiles, processAttachments } from '../src/attachments.ts'
+import { zipSync, strToU8 } from 'fflate'
 
 // Minimal stand-in for discord.js's Attachment type. processAttachments only
 // reads url/name/size/contentType, so we don't need the full class.
@@ -65,12 +66,12 @@ test('processAttachments: oversized → too_large skip', async () => {
 })
 
 test('processAttachments: unsupported mime → unsupported_type skip', async () => {
-  const att = fakeAtt({ contentType: 'application/x-tar', name: 'archive.tar' })
+  const att = fakeAtt({ contentType: 'application/x-msdownload', name: 'app.exe' })
   const out = await processAttachments([att], openaiStub)
   assert.equal(out.skipped.length, 1)
   assert.equal(out.skipped[0].reason, 'unsupported_type')
   // Skipped notice ends up in the text payload so the model knows about it.
-  assert.match(out.text, /archive\.tar/)
+  assert.match(out.text, /app\.exe/)
   assert.match(out.text, /unsupported_type/)
 })
 
@@ -149,4 +150,32 @@ test('processAttachments: failed image download is surfaced, not passed as a dea
   assert.equal(out.imageParts.length, 0)
   assert.equal(out.skipped[0]?.reason, 'download_failed')
   assert.match(out.text, /expired\.png/)
+})
+
+test('processAttachments: extracts notebooks, email, SVG, subtitles, and data by extension', async () => {
+  const fixtures: Array<[string, string, RegExp]> = [
+    ['analysis.ipynb', JSON.stringify({ cells: [{ cell_type: 'code', source: ['print("hi")'], outputs: [] }] }), /print\("hi"\)/],
+    ['message.eml', 'From: alice@example.com\\r\\nSubject: Hello\\r\\n\\r\\nMail body', /Mail body/],
+    ['drawing.svg', '<svg><text>Hello SVG</text></svg>', /Hello SVG/],
+    ['captions.srt', '1\\n00:00:00,000 --> 00:00:01,000\\nHello captions', /Hello captions/],
+    ['events.jsonl', '{"event":"ready"}\\n', /ready/],
+  ]
+  const originalFetch = globalThis.fetch
+  for (const [name, body, expected] of fixtures) {
+    globalThis.fetch = async () => new Response(body, { status: 200 })
+    const out = await processAttachments([fakeAtt({ name, contentType: 'application/octet-stream', size: body.length })], openaiStub)
+    assert.match(out.text, expected)
+    assert.deepEqual(out.skipped, [])
+  }
+  globalThis.fetch = originalFetch
+})
+
+test('processAttachments: extracts supported text members from ZIP archives', async () => {
+  const zip = Buffer.from(zipSync({ 'notes/readme.md': strToU8('hello from archive') }))
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(zip, { status: 200 })
+  const out = await processAttachments([fakeAtt({ name: 'bundle.zip', contentType: null, size: zip.length })], openaiStub)
+  globalThis.fetch = originalFetch
+  assert.match(out.text, /hello from archive/)
+  assert.deepEqual(out.skipped, [])
 })
