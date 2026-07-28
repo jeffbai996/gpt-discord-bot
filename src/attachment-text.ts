@@ -54,7 +54,7 @@ export function officeParserType(name: string): string | undefined {
 export function isLocallyExtractable(name: string, mime: string): boolean {
   const ext = path.extname(name).toLowerCase()
   return TEXT_EXTENSIONS.has(ext) || [
-    '.ipynb', '.eml', '.msg', '.pages', '.numbers', '.key', '.zip', '.tar',
+    '.ipynb', '.eml', '.msg', '.pages', '.numbers', '.key', '.xlsb', '.zip', '.tar',
     '.tgz', '.gz', '.7z',
   ].includes(ext) || [
     'message/rfc822', 'application/vnd.ms-outlook', 'application/x-ipynb+json',
@@ -66,7 +66,7 @@ export function extractLocalText(buffer: Buffer, name: string): string {
   const ext = path.extname(name).toLowerCase()
   if (ext === '.ipynb') return extractNotebook(buffer)
   if (ext === '.eml') return extractEml(buffer)
-  if (ext === '.msg') return printableStrings(buffer)
+  if (ext === '.msg' || ext === '.xlsb') return printableStrings(buffer)
   if (ext === '.pages' || ext === '.numbers' || ext === '.key') return extractZipText(buffer, name, true)
   if (ext === '.zip') return extractZipText(buffer, name, false)
   if (ext === '.gz' || ext === '.tgz') {
