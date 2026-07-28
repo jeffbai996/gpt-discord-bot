@@ -4,6 +4,11 @@ import path from 'node:path'
 
 export type PlanAction = 'execute' | 'revise' | 'cancel'
 
+export const PLAN_MODE_ACK = [
+  'Plan mode is armed and will apply on the next message.',
+  'React ✅ to execute, ✏️ to revise, or ❌ to cancel.',
+].join('\n')
+
 export interface PlanArm {
   kind: 'plan' | 'revise'
   userId: string

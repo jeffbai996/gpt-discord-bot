@@ -4,12 +4,20 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { PlanModeStore } from '../src/plan-mode.ts'
+import { PLAN_MODE_ACK, PlanModeStore } from '../src/plan-mode.ts'
 
 function tempFile(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpt-plan-'))
   return path.join(dir, 'plans.json')
 }
+
+test('plan mode acknowledgement stays on the approved exact copy', () => {
+  assert.equal(
+    PLAN_MODE_ACK,
+    'Plan mode is armed and will apply on the next message.\n'
+      + 'React ✅ to execute, ✏️ to revise, or ❌ to cancel.',
+  )
+})
 
 test('plan mode arms exactly one next message from the requesting user', () => {
   const store = new PlanModeStore(tempFile())

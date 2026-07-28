@@ -10,15 +10,15 @@ import {
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('keeps the full Discord tool-call row within 78 columns', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 78)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 74)
+test('keeps every Discord trace row within the mobile one-line fence width', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 58)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 54)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {
-  const line = truncateDisplayWidth('a'.repeat(73) + '❌中文', 78)
-  assert.equal(displayWidth(line), 78)
-  assert.equal(line, 'a'.repeat(73) + '❌中…')
+  const line = truncateDisplayWidth('a'.repeat(53) + '❌中文', 58)
+  assert.equal(displayWidth(line), 58)
+  assert.equal(line, 'a'.repeat(53) + '❌中…')
 })
 
 test('puts the result line count at the right edge of the preview row', () => {

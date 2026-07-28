@@ -1,5 +1,9 @@
-export const DEFAULT_TOOL_CALL_WIDTH = 78
-export const DEFAULT_TOOL_OUTPUT_WIDTH = 74
+// Discord's desktop trace card can be substantially narrower than the message
+// body when the reaction rail is visible. Keep every rendered row inside this
+// conservative width so the code fence scrolls horizontally instead of wrapping
+// a single logical result row onto a second line.
+export const DEFAULT_TOOL_CALL_WIDTH = 58
+export const DEFAULT_TOOL_OUTPUT_WIDTH = 54
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const WIDE_RE = /\p{Extended_Pictographic}|[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u
