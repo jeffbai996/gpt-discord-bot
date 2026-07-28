@@ -74,3 +74,10 @@ test('live narration is reposted beneath the complete tool trace stack', async (
       > flush.indexOf('liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)'),
   )
 })
+
+test('collapsed earlier-call summary is not styled as a tool command', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /if \(dropped\) lines\.push\(`…\(\+\$\{dropped\} earlier call/)
+  assert.doesNotMatch(source, /lines\.push\(`\+ ● …\(\+\$\{dropped\} earlier call/)
+})

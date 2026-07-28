@@ -329,7 +329,7 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
   // so "recent" means recent in time, then note how many earlier calls were dropped.
   const dropped = Math.max(0, toolCalls.length - MAX_TRACE_CALLS)
   const kept = dropped ? toolCalls.slice(-MAX_TRACE_CALLS) : toolCalls
-  if (dropped) lines.push(`+ ● …(+${dropped} earlier call${dropped === 1 ? '' : 's'})`)
+  if (dropped) lines.push(`…(+${dropped} earlier call${dropped === 1 ? '' : 's'})`)
   // Edits (with diffs) first: the diff is the payload and must not get starved by a
   // long list of shell rows below it, which the card's length cap then truncates to
   // a couple lines (Jeff 2026-06-24). Order within edits / within non-edits preserved.
