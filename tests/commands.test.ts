@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, gptCommand } from '../src/commands.ts'
+import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, fmtSettingChange, gptCommand } from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 
@@ -59,4 +59,8 @@ test('/gpt plan is a one-shot read-only planning command', () => {
 
   assert.ok(plan)
   assert.match(plan.description, /next message read-only/i)
+})
+test('setting acknowledgements include the previous value only when changed', () => {
+  assert.equal(fmtSettingChange('effort', 'high', 'medium'), '✅ effort → `high` (was `medium`)')
+  assert.equal(fmtSettingChange('effort', 'high', 'high'), '✅ effort → `high`')
 })

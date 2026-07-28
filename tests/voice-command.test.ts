@@ -84,10 +84,11 @@ test('voice type persists the selected voice for subsequent calls', async () => 
     'owner',
     {} as any,
     {} as any,
-    { setVoice: voice => assert.equal(voice, 'coral') },
+    { getVoice: () => 'marin', setVoice: voice => assert.equal(voice, 'coral') },
   )
 
   assert.match(replies[0].content, /voice → \*\*coral\*\*/)
+  assert.match(replies[0].content, /was \*\*marin\*\*/)
   assert.match(replies[0].content, /next call/)
 })
 

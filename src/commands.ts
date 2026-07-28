@@ -7,7 +7,7 @@ import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
-import type { PlanModeStore } from './plan-mode.ts'
+import { PLAN_MODE_ACK, type PlanModeStore } from './plan-mode.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -61,6 +61,11 @@ export function fmtContextPressureLine(
 
 export function fmtClearAcknowledgement(channelId: string): string {
   return `🧹 <#${channelId}> cleared — next turn starts fresh.`
+}
+
+export function fmtSettingChange(label: string, value: string, previous: string): string {
+  const changed = value === previous ? '' : ` (was \`${previous}\`)`
+  return `✅ ${label} → \`${value}\`${changed}`
 }
 
 import { channelSessions } from './channel-sessions.ts'
@@ -289,9 +294,13 @@ export async function executeGptCommand(
       const channel = interaction.options.getChannel('channel', true)
       const enabled = interaction.options.getBoolean('enabled', true)
       const requireMention = interaction.options.getBoolean('require_mention', true)
+      const previous = access.channelConfig(channel.id)
       await access.setChannel(channel.id, enabled, requireMention)
+      const was = previous
+        ? ` (was ${previous.enabled ? 'enabled' : 'disabled'} · require @ ${previous.requireMention ? 'yes' : 'no'})`
+        : ''
       return interaction.reply({
-        content: `✅ <#${channel.id}> ${enabled ? 'enabled' : 'disabled'}\n${settingsCard(access, channel.id)}`,
+        content: `✅ <#${channel.id}> ${enabled ? 'enabled' : 'disabled'} · require @ ${requireMention ? 'yes' : 'no'}${was}\n${settingsCard(access, channel.id)}`,
         ephemeral: true
       })
     }
@@ -308,7 +317,7 @@ export async function executeGptCommand(
       }
       deps.plans.arm(interaction.channelId, interaction.user.id)
       return interaction.reply({
-        content: '🗺️ Plan armed · next message is read-only\nReact ✅ to execute · ✏️ to revise · ❌ to cancel',
+        content: PLAN_MODE_ACK,
         ephemeral: true,
       })
     }
@@ -394,8 +403,9 @@ export async function executeGptCommand(
       if (!(CODEX_MODELS as readonly string[]).includes(value)) {
         return interaction.reply({ content: `❌ \`model\` must be one of: ${CODEX_MODELS.join(' | ')} (got \`${value}\`)`, ephemeral: true })
       }
+      const previous = access.channelFlags(channel.id).codexModel
       const updated = await access.setChannelFlags(channel.id, { codexModel: value as CodexModel })
-      return interaction.reply({ content: `✅ codex model → \`${updated.codexModel}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
+      return interaction.reply({ content: `${fmtSettingChange('codex model', updated.codexModel!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
     }
 
     if (subcommand === 'limits') {
@@ -504,8 +514,9 @@ export async function executeGptCommand(
         return interaction.reply({ content: `effort must be none, low, medium, high, xhigh, or max (got ${value})`, ephemeral: true })
       }
       try {
+        const previous = access.channelFlags(channel.id).reasoning
         const updated = await access.setChannelFlags(channel.id, { reasoning: value as ReasoningEffort })
-        return interaction.reply({ content: `✅ effort → \`${updated.reasoning}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('effort', updated.reasoning!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -521,8 +532,9 @@ export async function executeGptCommand(
         return interaction.reply({ content: `counter must be off, token, or both (got ${value})`, ephemeral: true })
       }
       try {
+        const previous = access.channelFlags(channel.id).counter
         const updated = await access.setChannelFlags(channel.id, { counter: value })
-        return interaction.reply({ content: `✅ counter → \`${updated.counter}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('counter', updated.counter!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -538,8 +550,9 @@ export async function executeGptCommand(
         return interaction.reply({ content: `engine must be codex or api (got ${value})`, ephemeral: true })
       }
       try {
+        const previous = access.channelFlags(channel.id).engine
         const updated = await access.setChannelFlags(channel.id, { engine: value })
-        return interaction.reply({ content: `✅ engine → \`${updated.engine}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('engine', updated.engine!, previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
@@ -559,12 +572,13 @@ export async function executeGptCommand(
       }
       try {
         const tri = value as 'off' | 'on' | 'live' | 'collapse'
+        const previous = access.channelFlags(channel.id)[subcommand]
         const updated = await access.setChannelFlags(channel.id,
           subcommand === 'trace'
             ? { trace: tri as 'off' | 'on' | 'collapse' }
             : { thinking: tri })
         const shown = subcommand === 'trace' ? updated.trace : updated.thinking
-        return interaction.reply({ content: `✅ ${subcommand} → \`${shown}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange(subcommand, String(shown), String(previous))}\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }
@@ -580,8 +594,9 @@ export async function executeGptCommand(
         return interaction.reply({ content: `❌ \`mention\` must be on | off (got \`${value}\`)`, ephemeral: true })
       }
       try {
+        const previous = access.channelFlags(channel.id).requireMention ? 'yes' : 'no'
         const updated = await access.setChannelFlags(channel.id, { requireMention: value === 'on' })
-        return interaction.reply({ content: `✅ require @ → \`${updated.requireMention ? 'yes' : 'no'}\`\n${settingsCard(access, channel.id)}`, ephemeral: true })
+        return interaction.reply({ content: `${fmtSettingChange('require @', updated.requireMention ? 'yes' : 'no', previous)}\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
       }

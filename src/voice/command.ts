@@ -177,6 +177,7 @@ export async function executeVoiceCommand(
   if (sub === 'type') {
     const voice = interaction.options.getString('voice', true)
     const choice = REALTIME_VOICE_CHOICES.find(candidate => candidate.value === voice)
+    const previous = (voicePreference.getVoice ?? getVoicePref)()
     try {
       const saveVoice = voicePreference.setVoice ?? setVoicePref
       saveVoice(voice)
@@ -185,7 +186,7 @@ export async function executeVoiceCommand(
       return
     }
     await interaction.reply({
-      content: `🎚️ voice → **${voice}**${choice ? ` (${choice.blurb})` : ''} · next call`,
+      content: `🎚️ voice → **${voice}**${previous === voice ? '' : ` (was **${previous}**)`}${choice ? ` · ${choice.blurb}` : ''} · next call`,
       ephemeral: true,
     })
     return
