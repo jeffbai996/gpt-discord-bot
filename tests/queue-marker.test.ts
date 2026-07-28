@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { LatestQueueMarker, QUEUED_REACTION } from '../src/queue-marker.ts'
+import { FAST_FORWARD_REACTION, LatestQueueMarker, QUEUED_REACTION } from '../src/queue-marker.ts'
 
 function fakeMessage(id: string, events: string[]) {
   const reaction = {
@@ -33,10 +33,13 @@ test('moves one clock forward across rapid queued messages and clears it on drai
 
   assert.deepEqual(events, [
     `add:first:${QUEUED_REACTION}`,
+    `add:first:${FAST_FORWARD_REACTION}`,
+    'remove:first:bot',
     'remove:first:bot',
     `add:second:${QUEUED_REACTION}`,
+    `add:second:${FAST_FORWARD_REACTION}`,
   ])
 
   await marker.clear('channel')
-  assert.equal(events.at(-1), 'remove:second:bot')
+  assert.deepEqual(events.slice(-2), ['remove:second:bot', 'remove:second:bot'])
 })

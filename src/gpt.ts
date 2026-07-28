@@ -25,7 +25,8 @@ import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
-import { LatestQueueMarker } from './queue-marker.ts'
+import { FAST_FORWARD_REACTION, LatestQueueMarker } from './queue-marker.ts'
+import { steeredMarker } from './steering.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
 import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
@@ -56,6 +57,7 @@ import {
 import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
+  truncateDisplayWidth,
   formatResultTraceLine,
   resolveTraceFailsafeMs,
 } from './tool-trace.ts'
@@ -248,7 +250,7 @@ function splitTraceBlocks(rawLines: string[]): string[][] {
 function renderTraceCards(rawLines: string[]): string[] {
   const lines = rawLines.map(l => {
     const padded = padTraceLine(capMegaLine(l))
-    return padded.length > ROW_W ? padded.slice(0, ROW_W - 1) + '…' : padded
+    return truncateDisplayWidth(padded, ROW_W)
   })
   const blocks = splitTraceBlocks(lines)
   const pages: string[][] = []
@@ -1310,12 +1312,14 @@ async function handleUserMessage(
           // child, but only the explicit stop should leave an Interrupted
           // tombstone. Steering silently retires the superseded UI and clears
           // its lifecycle reactions before the queued replacement takes over.
-          const steered = activeTurns.consumeSteered(channelId)
-          await applyLifecycle(message, steered ? 'silenced' : 'interrupted')
+          const steeredAfter = activeTurns.consumeSteered(channelId)
+          await applyLifecycle(message, steeredAfter !== null ? 'silenced' : 'interrupted')
           await settleLiveUi()
           await deleteLiveTrace()
-          if (steered) {
-            if (workMessage) await workMessage.delete().catch(() => {})
+          if (steeredAfter !== null) {
+            if (workMessage) await workMessage.edit(
+              `${workMessage.content}\n${steeredMarker(steeredAfter)}`.trim(),
+            ).catch(() => {})
           } else {
             if (workMessage) await workMessage.edit(INTERRUPTED_MARKER).catch(() => {})
             try { await message.react('✗') } catch {}
@@ -1668,13 +1672,15 @@ async function handleUserMessage(
     }
   } catch (e: any) {
     if (e instanceof CodexStoppedError) {
-      const steered = activeTurns.consumeSteered(channelId)
-      await applyLifecycle(message, steered ? 'silenced' : 'interrupted')
+      const steeredAfter = activeTurns.consumeSteered(channelId)
+      await applyLifecycle(message, steeredAfter !== null ? 'silenced' : 'interrupted')
       await settleLiveUi()
       await deleteLiveTrace()
       try {
-        if (steered) {
-          if (workMessage) await workMessage.delete()
+        if (steeredAfter !== null) {
+          if (workMessage) await workMessage.edit(
+            `${workMessage.content}\n${steeredMarker(steeredAfter)}`.trim(),
+          )
         } else if (workMessage) {
           await workMessage.edit(INTERRUPTED_MARKER)
         } else {
@@ -1831,6 +1837,13 @@ client.on('messageReactionAdd', async (reaction, user) => {
     try { await user.fetch() } catch { return }
   }
   const emoji = reaction.emoji.name
+  if (emoji === FAST_FORWARD_REACTION && !user.bot
+      && reaction.message.author?.id === user.id
+      && queueMarker.isLatest(reaction.message.channelId, reaction.message.id)) {
+    activeTurns.stopFor(reaction.message.channelId, { clearQueue: false })
+    await queueMarker.clear(reaction.message.channelId)
+    return
+  }
   const planAction = emoji === '✅' ? 'execute'
     : emoji === '✏️' ? 'revise'
       : emoji === '❌' ? 'cancel'

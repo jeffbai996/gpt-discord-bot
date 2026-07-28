@@ -1,4 +1,5 @@
 export const QUEUED_REACTION = '\u{1F557}'
+export const FAST_FORWARD_REACTION = '\u{23ED}\u{FE0F}'
 
 interface RemovableReaction {
   users: {
@@ -18,7 +19,7 @@ export interface QueueMarkerMessage {
 
 interface MarkedMessage {
   message: QueueMarkerMessage
-  reaction?: RemovableReaction
+  reactions?: RemovableReaction[]
 }
 
 /** Keeps exactly one bot-owned queue clock on the newest waiting message. */
@@ -35,7 +36,10 @@ export class LatestQueueMarker {
     return this.schedule(channelId, async () => {
       await this.remove(previous)
       try {
-        current.reaction = await message.react(QUEUED_REACTION)
+        current.reactions = await Promise.all([
+          message.react(QUEUED_REACTION),
+          message.react(FAST_FORWARD_REACTION),
+        ])
       } catch {
         // Queue visibility is best-effort; generation must never fail with it.
       }
@@ -46,6 +50,10 @@ export class LatestQueueMarker {
     const current = this.latest.get(channelId)
     this.latest.delete(channelId)
     return this.schedule(channelId, () => this.remove(current))
+  }
+
+  isLatest(channelId: string, messageId: string): boolean {
+    return this.latest.get(channelId)?.message.id === messageId
   }
 
   private schedule(channelId: string, operation: () => Promise<void>): Promise<void> {
@@ -61,11 +69,13 @@ export class LatestQueueMarker {
   private async remove(marked: MarkedMessage | undefined): Promise<void> {
     const botId = this.botUserId()
     if (!marked || !botId) return
-    const reaction = marked.reaction ?? marked.message.reactions.cache.get(QUEUED_REACTION)
-    try {
-      await reaction?.users.remove(botId)
-    } catch {
-      // Stale/deleted messages should not block the queued turn.
+    for (const emoji of [QUEUED_REACTION, FAST_FORWARD_REACTION]) {
+      const reaction = marked.reactions?.shift() ?? marked.message.reactions.cache.get(emoji)
+      try {
+        await reaction?.users.remove(botId)
+      } catch {
+        // Stale/deleted messages should not block the queued turn.
+      }
     }
   }
 }

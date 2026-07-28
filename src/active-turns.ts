@@ -28,7 +28,7 @@ export const BARGE_BUSY_RECOVERY_MS = 120_000
 class ActiveTurns {
   private killers = new Map<string, Killer>()
   private stopped = new Set<string>()
-  private steered = new Set<string>()
+  private steeredAfter = new Map<string, number>()
   private startedAt = new Map<string, number>()
   private busyTool = new Map<string, BusyTool>()
   private pendingStops = new Map<string, PendingStop>()
@@ -54,7 +54,7 @@ class ActiveTurns {
     this.generations.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
-    this.steered.delete(channelId)
+    this.steeredAfter.delete(channelId)
     this.clearPendingStop(channelId)
     this.resolveIdleIfNeeded()
   }
@@ -107,9 +107,9 @@ class ActiveTurns {
     if (!k) return false
     if (opts.clearQueue) {
       this.stopped.add(channelId)
-      this.steered.delete(channelId)
+      this.steeredAfter.delete(channelId)
     } else {
-      this.steered.add(channelId)
+      this.steeredAfter.set(channelId, Date.now() - (this.startedAt.get(channelId) ?? Date.now()))
     }
     this.clearPendingStop(channelId)
     try { k() } catch { /* best-effort */ }
@@ -160,10 +160,11 @@ class ActiveTurns {
   }
 
   /** Discord renderer: was this turn replaced by newer queued input? */
-  consumeSteered(channelId: string): boolean {
-    if (!this.steered.has(channelId)) return false
-    this.steered.delete(channelId)
-    return true
+  consumeSteered(channelId: string): number | null {
+    const elapsed = this.steeredAfter.get(channelId)
+    if (elapsed === undefined) return null
+    this.steeredAfter.delete(channelId)
+    return elapsed
   }
 
   isActive(channelId: string): boolean {
