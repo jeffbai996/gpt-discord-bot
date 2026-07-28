@@ -44,7 +44,7 @@ import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
-import { INTERRUPTED_MARKER } from './interruption-label.ts'
+import { INTERRUPTED_MARKER, RETRY_PROMPT } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
@@ -1797,7 +1797,7 @@ async function handleInboundMessage(message: Message): Promise<void> {
     message.delete().catch(() => {})
     const killed = activeTurns.stop(channelId)
     if (killed) {
-      const m = await (message.channel as any).send?.(`${INTERRUPTED_MARKER}\nReact 🔁 on my last message to retry.`)
+      const m = await (message.channel as any).send?.(`${INTERRUPTED_MARKER}\n${RETRY_PROMPT}`)
         .catch(() => null)
       if (m) m.react?.('🔁').catch(() => {})
     }
