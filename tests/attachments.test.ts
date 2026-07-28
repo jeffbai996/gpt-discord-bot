@@ -74,6 +74,18 @@ test('processAttachments: unsupported mime → unsupported_type skip', async () 
   assert.match(out.text, /unsupported_type/)
 })
 
+test('processAttachments: Office documents enter the document parser', async () => {
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(Buffer.from('not-a-real-docx'), { status: 200 })
+  const out = await processAttachments([fakeAtt({
+    name: 'plan.docx',
+    contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  })], openaiStub)
+  globalThis.fetch = originalFetch
+  assert.equal(out.skipped[0]?.reason, 'download_failed')
+  assert.notEqual(out.skipped[0]?.reason, 'unsupported_type')
+})
+
 test('processAttachments: handles charset suffix on contentType', async () => {
   const att = fakeAtt({
     url: 'https://cdn.example/img.jpg',

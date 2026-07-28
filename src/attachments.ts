@@ -3,6 +3,7 @@ import type { Attachment as DiscordAttachment } from 'discord.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { parseOffice } from 'officeparser'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
 // on guild boost tier; the smaller cap protects against "user dropped a 4-hour
@@ -32,6 +33,20 @@ const TEXT_MIMES = new Set([
   'text/typescript', 'text/x-typescript'
 ])
 const TEXT_INLINE_BYTE_CAP = 100 * 1024
+const DOCUMENT_TEXT_CHAR_CAP = 400_000
+const OFFICE_MIMES = new Set([
+  'application/pdf', 'application/rtf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/vnd.oasis.opendocument.spreadsheet',
+])
 
 const EXTENSION_MIMES: Record<string, string> = {
   '.gif': 'image/gif', '.jpeg': 'image/jpeg', '.jpg': 'image/jpeg',
@@ -39,6 +54,17 @@ const EXTENSION_MIMES: Record<string, string> = {
   '.flac': 'audio/flac', '.m4a': 'audio/mp4', '.mp3': 'audio/mpeg',
   '.mp4': 'audio/mp4', '.oga': 'audio/ogg', '.ogg': 'audio/ogg',
   '.opus': 'audio/ogg', '.wav': 'audio/wav', '.webm': 'audio/webm',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.dotx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.template',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.odt': 'application/vnd.oasis.opendocument.text',
+  '.odp': 'application/vnd.oasis.opendocument.presentation',
+  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.pdf': 'application/pdf',
 }
 
 function resolvedMime(contentType: string | null, name: string): string {
@@ -145,7 +171,21 @@ export async function processAttachments(
       continue
     }
 
-    // PDF, video, archive, anything else — surface as a stub so the model
+    if (OFFICE_MIMES.has(mime)) {
+      try {
+        const buf = await downloadToBuffer(att.url, MAX_BYTES)
+        const ast = await parseOffice(buf, { fileType: path.extname(name).slice(1).toLowerCase() as any })
+        const text = ast.toText().trim().slice(0, DOCUMENT_TEXT_CHAR_CAP)
+        if (!text) throw new Error('document contained no extractable text')
+        textBlocks.push(`[attached document: ${name}]\n${text}`)
+      } catch (e) {
+        console.error('document parse failed for', name, e)
+        result.skipped.push({ name, reason: 'download_failed' })
+      }
+      continue
+    }
+
+    // Video, archives, and unknown binaries — surface as a stub so the model
     // knows there's an attachment it can ask about, but we don't pretend to
     // have ingested it.
     result.skipped.push({ name, reason: 'unsupported_type' })
