@@ -3,7 +3,14 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { RestartCoordinator, ShutdownGate, rewriteEnvVar } from '../src/restart.ts'
+import {
+  RestartCoordinator,
+  ShutdownGate,
+  rewriteEnvVar,
+  RESTART_DRAIN_DEADLINE_MS,
+} from '../src/restart.ts'
+
+const tick = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
 const tmp = path.join(os.tmpdir(), `gpt-restart-test-${process.pid}`)
 const envPath = path.join(tmp, '.env')
@@ -146,6 +153,80 @@ describe('RestartCoordinator', () => {
     await Promise.resolve()
     assert.equal(launches, 1)
     assert.equal(gate.enter(), null, 'only the final exit window rejects live intake')
+  })
+})
+
+describe('RestartCoordinator drain deadline', () => {
+  test('has a bounded default so one long turn cannot hold the bot offline forever', () => {
+    assert.ok(RESTART_DRAIN_DEADLINE_MS > 0)
+    assert.ok(RESTART_DRAIN_DEADLINE_MS <= 30 * 60_000,
+      'must stay inside the unit TimeoutStopSec=30min budget')
+  })
+
+  test('launches anyway once the drain exceeds the deadline', async () => {
+    let launches = 0
+    let expired = 0
+    const coordinator = new RestartCoordinator(
+      () => new Promise<void>(() => {}), // never idle — the stuck-turn case
+      () => { launches++ },
+      () => {},
+      { deadlineMs: 5, onDeadline: () => { expired++ } },
+    )
+
+    coordinator.request()
+    assert.equal(launches, 0)
+    await tick(30)
+    assert.equal(expired, 1, 'the overrun should be reported, not silent')
+    assert.equal(launches, 1)
+  })
+
+  test('closes intake when the deadline forces the launch', async () => {
+    const gate = new ShutdownGate()
+    const coordinator = new RestartCoordinator(
+      () => new Promise<void>(() => {}),
+      () => {},
+      () => gate.beginDrain(),
+      { deadlineMs: 5 },
+    )
+
+    coordinator.request()
+    assert.equal(gate.isDraining(), false)
+    await tick(30)
+    assert.equal(gate.isDraining(), true)
+  })
+
+  test('launches exactly once when idle resolves after the deadline fired', async () => {
+    let resolveIdle!: () => void
+    const idle = new Promise<void>(resolve => { resolveIdle = resolve })
+    let launches = 0
+    const coordinator = new RestartCoordinator(
+      () => idle,
+      () => { launches++ },
+      () => {},
+      { deadlineMs: 5 },
+    )
+
+    coordinator.request()
+    await tick(30)
+    assert.equal(launches, 1)
+
+    resolveIdle()
+    await tick(10)
+    assert.equal(launches, 1, 'late idle must not launch a second restart')
+  })
+
+  test('a normal idle launch does not later fire the deadline', async () => {
+    let launches = 0
+    const coordinator = new RestartCoordinator(
+      () => Promise.resolve(),
+      () => { launches++ },
+      () => {},
+      { deadlineMs: 5 },
+    )
+
+    coordinator.request()
+    await tick(30)
+    assert.equal(launches, 1)
   })
 })
 

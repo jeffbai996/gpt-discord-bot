@@ -635,6 +635,12 @@ const restartCoordinator = new RestartCoordinator(
     scheduleSelfRestart('gpt', 250)
   },
   () => shutdownGate.beginDrain(),
+  {
+    onDeadline: () => {
+      logTurnLifecycle({ event: 'restart_drain_deadline', restartPhase: 'draining' })
+      console.error('[restart] drain exceeded its deadline; restarting with work still active')
+    },
+  },
 )
 
 function requestGracefulRestart(): void {
@@ -1753,6 +1759,15 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
   const release = shutdownGate.enter()
   if (!release) {
     restartInbox.defer(message.channel.id, message.id)
+    // Say something. A silent drop here is externally indistinguishable from a
+    // crashed bot — that is exactly how this surfaced. The message is not lost
+    // (restartInbox replays it after the restart), so ⏳ not ❌.
+    void message.react('⏳').catch(() => {})
+    logTurnLifecycle({
+      event: 'message_deferred_for_restart',
+      channelId: message.channel.id,
+      restartPhase: 'draining',
+    })
     return
   }
   try {

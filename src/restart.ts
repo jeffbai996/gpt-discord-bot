@@ -20,6 +20,23 @@ type WaitForIdle = () => Promise<void>
 type RestartLauncher = () => void
 
 /**
+ * Upper bound on how long a pending restart will wait for active turns.
+ *
+ * Without a bound, a single long-running turn holds the restart open
+ * indefinitely, and once the final window closes, intake is shut for every
+ * channel at once — one slow dev turn takes the whole bot off Discord.
+ * Ten minutes leaves room inside the unit's TimeoutStopSec=30min for the
+ * SIGTERM path to still drain gracefully afterwards. (Jeff 2026-07-27.)
+ */
+export const RESTART_DRAIN_DEADLINE_MS = 10 * 60_000
+
+interface RestartCoordinatorOptions {
+  deadlineMs?: number
+  /** Called when the drain overruns, so the overrun lands in the turn log. */
+  onDeadline?: () => void
+}
+
+/**
  * Tracks two distinct shutdown phases:
  * - draining stops new Discord work only for the final restart/exit window;
  * - exiting lets the later systemd SIGTERM run cleanup exactly once.
@@ -81,26 +98,52 @@ export class ShutdownGate {
  */
 export class RestartCoordinator {
   private pending = false
+  private launched = false
+  private readonly deadlineMs: number
+  private readonly onDeadline: () => void
 
   constructor(
     private readonly waitForIdle: WaitForIdle,
     private readonly launch: RestartLauncher,
     private readonly closeIntake: () => void = () => {},
-  ) {}
+    opts: RestartCoordinatorOptions = {},
+  ) {
+    this.deadlineMs = opts.deadlineMs ?? RESTART_DRAIN_DEADLINE_MS
+    this.onDeadline = opts.onDeadline ?? (() => {})
+  }
 
   request(): boolean {
     if (this.pending) return false
     this.pending = true
+
+    // The deadline races the idle wait: whichever lands first performs the one
+    // and only launch. A stuck turn therefore delays the restart, it does not
+    // cancel it. systemd's own TimeoutStopSec still governs the SIGTERM tail.
+    const timer = setTimeout(() => {
+      if (this.launched) return
+      this.onDeadline()
+      this.fire()
+    }, this.deadlineMs)
+    timer.unref?.()
+
     void this.waitForIdle()
       .then(() => {
-        this.closeIntake()
-        this.launch()
+        clearTimeout(timer)
+        this.fire()
       })
       .catch(err => {
+        clearTimeout(timer)
         this.pending = false
         console.error('[restart] failed while waiting for idle:', err)
       })
     return true
+  }
+
+  private fire(): void {
+    if (this.launched) return
+    this.launched = true
+    this.closeIntake()
+    this.launch()
   }
 }
 
