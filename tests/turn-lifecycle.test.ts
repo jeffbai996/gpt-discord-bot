@@ -55,3 +55,22 @@ test('thinking collapse uses the accumulated trace while live uses the latest th
   assert.match(source, /flags\.thinking === 'collapse'\s*\?\s*formatReasoningTraceSnapshot/)
   assert.match(source, /reasoningTrace:\s*flags\.thinking === 'collapse'/)
 })
+
+test('live narration is reposted beneath the complete tool trace stack', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const rehomeStart = source.indexOf('const rehomeLiveWorkBelowTrace')
+  const rehomeEnd = source.indexOf('\n  const flushLiveTrace', rehomeStart)
+  const rehome = source.slice(rehomeStart, rehomeEnd)
+  const flushStart = rehomeEnd
+  const flushEnd = source.indexOf('\n  const markLiveTraceDirty', flushStart)
+  const flush = source.slice(flushStart, flushEnd)
+
+  assert.ok(rehomeStart >= 0)
+  assert.match(rehome, /traceChannel\.send\(content\)/)
+  assert.match(rehome, /previous\.delete\(\)/)
+  assert.match(flush, /await rehomeLiveWorkBelowTrace\(traceChannel\)/)
+  assert.ok(
+    flush.indexOf('await rehomeLiveWorkBelowTrace(traceChannel)')
+      > flush.indexOf('liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)'),
+  )
+})

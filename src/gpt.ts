@@ -1039,6 +1039,7 @@ async function handleUserMessage(
   let liveTracePending = false
   let liveTraceDirty = false
   let liveTraceClosed = false
+  let liveWorkRehomeTask: Promise<void> | null = null
   // Failsafe cleanup for collapse mode: the normal linger delete is only scheduled
   // at END of turn. If the process dies mid-turn, DeferredActions.rearm() still
   // removes the orphan after a restart. The lease must outlive the turn watchdog:
@@ -1054,6 +1055,36 @@ async function handleUserMessage(
     )
     deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + ttl })
   }
+  const rehomeLiveWorkBelowTrace = async (
+    traceChannel: TextChannel | DMChannel | ThreadChannel,
+  ): Promise<void> => {
+    if (targetMessage || liveUiClosed || !workMessage) return
+    if (liveWorkRehomeTask) {
+      await liveWorkRehomeTask
+      return
+    }
+    const task = (async () => {
+      if (liveEditTask) await liveEditTask.catch(() => {})
+      const previous = workMessage
+      if (!previous || liveUiClosed) return
+      const content = previous.content || lastEditedText || `💭 ✻ **${effortLabel}…**`
+      const replacement = await traceChannel.send(content).catch(() => null)
+      if (!replacement || liveUiClosed) {
+        if (replacement) await replacement.delete().catch(() => {})
+        return
+      }
+      workMessage = replacement
+      pendingPlaceholders.untrack(previous.id)
+      pendingPlaceholders.track(message.channel.id, replacement.id, message.id)
+      placeholderId = replacement.id
+      await previous.delete().catch(() => {})
+      startSpinner()
+      queueLiveRender()
+    })()
+    liveWorkRehomeTask = task
+    await task
+    if (liveWorkRehomeTask === task) liveWorkRehomeTask = null
+  }
   const flushLiveTrace = () => {
     if (liveTraceClosed || liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
     const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
@@ -1061,16 +1092,22 @@ async function handleUserMessage(
     const cards = renderTraceCards(buildTraceLines(liveToolRows))
     ;(async () => {
       if (liveTraceClosed) return
+      let appendedTraceCard = false
       for (let i = 0; i < cards.length; i++) {
         if (liveTraceClosed) return
         if (liveTraceMsgs[i]) await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
-        else { liveTraceMsgs[i] = await traceChannel.send(cards[i]); armTraceFailsafe(liveTraceMsgs[i]) }
+        else {
+          liveTraceMsgs[i] = await traceChannel.send(cards[i])
+          appendedTraceCard = true
+          armTraceFailsafe(liveTraceMsgs[i])
+        }
       }
       for (const stale of liveTraceMsgs.slice(cards.length)) {
         if (liveTraceClosed) return
         await stale.delete().catch(() => {})
       }
       liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
+      if (appendedTraceCard) await rehomeLiveWorkBelowTrace(traceChannel)
     })().catch(() => {
       // Trace display is diagnostic only; never fail the user turn over Discord.
     }).finally(() => {
