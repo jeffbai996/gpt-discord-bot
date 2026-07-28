@@ -35,6 +35,23 @@ export class CodexStoppedError extends Error {
 
 // Same binary the codex *tool* uses — Codex (OpenAI GPT-5.6) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
+
+// codex inherits gpt's env for SQUAD_STORE_URL and friends, but dotenv also
+// loads DISCORD_BOT_TOKEN / GEMINI_API_KEY into process.env -- and codex
+// records its environment into ~/.codex/sessions/*.jsonl, so those landed in
+// plaintext on disk (38 files, four distinct bot tokens; Jeff 2026-07-27).
+//
+// codex authenticates from its own ~/.codex/auth.json, not from these, so
+// stripping them changes nothing operationally -- verified by running codex
+// exec with both unset. Deleting named secrets beats whitelisting the env,
+// which would silently break future GPT_* knobs.
+const SECRETS_NEVER_PASSED_TO_CODEX = ['DISCORD_BOT_TOKEN', 'GEMINI_API_KEY'] as const
+
+const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+  for (const k of SECRETS_NEVER_PASSED_TO_CODEX) delete env[k]
+  return env
+}
 // Watchdog policy, not a guessed "turn should be done by now" timer.
 // Real repo work can run for a long time as long as Codex is still emitting JSONL
 // progress. The idle watchdog kills only a silent/wedged child; the hard timeout is
@@ -743,7 +760,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   const supervisor = spawnSupervisedProcess(CODEX_BIN, args, {
     cwd: '/tmp',
     detached: true,
-    env: { ...process.env, SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' },
+    env: codexSpawnEnv({ SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' }),
   }, {
     idleTimeoutMs: watchdog.idleTimeoutMs,
     hardTimeoutMs: watchdog.hardTimeoutMs,
