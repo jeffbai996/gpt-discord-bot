@@ -1,7 +1,7 @@
-// Discord's code-block chrome consumes about six cells at Jeff's client width.
-// Cap rendered rows at 74 display cells so the text clears the copy control
-// instead of making an 80-cell fence overflow the message body.
-export const DEFAULT_TOOL_CALL_WIDTH = 74
+// Call rows have five more safe cells than the conservative 74-cell cap at
+// Jeff's client width. Output rows stay narrower because their indent and
+// right-edge line-count tag need more headroom.
+export const DEFAULT_TOOL_CALL_WIDTH = 79
 export const DEFAULT_TOOL_OUTPUT_WIDTH = 70
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })

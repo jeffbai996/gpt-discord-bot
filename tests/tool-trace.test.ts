@@ -11,8 +11,8 @@ import {
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('keeps six cells of Discord fence headroom', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 74)
+test('uses the verified call and output row widths', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 79)
   assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 70)
 })
 
