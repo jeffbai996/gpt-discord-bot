@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, requiresCodexContinuation, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
@@ -90,6 +90,48 @@ test('in-flight status ping: status checks do not become barge-ins', () => {
   assert.equal(isInFlightStatusPing('where\'d ya go'), true)
   assert.equal(isInFlightStatusPing('diagnose why this got stuck and fix it'), false)
   assert.equal(isInFlightStatusPing('stop this'), false)
+})
+
+test('continuity guard: actionable turns cannot end by promising future work', () => {
+  assert.equal(requiresCodexContinuation(
+    'Eliminate this behavior to align with the other bots.',
+    'I’m tracing that writer instead of fixing code that is already correct.',
+  ), true)
+  assert.equal(requiresCodexContinuation(
+    'Revert it and audit what else changed.',
+    'I restored the setting and am reloading and verifying it now.',
+  ), true)
+  assert.equal(requiresCodexContinuation(
+    'Fix this and verify both channels.',
+    'For this task I’m continuing through the audit, reload, and verification before I report back.',
+  ), true)
+  assert.equal(requiresCodexContinuation(
+    'Ship the typography fix.',
+    'Tests pass. I’m committing and rebuilding the container now, then I’ll verify the served bundle.',
+  ), true)
+  assert.equal(requiresCodexContinuation(
+    'Proceed.',
+    'I implemented the patch and am deploying it now.',
+  ), true)
+})
+
+test('continuity guard: completed work, blockers, and advice remain final', () => {
+  assert.equal(requiresCodexContinuation(
+    'Fix the channel gate.',
+    'Fixed and live. Tests pass, the service restarted, and the channel now requires a mention.',
+  ), false)
+  assert.equal(requiresCodexContinuation(
+    'Fix the channel gate.',
+    'Blocked: Discord rejected the permission change and I need owner authorization before retrying.',
+  ), false)
+  assert.equal(requiresCodexContinuation(
+    'Do you think we should proceed?',
+    'Yes. I’d stage it by bounding the cache first, then moving reranking into a worker.',
+  ), false)
+  assert.equal(requiresCodexContinuation(
+    'Explain the deploy flow.',
+    'After tests pass, I’ll normally push and send SIGUSR2.',
+  ), false)
 })
 
 test('liveEvent: surfaces MCP begin events from codex rollout-style JSON', () => {

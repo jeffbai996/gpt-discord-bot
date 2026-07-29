@@ -513,6 +513,26 @@ export function isInFlightStatusPing(text: string): boolean {
   return statusOnly.test(s)
 }
 
+const ACTIONABLE_WORK_RE =
+  /\b(?:add|attack|audit|build|change|commit|debug|delete|deploy|diagnose|eliminate|fix|implement|install|investigate|make|patch|push|rebuild|reload|remove|repair|restart|revert|root[- ]cause|run|ship|test|trace|update|verify|work on)\b/i
+const SHORT_WORK_APPROVAL_RE = /^\s*(?:do it|go|let(?:'|’)s go|proceed)\b/i
+const WORK_PROMISE_RE =
+  /\b(?:(?:i(?:'m|’m| am)|and am)\s+(?:actively\s+)?(?:auditing|building|changing|checking|committing|continuing|debugging|deploying|diagnosing|fixing|implementing|investigating|patching|pushing|rebuilding|reloading|repairing|restarting|reverting|root[- ]causing|running|shipping|testing|tracing|updating|verifying|working)|i(?:'ll|’ll| will)\s+(?:audit|build|change|check|commit|continue|debug|deploy|diagnose|fix|implement|investigate|patch|push|rebuild|reload|repair|restart|revert|run|ship|test|trace|update|verify|work)|(?:then|next)\s+i(?:'ll|’ll| will)\b)/i
+const TERMINAL_OUTCOME_RE =
+  /\b(?:blocked|cannot continue|can't continue|could not continue)\b/i
+
+/**
+ * Detect a clean Codex exit that narrates future implementation work instead
+ * of doing it. This is intentionally gated by an actionable user order: advice,
+ * explanations, and hypothetical deployment descriptions may legitimately use
+ * the same future-tense language.
+ */
+export function requiresCodexContinuation(userMessage: string, reply: string): boolean {
+  if (!ACTIONABLE_WORK_RE.test(userMessage) && !SHORT_WORK_APPROVAL_RE.test(userMessage)) return false
+  if (TERMINAL_OUTCOME_RE.test(reply)) return false
+  return WORK_PROMISE_RE.test(reply)
+}
+
 // The --json exec stream omits file-edit hunk text; codex's session rollout keeps
 // it. Locate the rollout by thread_id (== the rollout filename suffix) and pull
 // each path's unified_diff from the patch_apply_end events. Best-effort.
