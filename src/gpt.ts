@@ -5,6 +5,7 @@ import fs from 'fs'
 import { setTimeout as sleep } from 'node:timers/promises'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
+import { isAddressedToAnotherBot } from './mention-gate.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { closeDanglingInlineCode } from './discord-markdown.ts'
@@ -1854,6 +1855,7 @@ async function handleInboundMessage(message: Message): Promise<void> {
   const channelId = message.channel.id
   const userId = message.author.id
   const isMention = client.user ? message.mentions.users.has(client.user.id) : false
+  if (client.user && isAddressedToAnotherBot(client.user.id, message.mentions.users.values())) return
 
   if (memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId)) {
     void ingestMessage(message)
