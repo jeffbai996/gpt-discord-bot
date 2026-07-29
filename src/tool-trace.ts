@@ -72,7 +72,11 @@ export function formatUnifiedDiffTrace(
     const lineNo = row.lineNo
       ? String(row.lineNo).padStart(width)
       : ' '.repeat(width)
-    return `${row.marker} ${lineNo} ${row.text}`
+    // Context rows already use a literal space as their diff marker. Do not
+    // add the colored-row separator too, or padTraceLine shifts their number
+    // one cell right compared with +/- rows.
+    const separator = row.marker === ' ' ? '' : ' '
+    return `${row.marker}${separator}${lineNo} ${row.text}`
   })
   return { badge: `[+${adds}, -${dels}]`, body }
 }
@@ -98,19 +102,16 @@ export function formatResultTraceLine(
   const tag = resultLines > 1 ? `[${resultLines} lines]` : ''
 
   if (!tag) {
-    const preview = flattened.length > cap
-      ? flattened.slice(0, cap - 1) + '…'
-      : flattened
+    const preview = truncateDisplayWidth(flattened, cap)
     return prefix + preview
   }
 
   // Preserve the old preview-row ceiling: OUT_W characters of payload plus
   // the marker prefix. The count occupies unused space at the right edge; if
   // necessary, trim the preview rather than widening Discord's code fence.
-  const available = Math.max(1, cap - tag.length - 1)
-  const preview = flattened.length > available
-    ? flattened.slice(0, Math.max(0, available - 1)) + '…'
-    : flattened
-  const gap = ' '.repeat(Math.max(1, cap - preview.length - tag.length))
+  const tagWidth = displayWidth(tag)
+  const available = Math.max(1, cap - tagWidth - 1)
+  const preview = truncateDisplayWidth(flattened, available)
+  const gap = ' '.repeat(Math.max(1, cap - displayWidth(preview) - tagWidth))
   return `${prefix}${preview}${gap}${tag}`
 }

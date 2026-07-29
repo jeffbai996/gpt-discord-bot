@@ -22,7 +22,7 @@ test('caps emoji and CJK by rendered columns without splitting graphemes', () =>
   assert.equal(line, 'a'.repeat(74) + '❌中…')
 })
 
-test('formats diff markers with one space before the line number', () => {
+test('formats diff line numbers in the same column for every marker', () => {
   const formatted = formatUnifiedDiffTrace(
     '@@ -152,2 +153,3 @@\n-old\n+new\n context\n+tail\n',
   )
@@ -32,7 +32,7 @@ test('formats diff markers with one space before the line number', () => {
     body: [
       '- 152 old',
       '+ 153 new',
-      '  154 context',
+      ' 154 context',
       '+ 155 tail',
     ],
   })
@@ -50,6 +50,13 @@ test('trims the preview instead of widening the result row', () => {
 
   assert.equal(line, ' ⎿ abcdefgh… [12 lines]')
   assert.equal(line.length, 23)
+})
+
+test('aligns result counts by rendered width for wide preview text', () => {
+  const line = formatResultTraceLine('中文', 12, 20)
+
+  assert.equal(line, ' ⎿ 中文      [12 lines]')
+  assert.equal(displayWidth(line), 23)
 })
 
 test('moves single-line result markers right without adding a count', () => {
