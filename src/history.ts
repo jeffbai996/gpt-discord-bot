@@ -82,21 +82,25 @@ function isImageAttachment(att: HistoryAttachment): boolean {
 }
 
 const IMAGE_CARRYOVER_MS = 60 * 60_000
+const IMAGE_REFERENCE_RE = /\b(?:attachment|gif|image|jpeg|jpg|photo|pic|picture|png|screenshot|upload|webp)s?\b|(?:图片|图像|照片|截图|附件)/
 
 /**
  * Recover image bytes Discord still owns when a follow-up turn has no upload.
  *
  * A direct reply explicitly targets that message, even if another user posted
- * it or it is older. Otherwise the current author's newest image stays live
- * for an hour, which covers multi-turn visual work without making an old
- * screenshot haunt the channel indefinitely.
+ * it or it is older. Otherwise only image-referencing text can select the
+ * current author's newest image. This keeps multi-turn visual work convenient
+ * without downloading and injecting an old screenshot into every text turn.
  */
 export function selectPriorImages(
   messages: HistoryMessage[],
   authorId: string,
   referencedMessageId?: string | null,
+  userText: string = '',
   now: number = Date.now(),
 ): AttachmentInput[] {
+  if (!referencedMessageId && !IMAGE_REFERENCE_RE.test(userText)) return []
+
   const source = referencedMessageId
     ? messages.find(m => m.id === referencedMessageId)
     : messages.findLast(m =>

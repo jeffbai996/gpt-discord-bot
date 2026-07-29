@@ -9,6 +9,16 @@ import { extensionMime, extractLocalText, isLocallyExtractable, officeParserType
 // on guild boost tier; the smaller cap protects against "user dropped a 4-hour
 // video, please summarize it" failure modes.
 const MAX_BYTES = 20 * 1024 * 1024
+const IMAGE_CACHE_TTL_MS = 60 * 60_000
+const IMAGE_CACHE_MAX_BYTES = 128 * 1024 * 1024
+
+interface CachedImage {
+  buffer: Buffer
+  expiresAt: number
+}
+
+const imageCache = new Map<string, CachedImage>()
+let imageCacheBytes = 0
 
 // gpt-4o family + gpt-5.x accept these as `image_url` content parts (data: URIs
 // or fetchable URLs). Anything else gets surfaced as a text placeholder so the
@@ -140,7 +150,7 @@ export async function processAttachments(
         // Discord attachment URLs are signed and can expire or be rejected by
         // OpenAI's fetcher. Download while Discord's URL is fresh and send the
         // bytes as a data URI so vision input is deterministic.
-        const buf = await downloadToBuffer(att.url, MAX_BYTES)
+        const buf = await downloadImageToBuffer(att.url)
         imageDir ??= await mkdtemp(path.join(tmpdir(), 'gpt-discord-images-'))
         const ext = path.extname(name).toLowerCase() || mimeExtension(mime)
         const imagePath = path.join(imageDir, `${result.imagePaths.length}${ext}`)
@@ -237,4 +247,59 @@ async function downloadToBuffer(url: string, maxBytes: number): Promise<Buffer> 
     throw new Error(`exceeds ${maxBytes} byte cap (${ab.byteLength})`)
   }
   return Buffer.from(ab)
+}
+
+function imageCacheKey(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return `${parsed.origin}${parsed.pathname}`
+  } catch {
+    return url
+  }
+}
+
+function getCachedImage(key: string, now: number): Buffer | undefined {
+  const cached = imageCache.get(key)
+  if (!cached) return undefined
+  if (cached.expiresAt <= now) {
+    imageCache.delete(key)
+    imageCacheBytes -= cached.buffer.byteLength
+    return undefined
+  }
+
+  // Refresh insertion order so the byte-cap eviction keeps recently reused
+  // images and drops the coldest entry first.
+  imageCache.delete(key)
+  imageCache.set(key, cached)
+  return cached.buffer
+}
+
+function cacheImage(key: string, buffer: Buffer, now: number): void {
+  if (buffer.byteLength > IMAGE_CACHE_MAX_BYTES) return
+
+  const existing = imageCache.get(key)
+  if (existing) {
+    imageCache.delete(key)
+    imageCacheBytes -= existing.buffer.byteLength
+  }
+  while (imageCacheBytes + buffer.byteLength > IMAGE_CACHE_MAX_BYTES) {
+    const oldest = imageCache.entries().next().value as [string, CachedImage] | undefined
+    if (!oldest) break
+    imageCache.delete(oldest[0])
+    imageCacheBytes -= oldest[1].buffer.byteLength
+  }
+
+  imageCache.set(key, { buffer, expiresAt: now + IMAGE_CACHE_TTL_MS })
+  imageCacheBytes += buffer.byteLength
+}
+
+async function downloadImageToBuffer(url: string): Promise<Buffer> {
+  const key = imageCacheKey(url)
+  const now = Date.now()
+  const cached = getCachedImage(key, now)
+  if (cached) return cached
+
+  const buffer = await downloadToBuffer(url, MAX_BYTES)
+  cacheImage(key, buffer, now)
+  return buffer
 }

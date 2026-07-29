@@ -57,6 +57,34 @@ test('processAttachments: image becomes image_url part', async () => {
   assert.equal(out.skipped.length, 0)
 })
 
+test('processAttachments: reuses cached image bytes instead of downloading again', async () => {
+  const att = fakeAtt({
+    url: 'https://cdn.example/cache-once.png?signature=first',
+    name: 'cache-once.png',
+    size: 50_000,
+    contentType: 'image/png',
+  })
+  const originalFetch = globalThis.fetch
+  let fetches = 0
+  globalThis.fetch = async () => {
+    fetches += 1
+    return new Response(Buffer.from('cached-image'), { status: 200 })
+  }
+
+  try {
+    const first = await processAttachments([att], openaiStub)
+    await cleanupAttachmentFiles(first.imagePaths)
+    const second = await processAttachments([
+      { ...att, url: 'https://cdn.example/cache-once.png?signature=refreshed' },
+    ], openaiStub)
+    await cleanupAttachmentFiles(second.imagePaths)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.equal(fetches, 1)
+})
+
 test('processAttachments: oversized → too_large skip', async () => {
   const att = fakeAtt({ size: 100 * 1024 * 1024, contentType: 'image/png', name: 'big.png' })
   const out = await processAttachments([att], openaiStub)

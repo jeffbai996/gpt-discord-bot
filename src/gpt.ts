@@ -788,7 +788,7 @@ async function handleUserMessage(
 
   const uploadedAttachments = [...message.attachments.values()]
   const carriedImages = uploadedAttachments.length === 0
-    ? selectPriorImages(rawHistory, userId, message.reference?.messageId)
+    ? selectPriorImages(rawHistory, userId, message.reference?.messageId, userText)
     : []
   const attachments = uploadedAttachments.length > 0 ? uploadedAttachments : carriedImages
   let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []

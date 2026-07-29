@@ -170,7 +170,7 @@ test('formatHistoryForOpenAI: describes attachments as breadcrumbs', async () =>
   assert.match(String(out[0].content), /\[previous image: pic\.png\]/)
 })
 
-test('selectPriorImages: rehydrates images from the author previous turn', () => {
+test('selectPriorImages: rehydrates a recent image when the text references it', () => {
   const msgs: HistoryMessage[] = [
     {
       id: 'image-turn',
@@ -183,7 +183,7 @@ test('selectPriorImages: rehydrates images from the author previous turn', () =>
     botMsg('answer', 'I see it'),
   ]
 
-  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 1_000), [{
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 'crop that image', 1_000), [{
     name: 'screen.png',
     url: 'http://x/screen.png',
     contentType: 'image/png',
@@ -191,7 +191,7 @@ test('selectPriorImages: rehydrates images from the author previous turn', () =>
   }])
 })
 
-test('selectPriorImages: keeps a recent image available across several text turns', () => {
+test('selectPriorImages: does not attach a recent image to an unrelated text turn', () => {
   const msgs: HistoryMessage[] = [
     {
       id: 'stale-image',
@@ -205,7 +205,24 @@ test('selectPriorImages: keeps a recent image available across several text turn
     botMsg('answer', 'new answer'),
   ]
 
-  assert.equal(selectPriorImages(msgs, 'u-alice', null, 2_000)[0]?.name, 'old.png')
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 'can you fix it?', 2_000), [])
+})
+
+test('selectPriorImages: keeps a recent image available across several turns when named', () => {
+  const msgs: HistoryMessage[] = [
+    {
+      id: 'stale-image',
+      authorId: 'u-alice',
+      authorName: 'alice',
+      content: 'old topic',
+      attachments: [{ name: 'old.png', url: 'http://x/old.png', mimeType: 'image/png', size: 456 }],
+      createdTimestamp: 1_000,
+    },
+    userMsg('newer-turn', 'alice', 'different topic'),
+    botMsg('answer', 'new answer'),
+  ]
+
+  assert.equal(selectPriorImages(msgs, 'u-alice', null, 'use the previous screenshot', 2_000)[0]?.name, 'old.png')
 })
 
 test('selectPriorImages: automatic carryover expires after an hour', () => {
@@ -218,7 +235,7 @@ test('selectPriorImages: automatic carryover expires after an hour', () => {
     createdTimestamp: 1,
   }]
 
-  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 60 * 60_000 + 2), [])
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 'edit that image', 60 * 60_000 + 2), [])
 })
 
 test('selectPriorImages: a Discord reply can target an older image', () => {
@@ -237,7 +254,7 @@ test('selectPriorImages: a Discord reply can target an older image', () => {
     userMsg('newer-turn', 'alice', 'unrelated'),
   ]
 
-  assert.deepEqual(selectPriorImages(msgs, 'u-alice', 'target'), [{
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', 'target', 'make it brighter'), [{
     name: 'target.webp',
     url: 'http://x/target.webp',
     contentType: null,
