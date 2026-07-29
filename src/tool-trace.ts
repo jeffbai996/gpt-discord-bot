@@ -1,7 +1,7 @@
-// Keep GPT's trace inside its narrower Discord message viewport. Result
-// payloads also leave room for the rendered three-cell ` ⎿ ` prefix.
-export const DEFAULT_TOOL_CALL_WIDTH = 81
-export const DEFAULT_TOOL_OUTPUT_WIDTH = 74
+// Match the Claude bots' verified 84-column Discord trace fence. Result
+// payloads start after the rendered ` ⎿ ` prefix, leaving 81 usable columns.
+export const DEFAULT_TOOL_CALL_WIDTH = 84
+export const DEFAULT_TOOL_OUTPUT_WIDTH = 81
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const WIDE_RE = /\p{Extended_Pictographic}|[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u
