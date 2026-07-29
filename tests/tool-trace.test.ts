@@ -12,8 +12,8 @@ import {
 } from '../src/tool-trace.ts'
 
 test('fills the Claude trace width without overrunning one line', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 79)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 75)
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 80)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 76)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {

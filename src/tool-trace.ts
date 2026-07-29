@@ -1,7 +1,8 @@
-// Match the Claude bot's settled one-line trace width. Output previews reserve
-// four cells for their marker/padding, so 75 columns still render at 79 total.
-export const DEFAULT_TOOL_CALL_WIDTH = 79
-export const DEFAULT_TOOL_OUTPUT_WIDTH = 75
+// 80 display cells is the strict fence (Jeff 2026-07-28), matching the Claude
+// bot. Output previews reserve four cells for their marker/padding, so 76
+// columns still render at 80 total.
+export const DEFAULT_TOOL_CALL_WIDTH = 80
+export const DEFAULT_TOOL_OUTPUT_WIDTH = 76
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const WIDE_RE = /\p{Extended_Pictographic}|[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u
