@@ -1,5 +1,4 @@
 import OpenAI, { toFile } from 'openai'
-import type { Attachment as DiscordAttachment } from 'discord.js'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -107,10 +106,17 @@ export interface ProcessedAttachments {
   skipped: SkippedAttachment[]
 }
 
+export interface AttachmentInput {
+  url: string
+  name: string
+  size: number
+  contentType: string | null
+}
+
 const EMPTY: ProcessedAttachments = { text: '', imageParts: [], imagePaths: [], skipped: [] }
 
 export async function processAttachments(
-  attachments: DiscordAttachment[],
+  attachments: AttachmentInput[],
   client: OpenAI,
   transcribeModel: string = 'whisper-1'
 ): Promise<ProcessedAttachments> {

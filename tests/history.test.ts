@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { formatHistoryForOpenAI, stripBotMetadata, type HistoryMessage } from '../src/history.ts'
+import {
+  formatHistoryForOpenAI,
+  selectPriorImages,
+  stripBotMetadata,
+  type HistoryMessage,
+} from '../src/history.ts'
 import { stripToolTraceCard } from '../src/render-cleanup.ts'
 
 const SELF = 'bot-id'
@@ -158,11 +163,86 @@ test('formatHistoryForOpenAI: skips messages that strip to empty', async () => {
 test('formatHistoryForOpenAI: describes attachments as breadcrumbs', async () => {
   const msgs: HistoryMessage[] = [{
     id: '1', authorId: 'u-alice', authorName: 'alice', content: 'look',
-    attachments: [{ name: 'pic.png', url: 'http://x/pic.png', mimeType: 'image/png' }],
+    attachments: [{ name: 'pic.png', url: 'http://x/pic.png', mimeType: 'image/png', size: 123 }],
     createdTimestamp: 0,
   }]
   const out = await formatHistoryForOpenAI(msgs, SELF)
   assert.match(String(out[0].content), /\[previous image: pic\.png\]/)
+})
+
+test('selectPriorImages: rehydrates images from the author previous turn', () => {
+  const msgs: HistoryMessage[] = [
+    {
+      id: 'image-turn',
+      authorId: 'u-alice',
+      authorName: 'alice',
+      content: 'look at this',
+      attachments: [{ name: 'screen.png', url: 'http://x/screen.png', mimeType: 'image/png', size: 456 }],
+      createdTimestamp: 1,
+    },
+    botMsg('answer', 'I see it'),
+  ]
+
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 1_000), [{
+    name: 'screen.png',
+    url: 'http://x/screen.png',
+    contentType: 'image/png',
+    size: 456,
+  }])
+})
+
+test('selectPriorImages: keeps a recent image available across several text turns', () => {
+  const msgs: HistoryMessage[] = [
+    {
+      id: 'stale-image',
+      authorId: 'u-alice',
+      authorName: 'alice',
+      content: 'old topic',
+      attachments: [{ name: 'old.png', url: 'http://x/old.png', mimeType: 'image/png', size: 456 }],
+      createdTimestamp: 1_000,
+    },
+    userMsg('newer-turn', 'alice', 'different topic'),
+    botMsg('answer', 'new answer'),
+  ]
+
+  assert.equal(selectPriorImages(msgs, 'u-alice', null, 2_000)[0]?.name, 'old.png')
+})
+
+test('selectPriorImages: automatic carryover expires after an hour', () => {
+  const msgs: HistoryMessage[] = [{
+    id: 'stale-image',
+    authorId: 'u-alice',
+    authorName: 'alice',
+    content: 'old topic',
+    attachments: [{ name: 'old.png', url: 'http://x/old.png', mimeType: 'image/png', size: 456 }],
+    createdTimestamp: 1,
+  }]
+
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 60 * 60_000 + 2), [])
+})
+
+test('selectPriorImages: a Discord reply can target an older image', () => {
+  const msgs: HistoryMessage[] = [
+    {
+      id: 'target',
+      authorId: 'u-bob',
+      authorName: 'bob',
+      content: 'shared image',
+      attachments: [
+        { name: 'target.webp', url: 'http://x/target.webp', mimeType: null, size: 789 },
+        { name: 'notes.txt', url: 'http://x/notes.txt', mimeType: 'text/plain', size: 12 },
+      ],
+      createdTimestamp: 1,
+    },
+    userMsg('newer-turn', 'alice', 'unrelated'),
+  ]
+
+  assert.deepEqual(selectPriorImages(msgs, 'u-alice', 'target'), [{
+    name: 'target.webp',
+    url: 'http://x/target.webp',
+    contentType: null,
+    size: 789,
+  }])
 })
 
 test('formatHistoryForOpenAI: windows to token budget, keeps newest', async () => {

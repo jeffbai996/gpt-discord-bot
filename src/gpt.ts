@@ -21,7 +21,7 @@ import {
   respondViaCodex,
 } from './codex-chat.ts'
 import { codexFallbackWaitMs } from './codex-fallback.ts'
-import { fetchHistory, formatHistoryForOpenAI } from './history.ts'
+import { fetchHistory, formatHistoryForOpenAI, selectPriorImages, type HistoryMessage } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
@@ -757,6 +757,7 @@ async function handleUserMessage(
   })
 
   let history: Awaited<ReturnType<typeof formatHistoryForOpenAI>> = []
+  let rawHistory: HistoryMessage[] = []
   try {
     if (
       message.channel.type === 0 /* GuildText */ ||
@@ -770,6 +771,7 @@ async function handleUserMessage(
       // cleared conversation truly starts fresh (Jeff 2026-06-27).
       const _cutoff = channelSessions.clearedSince(channelId)
       const rawFiltered = _cutoff ? raw.filter((m: any) => (m.createdTimestamp ?? 0) > _cutoff) : raw
+      rawHistory = rawFiltered
       history = await formatHistoryForOpenAI(rawFiltered, selfId)
       // Observability (Jeff 2026-06-29): empty history = the bot loses context
       // for the turn. Log the counts so a fetch hiccup / over-aggressive cutoff
@@ -784,7 +786,11 @@ async function handleUserMessage(
 
   await applyLifecycle(message, 'received')
 
-  const attachments = [...message.attachments.values()]
+  const uploadedAttachments = [...message.attachments.values()]
+  const carriedImages = uploadedAttachments.length === 0
+    ? selectPriorImages(rawHistory, userId, message.reference?.messageId)
+    : []
+  const attachments = uploadedAttachments.length > 0 ? uploadedAttachments : carriedImages
   let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []
   let imagePaths: string[] = []
   let temporaryResultFiles: string[] = []
@@ -796,6 +802,11 @@ async function handleUserMessage(
       imageParts = processed.imageParts
       imagePaths = processed.imagePaths
       extraText = processed.text
+      if (carriedImages.length > 0) {
+        const names = carriedImages.map(att => att.name).join(', ')
+        extraText = `[Reused image from prior Discord message: ${names}]`
+          + (extraText ? `\n\n${extraText}` : '')
+      }
     } catch (e) {
       console.error('attachment processing failed:', e)
     }

@@ -2,11 +2,13 @@ import type { TextChannel, DMChannel, ThreadChannel } from 'discord.js'
 import type OpenAI from 'openai'
 import { selectWithinBudget, defaultCountTokens, type CountTokens } from './token-budget.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
+import type { AttachmentInput } from './attachments.ts'
 
-interface HistoryAttachment {
+export interface HistoryAttachment {
   name: string
   url: string
   mimeType: string | null
+  size: number
 }
 
 export interface HistoryMessage {
@@ -65,12 +67,52 @@ export async function fetchHistory(
       attachments: [...m.attachments.values()].map(a => ({
         name: a.name,
         url: a.url,
-        mimeType: a.contentType
+        mimeType: a.contentType,
+        size: a.size,
       }))
     })
   }
   // Discord returns newest-first; reverse to chronological order.
   return arr.reverse()
+}
+
+function isImageAttachment(att: HistoryAttachment): boolean {
+  if (att.mimeType?.split(';', 1)[0].trim().toLowerCase().startsWith('image/')) return true
+  return /\.(?:gif|jpe?g|png|webp)$/i.test(att.name)
+}
+
+const IMAGE_CARRYOVER_MS = 60 * 60_000
+
+/**
+ * Recover image bytes Discord still owns when a follow-up turn has no upload.
+ *
+ * A direct reply explicitly targets that message, even if another user posted
+ * it or it is older. Otherwise the current author's newest image stays live
+ * for an hour, which covers multi-turn visual work without making an old
+ * screenshot haunt the channel indefinitely.
+ */
+export function selectPriorImages(
+  messages: HistoryMessage[],
+  authorId: string,
+  referencedMessageId?: string | null,
+  now: number = Date.now(),
+): AttachmentInput[] {
+  const source = referencedMessageId
+    ? messages.find(m => m.id === referencedMessageId)
+    : messages.findLast(m =>
+        m.authorId === authorId
+        && now - m.createdTimestamp <= IMAGE_CARRYOVER_MS
+        && m.attachments.some(isImageAttachment))
+  if (!source) return []
+
+  return source.attachments
+    .filter(isImageAttachment)
+    .map(att => ({
+      name: att.name,
+      url: att.url,
+      contentType: att.mimeType,
+      size: att.size,
+    }))
 }
 
 function describeAttachment(att: HistoryAttachment): string {
