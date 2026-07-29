@@ -11,9 +11,9 @@ import {
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('fills the Claude trace width without overrunning one line', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 80)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 76)
+test('keeps six cells of Discord fence headroom', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 74)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 70)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {
