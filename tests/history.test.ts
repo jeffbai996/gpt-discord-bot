@@ -205,7 +205,10 @@ test('selectPriorImages: does not attach a recent image to an unrelated text tur
     botMsg('answer', 'new answer'),
   ]
 
-  assert.deepEqual(selectPriorImages(msgs, 'u-alice', null, 'can you fix it?', 2_000), [])
+  assert.deepEqual(
+    selectPriorImages(msgs, 'u-alice', null, 'the attachment emoji flashed on this text-only turn', 2_000),
+    [],
+  )
 })
 
 test('selectPriorImages: keeps a recent image available across several turns when named', () => {

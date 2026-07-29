@@ -82,7 +82,7 @@ function isImageAttachment(att: HistoryAttachment): boolean {
 }
 
 const IMAGE_CARRYOVER_MS = 60 * 60_000
-const IMAGE_REFERENCE_RE = /\b(?:attachment|gif|image|jpeg|jpg|photo|pic|picture|png|screenshot|upload|webp)s?\b|(?:图片|图像|照片|截图|附件)/
+const IMAGE_REFERENCE_RE = /\b(?:gif|image|jpeg|jpg|photo|pic|picture|png|screenshot|webp)s?\b|(?:图片|图像|照片|截图)/
 
 /**
  * Recover image bytes Discord still owns when a follow-up turn has no upload.
