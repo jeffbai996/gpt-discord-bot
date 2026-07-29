@@ -12,14 +12,14 @@ import {
 } from '../src/tool-trace.ts'
 
 test('matches the Claude trace fence and reserves its output prefix', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 84)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 81)
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 80)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 76)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {
-  const line = truncateDisplayWidth('a'.repeat(79) + '❌中文', 84)
-  assert.equal(displayWidth(line), 84)
-  assert.equal(line, 'a'.repeat(79) + '❌中…')
+  const line = truncateDisplayWidth('a'.repeat(75) + '❌中文', 80)
+  assert.equal(displayWidth(line), 80)
+  assert.equal(line, 'a'.repeat(75) + '❌中…')
 })
 
 test('formats diff line numbers in the same column for every marker', () => {
