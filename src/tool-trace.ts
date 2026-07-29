@@ -1,6 +1,6 @@
-// Match the live Claude hook's 80-cell Discord trace fence. Result payloads
+// Match the settled Claude hook's 79-cell Discord trace fence. Result payloads
 // start after the rendered ` ⎿ ` prefix, leaving 76 usable cells.
-export const DEFAULT_TOOL_CALL_WIDTH = 80
+export const DEFAULT_TOOL_CALL_WIDTH = 79
 export const DEFAULT_TOOL_OUTPUT_WIDTH = 76
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
