@@ -44,10 +44,10 @@ test('turn age alone never triggers a heartbeat during active work', () => {
   assert.equal(shouldRenderHeartbeat(600_000, 5_000, 60_000), false)
 })
 
-test('renders heartbeat status as one compact inline row with one-cell side padding', () => {
+test('renders heartbeat status in the same small gray style as token counters', () => {
   assert.equal(
     formatHeartbeatFooter(33_000, 4_000, 'cogitating', '✶'),
-    '` ✶ still cogitating · 33s · active 4s ago `',
+    '-# ` ✶ still cogitating · 33s · active 4s ago `',
   )
 })
 
@@ -157,7 +157,7 @@ test('keeps the inactivity bar alongside the self-updating brain slot', () => {
   const rendered = formatLiveWorkMessage({
     effortLabel: 'thinking with high effort',
     headline: latestReasoningHeadline('Old line\nNew line'),
-    footer: '` ✶ still cogitating · 1m 3s · active 1m 0s ago `',
+    footer: '-# ` ✶ still cogitating · 1m 3s · active 1m 0s ago `',
   })
 
   assert.equal(rendered.match(/🧠/g)?.length, 1)

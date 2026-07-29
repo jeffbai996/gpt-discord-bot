@@ -34,3 +34,18 @@ export function liveProgressDwellMs(
     Math.max(MIN_PROGRESS_DWELL_MS, words * READING_MS_PER_WORD),
   )
 }
+
+export function advanceLiveProgressDwell(input: {
+  text: string
+  lastText: string
+  renderedAt: number
+  holdUntil: number
+}): { lastText: string; holdUntil: number } {
+  if (input.text === input.lastText) {
+    return { lastText: input.lastText, holdUntil: input.holdUntil }
+  }
+  return {
+    lastText: input.text,
+    holdUntil: input.renderedAt + liveProgressDwellMs(input.text),
+  }
+}

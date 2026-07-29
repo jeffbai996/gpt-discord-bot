@@ -74,7 +74,7 @@ import {
   shouldRenderHeartbeat,
 } from './live-ui.ts'
 import {
-  liveProgressDwellMs,
+  advanceLiveProgressDwell,
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
   shouldLingerLiveEnd,
@@ -840,6 +840,7 @@ async function handleUserMessage(
   let liveRenderDirty = false
   let lastLiveRenderAt = 0
   let liveProgressHoldUntil = 0
+  let lastRenderedProgressText = ''
   let lastProgressText = ''
   let liveHeadline = ''
   const liveReasoningTrace: string[] = []
@@ -992,7 +993,14 @@ async function handleUserMessage(
       if (display === lastEditedText || liveUiClosed) return
       lastEditedText = display
       lastLiveRenderAt = Date.now()
-      liveProgressHoldUntil = lastLiveRenderAt + liveProgressDwellMs(liveDetail)
+      const dwell = advanceLiveProgressDwell({
+        text: liveDetail,
+        lastText: lastRenderedProgressText,
+        renderedAt: lastLiveRenderAt,
+        holdUntil: liveProgressHoldUntil,
+      })
+      lastRenderedProgressText = dwell.lastText
+      liveProgressHoldUntil = dwell.holdUntil
       const target = workMessage
       if (!await awaitBounded(target.edit(display)) && workMessage === target) {
         abandonWedgedPlaceholder()
@@ -1223,7 +1231,13 @@ async function handleUserMessage(
       // A model can be healthy but silent between public commentary events. Keep
       // proof-of-life visible independently of the model's willingness to narrate.
       // The footer and top spinner are composed by the same render owner.
-      if (!shouldRenderHeartbeat(event.elapsedMs, event.idleMs, HEARTBEAT_DELAY_MS)) return
+      if (!shouldRenderHeartbeat(event.elapsedMs, event.idleMs, HEARTBEAT_DELAY_MS)) {
+        if (liveFooter) {
+          liveFooter = ''
+          queueLiveRender()
+        }
+        return
+      }
       const initialStatus = `💭 ${effortLabel}`
       const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
       const visual = heartbeatVisual(heartbeatFrame, heartbeatVerb)
