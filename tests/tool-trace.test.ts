@@ -11,9 +11,9 @@ import {
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('matches the Claude trace fence and reserves its output prefix', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 84)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 81)
+test('fits GPT trace rows inside Discord with output-prefix headroom', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 81)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 74)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {
