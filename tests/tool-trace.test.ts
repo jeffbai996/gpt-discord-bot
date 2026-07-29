@@ -11,15 +11,15 @@ import {
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
 
-test('uses the verified call and output row widths', () => {
-  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 79)
-  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 70)
+test('matches the Claude trace fence and reserves its output prefix', () => {
+  assert.equal(DEFAULT_TOOL_CALL_WIDTH, 84)
+  assert.equal(DEFAULT_TOOL_OUTPUT_WIDTH, 81)
 })
 
 test('caps emoji and CJK by rendered columns without splitting graphemes', () => {
-  const line = truncateDisplayWidth('a'.repeat(74) + '❌中文', 79)
-  assert.equal(displayWidth(line), 79)
-  assert.equal(line, 'a'.repeat(74) + '❌中…')
+  const line = truncateDisplayWidth('a'.repeat(79) + '❌中文', 84)
+  assert.equal(displayWidth(line), 84)
+  assert.equal(line, 'a'.repeat(79) + '❌中…')
 })
 
 test('formats diff line numbers in the same column for every marker', () => {
@@ -41,28 +41,28 @@ test('formats diff line numbers in the same column for every marker', () => {
 test('puts the result line count at the right edge of the preview row', () => {
   const line = formatResultTraceLine('alpha', 12, 20)
 
-  assert.equal(line, ' ⎿ alpha     [12 lines]')
-  assert.equal(line.length, 23)
+  assert.equal(line, '⎿ alpha     [12 lines]')
+  assert.equal(line.length, 22)
 })
 
 test('trims the preview instead of widening the result row', () => {
   const line = formatResultTraceLine('abcdefghijklmnopqrstuvwxyz', 12, 20)
 
-  assert.equal(line, ' ⎿ abcdefgh… [12 lines]')
-  assert.equal(line.length, 23)
+  assert.equal(line, '⎿ abcdefgh… [12 lines]')
+  assert.equal(line.length, 22)
 })
 
 test('aligns result counts by rendered width for wide preview text', () => {
   const line = formatResultTraceLine('中文', 12, 20)
 
-  assert.equal(line, ' ⎿ 中文      [12 lines]')
-  assert.equal(displayWidth(line), 23)
+  assert.equal(line, '⎿ 中文      [12 lines]')
+  assert.equal(displayWidth(line), 22)
 })
 
 test('moves single-line result markers right without adding a count', () => {
   const line = formatResultTraceLine('alpha', 1, 20)
 
-  assert.equal(line, ' ⎿ alpha')
+  assert.equal(line, '⎿ alpha')
 })
 
 test('trace failsafe cannot expire before a live turn can finish', () => {
