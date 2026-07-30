@@ -14,8 +14,8 @@ test('usage counter aligns telemetry in two equal-width inline-code pills', () =
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑  66,889    output ↓ 5,169  ◷ 145.8 s `',
-    '-# ` cache ↑ 958,376 reasoning ↓ 1,000  » 35.5 t/s`',
+    '-# ` input ↑  66,889     output ↓ 5,169   ◷ 145.8 s `',
+    '-# ` cache ↑ 958,376  reasoning ↓ 1,000   » 35.5 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -34,8 +34,8 @@ test('usage counter blanks zero reasoning while preserving aligned columns', () 
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑ 2,469,135    output ↓    19  ◷ 19.0 s  `',
-    '-# ` cache ↑ 9,876,543                    »  1.0 t/s`',
+    '-# ` input ↑ 2,469,135     output ↓    19   ◷ 19.0 s  `',
+    '-# ` cache ↑ 9,876,543                      »  1.0 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -55,8 +55,8 @@ test('usage counter blanks zero cache while preserving aligned columns', () => {
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑  37,219    output ↓   335  ◷ 25.2 s  `',
-    '-# `                 reasoning ↓   274  » 13.3 t/s`',
+    '-# ` input ↑  37,219     output ↓   335   ◷ 25.2 s  `',
+    '-# `                  reasoning ↓   274   » 13.3 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -73,7 +73,7 @@ test('usage counter drops the second row when cache and reasoning are zero', () 
     reasoningTokens: 0,
   }, 12_340)
 
-  assert.equal(footer, '\n\n-# ` input ↑     100    output ↓    20  ◷ 12.3 s `')
+  assert.equal(footer, '\n\n-# ` input ↑     100     output ↓    20   ◷ 12.3 s `')
 })
 
 test('usage counter shows duration without a wall label', () => {
