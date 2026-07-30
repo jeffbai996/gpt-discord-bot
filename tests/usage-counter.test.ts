@@ -14,8 +14,28 @@ test('usage counter aligns token details and throughput in one box', () => {
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑  66,889         output ↓ 5,169      ◷ 145.8 s',
-    ' cache ↑ 958,376      reasoning ↓ 1,000      »  35.5 t/s `',
+    '```',
+    ' input ↑  66,889        output ↓ 5,169     ◷ 145.8 s',
+    ' cache ↑ 958,376     reasoning ↓ 1,000     »  35.5 t/s',
+    '```',
+  ].join('\n'))
+})
+
+test('usage counter keeps columns aligned for million-token cache values', () => {
+  const footer = formatUsageCounter('both', {
+    inputTokens: 12_345_678,
+    outputTokens: 19,
+    cachedInputTokens: 9_876_543,
+    reasoningTokens: 0,
+  }, 19_000)
+
+  assert.equal(footer, [
+    '',
+    '',
+    '```',
+    ' input ↑ 2,469,135        output ↓    19     ◷ 19.0 s',
+    ' cache ↑ 9,876,543     reasoning ↓     0     »   1.0 t/s',
+    '```',
   ].join('\n'))
 })
 
@@ -28,6 +48,8 @@ test('usage counter shows duration without a wall label', () => {
   }, 12_340)
 
   assert.match(footer, /◷ 12\.3 s/)
+  assert.match(footer, /-# ` input ↑/)
+  assert.doesNotMatch(footer, /```/)
   assert.doesNotMatch(footer, /wall/)
 })
 
