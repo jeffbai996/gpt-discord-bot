@@ -95,6 +95,7 @@ function failureActions(messageId: string) {
     new ButtonBuilder().setCustomId(`gpt_retry:${messageId}`).setLabel('Retry').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId(`gpt_resume:${messageId}`).setLabel('Resume').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`gpt_error:${messageId}`).setLabel('Show error').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`gpt_switch:${messageId}`).setLabel('Switch engine').setStyle(ButtonStyle.Secondary),
   )
 }
 
@@ -573,6 +574,10 @@ client.on('interactionCreate', async interaction => {
       return
     }
     await interaction.deferUpdate()
+    if (action === 'gpt_switch') {
+      const current = access.channelFlags(interaction.channelId!).engine
+      await access.setChannelFlags(interaction.channelId!, { engine: current === 'codex' ? 'api' : 'codex' })
+    }
     const resume = action === 'gpt_resume'
     const content = resume
       ? `${failed.source.content}\n\n[Resume the interrupted work from the last safe boundary. Reuse the existing Codex session and do not restart completed steps.]`
