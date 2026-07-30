@@ -26,5 +26,8 @@ export function formatUsageCounter(
   if (mode === 'token') return `\n\n-# \`${top} \``
 
   const bottom = ` cache ↑ ${right(usage.cachedInputTokens, inputWidth)}     reasoning ↓ ${right(usage.reasoningTokens, outputWidth)}     » ${rate.toFixed(1).padStart(5)} t/s`
-  return `\n\n\`\`\`\n${top}\n${bottom}\n\`\`\``
+  // Discord cannot make a multiline inline-code pill. Render two stacked pills
+  // and pad the shorter row inside its backticks so their boxes are equal-width.
+  const rowWidth = Math.max(top.length, bottom.length)
+  return `\n\n-# \`${top.padEnd(rowWidth)}\`\n-# \`${bottom.padEnd(rowWidth)}\``
 }
