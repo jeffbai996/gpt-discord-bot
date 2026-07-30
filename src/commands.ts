@@ -246,14 +246,9 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('mention')
-    .setDescription('Set or show mention gating')
-    .addStringOption(o => o
-      .setName('value').setDescription('on | off').setRequired(true)
-      .addChoices(
-        { name: 'on — only respond when @-mentioned', value: 'on' },
-        { name: 'off — respond to all messages', value: 'off' },
-      )
-    )
+    // Arg-less TOGGLE: the setting is binary, so forcing a menu pick is a
+    // wasted tap — read the current value and flip it (Jeff 2026-07-29).
+    .setDescription('Toggle mention gating for this channel')
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
 
@@ -585,17 +580,17 @@ export async function executeGptCommand(
     }
 
     if (subcommand === 'mention') {
-      const value = interaction.options.getString('value', true).trim().toLowerCase()
+      // No 'value' read here any more — the option is gone, and
+      // getString('value', true) THROWS on a missing required option, so
+      // leaving it would break /mention at runtime while typechecking clean.
       const channel = interaction.options.getChannel('channel') ?? interaction.channel
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved (run from inside a channel or pass the channel arg).', ephemeral: true })
       }
-      if (!['on', 'off'].includes(value)) {
-        return interaction.reply({ content: `❌ \`mention\` must be on | off (got \`${value}\`)`, ephemeral: true })
-      }
       try {
-        const previous = access.channelFlags(channel.id).requireMention ? 'yes' : 'no'
-        const updated = await access.setChannelFlags(channel.id, { requireMention: value === 'on' })
+        const wasOn = !!access.channelFlags(channel.id).requireMention
+        const previous = wasOn ? 'yes' : 'no'
+        const updated = await access.setChannelFlags(channel.id, { requireMention: !wasOn })
         return interaction.reply({ content: `${fmtSettingChange('require @', updated.requireMention ? 'yes' : 'no', previous)}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })
       } catch (e: any) {
         return interaction.reply({ content: `❌ ${e.message}`, ephemeral: true })
