@@ -36,6 +36,7 @@ import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { channelSessions } from './channel-sessions.ts'
 import { formatUsageCounter } from './usage-counter.ts'
+import { buildCompletionReceipt } from './completion-receipt.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
 import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
@@ -1461,7 +1462,9 @@ async function handleUserMessage(
     // literal '#### text'. Convert heading lines to bold and swallow the blank
     // line after them so `**Heading**` sits directly above its body.
     const replyBody = closeDanglingInlineCode((result.reply ?? '').trim())
-    const body = stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
+    const receipt = buildCompletionReceipt(result.toolCalls)
+    const receiptText = receipt ? `\n\n${receipt.text}` : ''
+    const body = stripToolTraceCard(headingsToBold(replyBody)) + receiptText + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim() && !result.files?.length) {
       await applyLifecycle(message, 'silenced')
