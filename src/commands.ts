@@ -8,6 +8,7 @@ import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWin
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
 import { PLAN_MODE_ACK, type PlanModeStore } from './plan-mode.ts'
+import { presetPatch, type ChannelPreset } from './presets.ts'
 
 // Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -186,6 +187,19 @@ export const gptCommand = new SlashCommandBuilder()
         { name: 'max - deepest, slowest', value: 'max' },
       )
     )
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
+    .setName('preset')
+    .setDescription('Apply a channel UI preset')
+    .addStringOption(o => o
+      .setName('value').setDescription('quiet | normal | dev | deep').setRequired(true)
+      .addChoices(
+        { name: 'Quiet — answer only', value: 'quiet' },
+        { name: 'Normal — live thought, collapsed trace', value: 'normal' },
+        { name: 'Dev — persistent trace and telemetry', value: 'dev' },
+        { name: 'Deep — max-effort Codex with full trace', value: 'deep' },
+      ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
@@ -516,6 +530,19 @@ export async function executeGptCommand(
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
+    }
+
+    if (subcommand === 'preset') {
+      const value = interaction.options.getString('value', true) as ChannelPreset
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: 'No channel resolved.', ephemeral: true })
+      }
+      await access.setChannelFlags(channel.id, presetPatch(value))
+      return interaction.reply({
+        content: `✅ preset → \`${value}\`\n\n${settingsCard(access, channel.id)}`,
+        ephemeral: true,
+      })
     }
 
     if (subcommand === 'counter') {

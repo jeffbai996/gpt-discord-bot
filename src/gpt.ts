@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
 import path from 'path'
 import os from 'os'
 import fs from 'fs'
@@ -25,6 +25,7 @@ import {
 import { codexFallbackWaitMs } from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI, selectPriorImages, type HistoryMessage } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
+import { formatAttachmentChip } from './attachment-chip.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
@@ -36,7 +37,6 @@ import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { channelSessions } from './channel-sessions.ts'
 import { formatUsageCounter } from './usage-counter.ts'
-import { buildCompletionReceipt } from './completion-receipt.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
 import { MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
@@ -87,6 +87,16 @@ import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 dotenv.config({ path: path.join(STATE_DIR, '.env') })
+
+const failedTurns = new Map<string, { source: Message }>()
+
+function failureActions(messageId: string) {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`gpt_retry:${messageId}`).setLabel('Retry').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`gpt_resume:${messageId}`).setLabel('Resume').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`gpt_error:${messageId}`).setLabel('Show error').setStyle(ButtonStyle.Secondary),
+  )
+}
 
 function isBadReplyReference(err: unknown): boolean {
   const e = err as any
@@ -551,6 +561,25 @@ client.once('ready', async () => {
 })
 
 client.on('interactionCreate', async interaction => {
+  if (interaction.isButton() && interaction.customId.startsWith('gpt_')) {
+    const [action, messageId] = interaction.customId.split(':')
+    const failed = failedTurns.get(messageId)
+    if (!failed || !access.isAllowedAndEnabled(interaction.user.id, interaction.channelId ?? '')) {
+      await interaction.reply({ content: 'That failed turn is no longer resumable.', ephemeral: true }).catch(() => {})
+      return
+    }
+    if (action === 'gpt_error') {
+      await interaction.reply({ content: interaction.message.content, ephemeral: true }).catch(() => {})
+      return
+    }
+    await interaction.deferUpdate()
+    const resume = action === 'gpt_resume'
+    const content = resume
+      ? `${failed.source.content}\n\n[Resume the interrupted work from the last safe boundary. Reuse the existing Codex session and do not restart completed steps.]`
+      : undefined
+    await handleUserMessage(failed.source, interaction.message as Message, false, content)
+    return
+  }
   if (!interaction.isChatInputCommand()) return
   if (shutdownGate.isDraining()) {
     await interaction.reply({ content: '⚠️ restarting after the current turn finishes', ephemeral: true }).catch(() => {})
@@ -662,6 +691,7 @@ async function handleUserMessage(
   let imagePaths: string[] = []
   let temporaryResultFiles: string[] = []
   let extraText = ''
+  let attachmentChip = ''
   if (attachments.length > 0) {
     await applyLifecycle(message, 'ingesting')
     try {
@@ -669,6 +699,7 @@ async function handleUserMessage(
       imageParts = processed.imageParts
       imagePaths = processed.imagePaths
       extraText = processed.text
+      attachmentChip = formatAttachmentChip(attachments, processed)
       if (carriedImages.length > 0) {
         const names = carriedImages.map(att => att.name).join(', ')
         extraText = `[Reused image from prior Discord message: ${names}]`
@@ -711,7 +742,7 @@ async function handleUserMessage(
   let lastProgressText = ''
   let liveHeadline = ''
   const liveReasoningTrace: string[] = []
-  let liveDetail = ''
+  let liveDetail = attachmentChip
   let liveFooter = ''
   let spinnerGlyph = '✻'
   let spinnerDots = '…'
@@ -1462,9 +1493,7 @@ async function handleUserMessage(
     // literal '#### text'. Convert heading lines to bold and swallow the blank
     // line after them so `**Heading**` sits directly above its body.
     const replyBody = closeDanglingInlineCode((result.reply ?? '').trim())
-    const receipt = buildCompletionReceipt(result.toolCalls)
-    const receiptText = receipt ? `\n\n${receipt.text}` : ''
-    const body = stripToolTraceCard(headingsToBold(replyBody)) + receiptText + verbose + (verbose ? '\n\u200b' : '')
+    const body = stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim() && !result.files?.length) {
       await applyLifecycle(message, 'silenced')
@@ -1659,8 +1688,17 @@ async function handleUserMessage(
     console.error('respond failed:', e)
     await deleteLiveTrace()
     try {
-      if (workMessage) await workMessage.edit(errMsg)
-      else await replyOrSend(message, errMsg)
+      let errorMessage = workMessage
+      if (errorMessage) {
+        failedTurns.set(errorMessage.id, { source: message })
+        await errorMessage.edit({ content: errMsg, components: [failureActions(errorMessage.id)] })
+      } else {
+        errorMessage = await replyOrSend(message, errMsg)
+        if (errorMessage) {
+          failedTurns.set(errorMessage.id, { source: message })
+          await errorMessage.edit({ content: errMsg, components: [failureActions(errorMessage.id)] })
+        }
+      }
     } catch {}
   } finally {
     await cleanupAttachmentFiles(imagePaths).catch(e => console.error('attachment cleanup failed:', e))

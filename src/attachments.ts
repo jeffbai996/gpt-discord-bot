@@ -114,6 +114,9 @@ export interface ProcessedAttachments {
   imageParts: OpenAI.Chat.Completions.ChatCompletionContentPartImage[]
   imagePaths: string[]
   skipped: SkippedAttachment[]
+  imageNames: string[]
+  transcripts: Array<{ name: string; characters: number }>
+  documents: Array<{ name: string; characters: number }>
 }
 
 export interface AttachmentInput {
@@ -123,7 +126,10 @@ export interface AttachmentInput {
   contentType: string | null
 }
 
-const EMPTY: ProcessedAttachments = { text: '', imageParts: [], imagePaths: [], skipped: [] }
+const EMPTY: ProcessedAttachments = {
+  text: '', imageParts: [], imagePaths: [], skipped: [],
+  imageNames: [], transcripts: [], documents: [],
+}
 
 export async function processAttachments(
   attachments: AttachmentInput[],
@@ -132,7 +138,10 @@ export async function processAttachments(
 ): Promise<ProcessedAttachments> {
   if (attachments.length === 0) return EMPTY
 
-  const result: ProcessedAttachments = { text: '', imageParts: [], imagePaths: [], skipped: [] }
+  const result: ProcessedAttachments = {
+    text: '', imageParts: [], imagePaths: [], skipped: [],
+    imageNames: [], transcripts: [], documents: [],
+  }
   const textBlocks: string[] = []
   let imageDir: string | undefined
 
@@ -160,6 +169,7 @@ export async function processAttachments(
           image_url: { url: `data:${mime};base64,${buf.toString('base64')}` }
         })
         result.imagePaths.push(imagePath)
+        result.imageNames.push(name)
       } catch (e) {
         console.error('image fetch failed for', name, e)
         result.skipped.push({ name, reason: 'download_failed' })
@@ -178,6 +188,7 @@ export async function processAttachments(
           file
         })
         textBlocks.push(`[transcribed audio: ${name}]\n${transcription.text}`)
+        result.transcripts.push({ name, characters: transcription.text.length })
       } catch (e) {
         console.error('transcription failed for', name, e)
         result.skipped.push({ name, reason: 'transcription_failed' })
@@ -191,6 +202,7 @@ export async function processAttachments(
         const buf = await downloadToBuffer(att.url, localExtraction ? MAX_BYTES : TEXT_INLINE_BYTE_CAP)
         const text = localExtraction ? extractLocalText(buf, name) : buf.toString('utf8')
         textBlocks.push(`[attached file: ${name}]\n\`\`\`\n${text}\n\`\`\``)
+        result.documents.push({ name, characters: text.length })
       } catch (e) {
         console.error('text fetch failed for', name, e)
         result.skipped.push({ name, reason: 'download_failed' })
@@ -205,6 +217,7 @@ export async function processAttachments(
         const text = ast.toText().trim().slice(0, DOCUMENT_TEXT_CHAR_CAP)
         if (!text) throw new Error('document contained no extractable text')
         textBlocks.push(`[attached document: ${name}]\n${text}`)
+        result.documents.push({ name, characters: text.length })
       } catch (e) {
         console.error('document parse failed for', name, e)
         result.skipped.push({ name, reason: 'download_failed' })
