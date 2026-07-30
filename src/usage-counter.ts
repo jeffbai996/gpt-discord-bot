@@ -20,7 +20,7 @@ export function formatUsageCounter(
   const seconds = durationMs / 1000
   const rate = seconds > 0 ? usage.outputTokens / seconds : 0
   const inputWidth = Math.max(7, n(uncachedInput).length, n(usage.cachedInputTokens).length)
-  const outputWidth = Math.max(5, n(usage.outputTokens).length, n(usage.reasoningTokens).length)
+  const outputWidth = Math.max(4, n(usage.outputTokens).length, n(usage.reasoningTokens).length)
   const right = (value: number, width: number) => n(value).padStart(width)
   const firstTop = ` input ↑ ${right(uncachedInput, inputWidth)}`
   const firstBottom = usage.cachedInputTokens > 0
