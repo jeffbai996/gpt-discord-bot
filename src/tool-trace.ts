@@ -2,6 +2,9 @@
 // start after the rendered ` ⎿ ` prefix, leaving 76 usable cells.
 export const DEFAULT_TOOL_CALL_WIDTH = 79
 export const DEFAULT_TOOL_OUTPUT_WIDTH = 76
+const TRACE_BODY_CHAR_BUDGET = 1800
+const MEGA_LINE_MAX = 300
+const SECRET_RE = /[A-Za-z0-9_\-]{32,256}/g
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const WIDE_RE = /\p{Extended_Pictographic}|[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u
@@ -26,6 +29,114 @@ export function truncateDisplayWidth(value: string, maxWidth: number): string {
     width += next
   }
   return out + '…'
+}
+
+export type TraceDisplayMode = 'off' | 'on' | 'live' | 'collapse'
+
+function padTraceLine(line: string): string {
+  if (!line) return line
+  const first = line[0]
+  if (first === '+' || first === '-' || first === '!' || first === '@') {
+    return line.length > 1 && line[1] !== ' '
+      ? line[0] + ' ' + line.slice(1)
+      : line
+  }
+  return ' ' + line
+}
+
+function lineCost(lines: string[]): number {
+  return lines.reduce((total, line, index) => total + line.length + (index ? 1 : 0), 0)
+}
+
+function splitTraceBlocks(lines: string[]): string[][] {
+  const blocks: string[][] = []
+  let block: string[] = []
+  for (const line of lines) {
+    if (/^[+-] ● /.test(line) && block.length) {
+      blocks.push(block)
+      block = []
+    }
+    block.push(line)
+  }
+  if (block.length) blocks.push(block)
+  return blocks.length ? blocks : [['']]
+}
+
+function paginateTraceBlocks(blocks: string[][]): string[][] {
+  const pages: string[][] = []
+  let page: string[] = []
+  const pushPage = () => {
+    if (!page.length) return
+    pages.push(page)
+    page = []
+  }
+
+  for (const block of blocks) {
+    const separator = page.length ? 1 : 0
+    if (page.length && lineCost(page) + separator + lineCost(block) > TRACE_BODY_CHAR_BUDGET) {
+      pushPage()
+    }
+    if (lineCost(block) <= TRACE_BODY_CHAR_BUDGET) {
+      page.push(...block)
+      continue
+    }
+    for (const line of block) {
+      const lineSeparator = page.length ? 1 : 0
+      if (page.length && lineCost(page) + lineSeparator + line.length > TRACE_BODY_CHAR_BUDGET) {
+        pushPage()
+      }
+      page.push(line)
+    }
+  }
+  pushPage()
+  return pages.length ? pages : [['']]
+}
+
+function rollingTracePage(blocks: string[][]): string[] {
+  const page: string[] = []
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]
+    const separator = page.length ? 1 : 0
+    if (lineCost(block) + separator + lineCost(page) <= TRACE_BODY_CHAR_BUDGET) {
+      page.unshift(...block)
+      continue
+    }
+    if (!page.length) {
+      const header = block[0]
+      const tail: string[] = []
+      for (let j = block.length - 1; j >= 1; j--) {
+        const candidate = [header, '… earlier rows omitted', block[j], ...tail]
+        if (lineCost(candidate) > TRACE_BODY_CHAR_BUDGET) break
+        tail.unshift(block[j])
+      }
+      page.push(header, '… earlier rows omitted', ...tail)
+    }
+    break
+  }
+  return page.length ? page : ['']
+}
+
+export function renderTraceCards(
+  rawLines: string[],
+  mode: TraceDisplayMode,
+): string[] {
+  if (mode === 'off') return []
+  const lines = rawLines.map((line) => {
+    const capped = line.length > MEGA_LINE_MAX
+      ? line.slice(0, MEGA_LINE_MAX - 1) + '…'
+      : line
+    return truncateDisplayWidth(padTraceLine(capped), DEFAULT_TOOL_CALL_WIDTH)
+  })
+  const blocks = splitTraceBlocks(lines)
+  const pages = mode === 'live'
+    ? [rollingTracePage(blocks)]
+    : paginateTraceBlocks(blocks)
+
+  return pages.map((page, index) => {
+    const body = page.join('\n').replace(SECRET_RE, '<REDACTED>')
+    const header = index === 0 ? '🔧 **Tool trace**\n' : ''
+    return `${header}\`\`\`diff\n${body}\n\`\`\``
+  })
 }
 
 export function formatUnifiedDiffTrace(

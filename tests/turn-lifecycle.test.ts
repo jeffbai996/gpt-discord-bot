@@ -69,6 +69,7 @@ test('live narration is reposted beneath the complete tool trace stack', async (
   assert.match(rehome, /traceChannel\.send\(content\)/)
   assert.match(rehome, /previous\.delete\(\)/)
   assert.match(flush, /await rehomeLiveWorkBelowTrace\(traceChannel\)/)
+  assert.match(flush, /liveTraceMsgs\[i\]\.content !== cards\[i\]/)
   assert.ok(
     flush.indexOf('await rehomeLiveWorkBelowTrace(traceChannel)')
       > flush.indexOf('liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)'),
@@ -78,6 +79,13 @@ test('live narration is reposted beneath the complete tool trace stack', async (
 test('collapsed earlier-call summary is not styled as a tool command', async () => {
   const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
 
-  assert.match(source, /if \(dropped\) lines\.push\(`…\(\+\$\{dropped\} earlier call/)
-  assert.doesNotMatch(source, /lines\.push\(`\+ ● …\(\+\$\{dropped\} earlier call/)
+  assert.doesNotMatch(source, /MAX_TRACE_CALLS|MAX_DIFF_BODY_LINES/)
+  assert.match(source, /renderTraceCards\(buildTraceLines\(liveToolRows\), flags\.trace\)/)
+})
+
+test('both rolling-live and full-collapse traces are transient', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /const transientTrace = flags\.trace === 'live' \|\| flags\.trace === 'collapse'/)
+  assert.match(source, /if \(transientTrace && liveTraceMsgs\.length\)/)
 })

@@ -5,12 +5,13 @@ import { DEFAULT_CODEX_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.t
 
 export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type ThinkingMode = 'off' | 'on' | 'live' | 'collapse'
+export type TraceMode = 'off' | 'on' | 'live' | 'collapse'
 
 export interface ChannelConfig {
   enabled: boolean
   requireMention: boolean
   reasoning?: ReasoningEffort
-  trace?: 'off' | 'on' | 'collapse'      // default collapse — transient diff-style tool trace
+  trace?: TraceMode      // default collapse — full transient diff-style tool trace
   thinking?: ThinkingMode                 // default live — latest reasoning headline
   engine?: 'codex' | 'api'  // default codex - chat engine (codex sub vs metered api)
   codexModel?: CodexModel  // default gpt-5.6-sol — codex engine model only
@@ -23,7 +24,7 @@ export interface ChannelFlags {
   // API model. /gpt model sets codexModel (the codex engine). (Jeff 2026-06-29:
   // removed the orphaned `model` field that had no slash setter.)
   reasoning: ReasoningEffort
-  trace: 'off' | 'on' | 'collapse'
+  trace: TraceMode
   thinking: ThinkingMode
   engine: 'codex' | 'api'
   codexModel: CodexModel
@@ -51,11 +52,11 @@ const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xh
 
 // Trace and thinking used to be booleans. Old saved configs may still hold one,
 // so map false->off and true->on rather than letting legacy false read as "on".
-type TriState = 'off' | 'on' | 'collapse'
+type TriState = TraceMode
 function normTri(v: unknown): TriState {
   if (v === true) return 'on'
   if (v === false || v == null) return 'off'
-  return (v === 'on' || v === 'collapse') ? v : 'off'
+  return (v === 'on' || v === 'live' || v === 'collapse') ? v : 'off'
 }
 
 function normThinking(v: unknown): ThinkingMode {
@@ -78,7 +79,7 @@ export type CodexModel = OpenAIModel
 
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
-  trace: 'collapse' as 'off' | 'on' | 'collapse',
+  trace: 'collapse' as TraceMode,
   thinking: 'live' as ThinkingMode,
   engine: 'codex' as 'codex' | 'api',
   codexModel: DEFAULT_CODEX_MODEL as CodexModel,
@@ -196,6 +197,9 @@ export class AccessManager {
     }
     if (patch.reasoning !== undefined && !VALID_REASONING.includes(patch.reasoning)) {
       throw new Error(`invalid reasoning effort "${patch.reasoning}" — must be one of: ${VALID_REASONING.join(', ')}`)
+    }
+    if (patch.trace !== undefined && !['off', 'on', 'live', 'collapse'].includes(patch.trace)) {
+      throw new Error(`invalid trace "${patch.trace}" — must be one of: off, on, live, collapse`)
     }
     if (patch.codexModel !== undefined && !(CODEX_MODELS as readonly string[]).includes(patch.codexModel)) {
       throw new Error(`invalid codex model "${patch.codexModel}" — must be one of: ${CODEX_MODELS.join(', ')}`)

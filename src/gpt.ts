@@ -63,6 +63,7 @@ import {
   formatUnifiedDiffTrace,
   truncateDisplayWidth,
   formatResultTraceLine,
+  renderTraceCards,
   resolveTraceFailsafeMs,
 } from './tool-trace.ts'
 import {
@@ -158,23 +159,6 @@ function argDigest(args: Record<string, unknown>, maxLen = 80): string {
 // mcp__server__ns__tool -> tool (last segment).
 // Codex unified diff -> Claude-style: a [+adds, -dels] badge + the changed lines
 // (red '-' / green '+', context plain), minus the git '@@' / file-header noise.
-const SECRET_RE = /[A-Za-z0-9_\-]{32,256}/g
-// Redact credential-looking runs before a trace hits Discord — gpt can edit
-// /home/user (incl. .env / auth.json), so an edit diff could otherwise leak a key.
-function redactSecrets(text: string): string { return text.replace(SECRET_RE, '<REDACTED>') }
-
-const MEGA_LINE_MAX = 300
-const TRACE_BODY_CHAR_BUDGET = 1800
-// Only the most recent tool calls are worth showing — a turn with 30 shell reads
-// used to spill into 15 trace cards, and editing all of them every stream tick
-// 429'd/crashed the bot (Jeff 2026-07-05: "reduce it around 10 cells"). Keep the
-// last N calls (most relevant); a header line owns up to how many were dropped.
-const MAX_TRACE_CALLS = Number(process.env.GPT_MAX_TRACE_CALLS ?? 11)
-// Collapse long edit diffs to a preview like the Claude bots — keep the first N
-// body lines, drop the rest with a "... (K more lines)" marker (Jeff 2026-07-05:
-// "have it in a collapsed view like claude bots"). Matches tool_watcher's cap.
-const MAX_DIFF_BODY_LINES = Number(process.env.GPT_MAX_DIFF_BODY_LINES ?? 12)
-
 // Codex session rollover ceiling (Jeff 2026-06-25). Each channel resumes its
 // persistent Codex session every turn (codex exec resume <id>) so gpt keeps its
 // own prior reasoning/tool context. But Codex counts the WHOLE resumed session
@@ -200,113 +184,6 @@ const CODEX_FALLBACK_MIN_ELAPSED_MS = Number(process.env.GPT_CODEX_FALLBACK_MIN_
 const ROW_W = DEFAULT_TOOL_CALL_WIDTH
 const OUT_W = Number(process.env.GPT_OUT_W ?? DEFAULT_TOOL_OUTPUT_WIDTH)
 
-function capMegaLine(ln: string): string {
-  return ln.length > MEGA_LINE_MAX ? ln.slice(0, MEGA_LINE_MAX - 1) + '…' : ln
-}
-
-// Claude's _tool_message_content padding: a colorizer line (+/-/!/@) keeps its
-// marker at column 0 with ONE space after it; any other line gets a 1-cell left
-// pad. Net: '+x' -> '+ x', ' ctx' -> '  ctx', '⎿ s' -> ' ⎿ s' — content aligns at col 2.
-function padTraceLine(ln: string): string {
-  if (!ln) return ln
-  const f = ln[0]
-  if (f === '+' || f === '-' || f === '!' || f === '@') {
-    return (ln.length > 1 && ln[1] !== ' ') ? ln[0] + ' ' + ln.slice(1) : ln
-  }
-  return ' ' + ln
-}
-
-function isTraceHeaderLine(ln: string): boolean {
-  return /^[+-] ● /.test(ln)
-}
-
-function lineCost(lines: string[]): number {
-  return lines.reduce((n, ln, i) => n + ln.length + (i ? 1 : 0), 0)
-}
-
-function blockCost(page: string[], block: string[]): number {
-  return lineCost(block) + (page.length ? 1 : 0)
-}
-
-function appendTraceBlock(page: string[], block: string[]): void {
-  page.push(...block)
-}
-
-function splitTraceBlocks(rawLines: string[]): string[][] {
-  const blocks: string[][] = []
-  let block: string[] = []
-  for (const ln of rawLines) {
-    if (isTraceHeaderLine(ln) && block.length) {
-      blocks.push(block)
-      block = []
-    }
-    block.push(ln)
-  }
-  if (block.length) blocks.push(block)
-  return blocks.length ? blocks : [['']]
-}
-
-// Assemble fenced trace cards: pad + mega-cap each line, redact secrets, then
-// split into continuation blocks instead of replacing overflow with
-// "... (N more lines)". Tool rows are paged as logical blocks so `⎿ preview`
-// cannot be separated from its `[N lines]` continuation. Keep each card under
-// Discord's 2000-char limit with headroom for headers/fences and message edits.
-function renderTraceCards(rawLines: string[]): string[] {
-  const lines = rawLines.map(l => {
-    const padded = padTraceLine(capMegaLine(l))
-    return truncateDisplayWidth(padded, ROW_W)
-  })
-  const blocks = splitTraceBlocks(lines)
-  const pages: string[][] = []
-  let page: string[] = []
-  let running = 0
-  const pushPage = () => {
-    if (!page.length) return
-    pages.push(page)
-    page = []
-    running = 0
-  }
-  for (const block of blocks) {
-    const cost = blockCost(page, block)
-    if (page.length && running + cost > TRACE_BODY_CHAR_BUDGET) {
-      pushPage()
-    }
-    if (lineCost(block) <= TRACE_BODY_CHAR_BUDGET) {
-      appendTraceBlock(page, block)
-      running = lineCost(page)
-      continue
-    }
-
-    // Oversized diffs still have to fit in Discord messages. Split them only
-    // after giving the trace header its own page context; compact output blocks
-    // never hit this branch.
-    for (const ln of block) {
-      const cost = ln.length + (page.length ? 1 : 0)
-      if (page.length && running + cost > TRACE_BODY_CHAR_BUDGET) {
-        pushPage()
-      }
-      page.push(ln)
-      running += ln.length + (page.length > 1 ? 1 : 0)
-    }
-    if (page.length && running >= TRACE_BODY_CHAR_BUDGET) {
-      pages.push(page)
-      page = []
-      running = 0
-    }
-  }
-  if (page.length) pages.push(page)
-  if (!pages.length) pages.push([''])
-  // Only the first card carries the "Tool trace" header; continuations are bare
-  // fenced diffs (Jeff 2026-07-05: "after the first Tool trace you don't need to
-  // show anything, just paginate into the next code block"). Dropping the N/N
-  // label also stops every continuation re-rendering its "x/y" on each edit tick.
-  return pages.map((p, i) => {
-    const body = redactSecrets(p.join('\n'))
-    const header = i === 0 ? '🔧 **Tool trace**\n' : ''
-    return `${header}\`\`\`diff\n${body}\n\`\`\``
-  })
-}
-
 function headingsToBold(t: string): string {
   const lines = t.split('\n')
   const out: string[] = []
@@ -326,17 +203,7 @@ function headingsToBold(t: string): string {
 // File edits show the [+N, -M] badge and the diff body; other tools keep [Nms].
 function buildTraceLines(toolCalls: ToolCall[]): string[] {
   const lines: string[] = []
-  // Cap at the most recent MAX_TRACE_CALLS (a long turn otherwise sprawls into many
-  // cards that 429 the edit loop). Slice on the chronological list BEFORE reordering
-  // so "recent" means recent in time, then note how many earlier calls were dropped.
-  const dropped = Math.max(0, toolCalls.length - MAX_TRACE_CALLS)
-  const kept = dropped ? toolCalls.slice(-MAX_TRACE_CALLS) : toolCalls
-  if (dropped) lines.push(`…(+${dropped} earlier call${dropped === 1 ? '' : 's'})`)
-  // Edits (with diffs) first: the diff is the payload and must not get starved by a
-  // long list of shell rows below it, which the card's length cap then truncates to
-  // a couple lines (Jeff 2026-06-24). Order within edits / within non-edits preserved.
-  const ordered = [...kept.filter(c => c.diff), ...kept.filter(c => !c.diff)]
-  for (const call of ordered) {
+  for (const call of toolCalls) {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
     const ms = call.durationMs > 0 ? ` [${call.durationMs}ms]` : ''
@@ -349,11 +216,7 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
       // One leading cell here plus renderTraceCard's pad gives ⎿ a 2-cell indent.
       const { badge, body } = formatUnifiedDiffTrace(call.diff)
       lines.push(` ⎿ ${badge}`)
-      // Collapse to a preview so a big edit doesn't wall the card (Claude-bot style).
-      const shown = body.length > MAX_DIFF_BODY_LINES ? body.slice(0, MAX_DIFF_BODY_LINES) : body
-      for (const b of shown) lines.push(b)
-      const moreLines = body.length - shown.length
-      if (moreLines > 0) lines.push(`     … (${moreLines} more line${moreLines === 1 ? '' : 's'})`)
+      for (const row of body) lines.push(row)
     } else if (call.resultPreview) {
       const n = call.resultLines ?? 0
       lines.push(formatResultTraceLine(call.resultPreview, n, OUT_W))
@@ -743,6 +606,7 @@ async function handleUserMessage(
   const userText = contentOverride ?? message.content
   const planArm = plans.consumeArm(channelId, userId)
   const flags = access.channelFlags(channelId)
+  const transientTrace = flags.trace === 'live' || flags.trace === 'collapse'
   // API-engine model is env-driven (DEFAULT_MODEL / GPT_MODEL), not per-channel —
   // matches gemma's API model. The per-channel `model` override was removed
   // 2026-06-29 (it had no slash setter — orphaned). /gpt model sets codexModel.
@@ -1068,7 +932,7 @@ async function handleUserMessage(
   // work, after which later edits targeted already-deleted Discord messages.
   const failsafeArmed = new Set<string>()
   const armTraceFailsafe = (m: Message) => {
-    if (flags.trace !== 'collapse' || failsafeArmed.has(m.id)) return
+    if (!transientTrace || failsafeArmed.has(m.id)) return
     failsafeArmed.add(m.id)
     const ttl = resolveTraceFailsafeMs(
       process.env.GPT_TRACE_FAILSAFE_MS,
@@ -1110,13 +974,17 @@ async function handleUserMessage(
     if (liveTraceClosed || liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
     const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
     liveTracePending = true
-    const cards = renderTraceCards(buildTraceLines(liveToolRows))
+    const cards = renderTraceCards(buildTraceLines(liveToolRows), flags.trace)
     ;(async () => {
       if (liveTraceClosed) return
       let appendedTraceCard = false
       for (let i = 0; i < cards.length; i++) {
         if (liveTraceClosed) return
-        if (liveTraceMsgs[i]) await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
+        if (liveTraceMsgs[i]) {
+          if (liveTraceMsgs[i].content !== cards[i]) {
+            await liveTraceMsgs[i].edit(cards[i]).catch(() => {})
+          }
+        }
         else {
           liveTraceMsgs[i] = await traceChannel.send(cards[i])
           appendedTraceCard = true
@@ -1617,7 +1485,7 @@ async function handleUserMessage(
     const willThinking = flags.thinking !== 'off' && !!result.reasoning?.trim() && message.channel.isSendable()
     const willTrace = flags.trace !== 'off' && result.toolCalls.length > 0 && message.channel.isSendable()
     await settleLiveUi()
-    const collapseMsgs: Message[] = []
+    const transientTraceMsgs: Message[] = []
     const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
     let completedThinking = thoughtLine
     if (willThinking) {
@@ -1632,9 +1500,12 @@ async function handleUserMessage(
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
     if (willTrace && !liveTraceMsgs.length) {
-      const cards = renderTraceCards(buildTraceLines(result.toolCalls))
+      const cards = renderTraceCards(buildTraceLines(result.toolCalls), flags.trace)
       for (const card of cards) {
-        try { const sm = await message.channel.send(card); if (flags.trace === 'collapse') collapseMsgs.push(sm) } catch {}
+        try {
+          const sent = await message.channel.send(card)
+          if (transientTrace) transientTraceMsgs.push(sent)
+        } catch {}
       }
     }
 
@@ -1642,10 +1513,12 @@ async function handleUserMessage(
     // (full names + per-call timings from result.toolCalls).
     if (liveTraceMsgs.length && willTrace && result.toolCalls.length) {
       const lines = buildTraceLines(result.toolCalls)
-      const cards = renderTraceCards(lines)
+      const cards = renderTraceCards(lines, flags.trace)
       for (let i = 0; i < cards.length; i++) {
         if (liveTraceMsgs[i]) {
-          try { await liveTraceMsgs[i].edit(cards[i]) } catch {}
+          if (liveTraceMsgs[i].content !== cards[i]) {
+            try { await liveTraceMsgs[i].edit(cards[i]) } catch {}
+          }
         } else {
           try { liveTraceMsgs[i] = await message.channel.send(cards[i]); armTraceFailsafe(liveTraceMsgs[i]) } catch {}
         }
@@ -1737,12 +1610,13 @@ async function handleUserMessage(
       deferredActions.schedule(client, { channelId: mergedMsg.channelId, messageId: mergedMsg.id, action: 'strip', content: parts[0] ?? '', dueAt: Date.now() + lingerMs })
     }
 
-    // Collapse: keep tool-trace cards up for the configured linger, then delete.
-    const toCollapse: Message[] = [...collapseMsgs]
-    if (flags.trace === 'collapse' && liveTraceMsgs.length) toCollapse.push(...liveTraceMsgs)
-    if (toCollapse.length) {
+    // Both transient modes disappear after the configured linger. Collapse keeps
+    // every page; live keeps one rolling window.
+    const toDelete: Message[] = [...transientTraceMsgs]
+    if (transientTrace && liveTraceMsgs.length) toDelete.push(...liveTraceMsgs)
+    if (toDelete.length) {
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
-      for (const m of toCollapse) deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + lingerMs })
+      for (const m of toDelete) deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + lingerMs })
     }
 
     if (result.finishReason === 'length') {

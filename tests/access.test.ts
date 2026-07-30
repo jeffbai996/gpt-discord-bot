@@ -57,6 +57,16 @@ test('access: unconfigured channels default to live thinking and collapsing trac
   assert.equal(flags.trace, 'collapse')
 })
 
+test('access: live is a valid rolling trace mode', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c1', true, false)
+  await a.setChannelFlags('c1', { trace: 'live' })
+
+  await a.load()
+  assert.equal(a.channelFlags('c1').trace, 'live')
+})
+
 test('access: max is a valid reasoning effort', async () => {
   const a = new AccessManager()
   await a.load()

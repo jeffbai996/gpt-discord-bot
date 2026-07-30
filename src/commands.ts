@@ -221,11 +221,12 @@ export const gptCommand = new SlashCommandBuilder()
     .setName('trace')
     .setDescription('Set or show tool traces')
     .addStringOption(o => o
-      .setName('value').setDescription('off | on | collapse').setRequired(true)
+      .setName('value').setDescription('off | on | live | collapse').setRequired(true)
       .addChoices(
         { name: 'off', value: 'off' },
-        { name: 'on — keep the trace card', value: 'on' },
-        { name: 'collapse — show live, delete after the reply', value: 'collapse' },
+        { name: 'on — keep the full paginated trace', value: 'on' },
+        { name: 'live — one rolling trace window', value: 'live' },
+        { name: 'collapse — full trace, delete after the reply', value: 'collapse' },
       )
     )
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -561,7 +562,7 @@ export async function executeGptCommand(
       }
       const valid = subcommand === 'thinking'
         ? ['off', 'on', 'live', 'collapse']
-        : ['off', 'on', 'collapse']
+        : ['off', 'on', 'live', 'collapse']
       if (!valid.includes(value)) {
         return interaction.reply({ content: `❌ \`${subcommand}\` must be ${valid.join(' | ')} (got \`${value}\`)`, ephemeral: true })
       }
@@ -570,7 +571,7 @@ export async function executeGptCommand(
         const previous = access.channelFlags(channel.id)[subcommand]
         const updated = await access.setChannelFlags(channel.id,
           subcommand === 'trace'
-            ? { trace: tri as 'off' | 'on' | 'collapse' }
+            ? { trace: tri }
             : { thinking: tri })
         const shown = subcommand === 'trace' ? updated.trace : updated.thinking
         return interaction.reply({ content: `${fmtSettingChange(subcommand, String(shown), String(previous))}\n\n${settingsCard(access, channel.id)}`, ephemeral: true })

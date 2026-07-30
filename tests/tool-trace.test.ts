@@ -7,6 +7,7 @@ import {
   formatUnifiedDiffTrace,
   formatResultTraceLine,
   displayWidth,
+  renderTraceCards,
   truncateDisplayWidth,
   resolveTraceFailsafeMs,
 } from '../src/tool-trace.ts'
@@ -72,4 +73,32 @@ test('trace failsafe cannot expire before a live turn can finish', () => {
 
 test('trace failsafe honors a longer explicit cleanup window', () => {
   assert.equal(resolveTraceFailsafeMs('3600000', 45 * 60_000), 60 * 60_000)
+})
+
+test('full traces paginate every row without aggregate truncation', () => {
+  const lines = Array.from(
+    { length: 60 },
+    (_, i) => `+ ● shell(command-${i}-${'x '.repeat(30)})`,
+  )
+  const cards = renderTraceCards(lines, 'collapse')
+
+  assert.ok(cards.length > 1)
+  assert.match(cards[0], /command-0-/)
+  assert.match(cards.at(-1) ?? '', /command-59-/)
+  assert.doesNotMatch(cards.join('\n'), /earlier calls|more lines/)
+  assert.ok(cards.every(card => card.length <= 2000))
+})
+
+test('live traces keep one rolling code-block window with the newest rows', () => {
+  const lines = Array.from(
+    { length: 60 },
+    (_, i) => `+ ● shell(command-${i}-${'x '.repeat(30)})`,
+  )
+  const cards = renderTraceCards(lines, 'live')
+
+  assert.equal(cards.length, 1)
+  assert.match(cards[0], /^🔧 \*\*Tool trace\*\*\n```diff/)
+  assert.match(cards[0], /command-59-/)
+  assert.doesNotMatch(cards[0], /command-0-/)
+  assert.ok(cards[0].length <= 2000)
 })
