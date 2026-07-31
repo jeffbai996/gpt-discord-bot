@@ -25,7 +25,6 @@ import {
 import { codexFallbackWaitMs } from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI, selectPriorImages, type HistoryMessage } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
-import { formatAttachmentChip } from './attachment-chip.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
@@ -711,7 +710,6 @@ async function handleUserMessage(
   let imagePaths: string[] = []
   let temporaryResultFiles: string[] = []
   let extraText = ''
-  let attachmentChip = ''
   if (attachments.length > 0) {
     await applyLifecycle(message, 'ingesting')
     try {
@@ -719,7 +717,6 @@ async function handleUserMessage(
       imageParts = processed.imageParts
       imagePaths = processed.imagePaths
       extraText = processed.text
-      attachmentChip = formatAttachmentChip(attachments, processed)
       if (carriedImages.length > 0) {
         const names = carriedImages.map(att => att.name).join(', ')
         extraText = `[Reused image from prior Discord message: ${names}]`
@@ -762,7 +759,7 @@ async function handleUserMessage(
   let lastProgressText = ''
   let liveHeadline = ''
   const liveReasoningTrace: string[] = []
-  let liveDetail = attachmentChip
+  let liveDetail = ''
   let liveFooter = ''
   let spinnerGlyph = '✻'
   let spinnerDots = '…'
