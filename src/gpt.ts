@@ -1772,6 +1772,17 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
   if (message.author.bot) return
   const release = shutdownGate.enter()
   if (!release) {
+    // Only signal in channels this bot would actually have answered in. The
+    // access gate lives inside handleInboundMessage (below), so reacting here
+    // unconditionally put a ⏳ on messages in channels gpt-bot merely has
+    // read access to — where it is not the responder and the other bots
+    // handle in-flight messages themselves (Jeff 2026-07-31, family channel).
+    const isMention = client.user ? message.mentions.users.has(client.user.id) : false
+    const mine = access.canHandle({
+      channelId: message.channel.id, userId: message.author.id, isMention,
+    })
+    if (!mine) return
+
     restartInbox.defer(message.channel.id, message.id)
     // Say something. A silent drop here is externally indistinguishable from a
     // crashed bot — that is exactly how this surfaced. The message is not lost
