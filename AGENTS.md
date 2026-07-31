@@ -4,9 +4,10 @@ This document provides context for agents working on `gpt-bot`.
 
 ## Project Overview
 
-A standalone Discord bot using Discord.js and the OpenAI API (default
-`gpt-5.6-sol`, with `gpt-5.5`, `gpt-5.6-terra`, and `gpt-5.6-luna` available as
-manual switches per channel). It supports multimodal input and tool use.
+A standalone Discord bot using Discord.js with the Codex CLI as its default
+agentic chat engine. Channels can switch among the supported Codex models or
+use the metered OpenAI API engine; confirmed Codex failures can also fall back
+to the API. It supports multimodal input and tool use.
 
 This file is injected as deep runtime context. Keep it limited to durable
 gpt-specific architecture and operating facts. Voice, people, squad-wide
@@ -18,8 +19,6 @@ duplicated here.
 - **Language/Runtime:** TypeScript + Node.js (via `tsx`).
 - **State Management:** All state (`.env`, `access.json`, `persona.md`, embeddings DB, summaries DB) lives in `~/.gpt/channels/discord/` by default. Override via `GPT_STATE_DIR`.
 - **Bot Persona:** "gpt" — OpenAI/GPT squad bot. The live persona at `~/.gpt/channels/discord/persona.md` owns tone, identity, people, and addressing rules.
-- **Execution discipline:** when Jeff gives a direct implementation instruction, treat it as an order to start work immediately. Do the repo/service work and carry it through patch, verification, restart, commit, and push where applicable instead of replying with only a plan and waiting for another prompt.
-- **Continuity:** do not end an implementation turn with a promise or progress-only message. Continue through the next safe implementation step without waiting for Jeff to say “continue.” Progress updates describe work actively underway; the user-visible final reply reports a completed result or a concrete blocker.
 - **Bot-specific notes:** keep durable gpt runtime behavior here and voice or social behavior in persona files. Do not write bot-specific operating feedback into shared squad memory unless Jeff explicitly asks.
 - **Admin Control:** Discord Slash Commands (`/gpt`) control permissions to avoid manual JSON edits.
 - **Bot-vs-bot loop guard:** the bot ignores all `message.author.bot === true` senders. Sibling bots (e.g. gem) can therefore live in the same channel without triggering each other.
@@ -56,13 +55,3 @@ ssh <deploy-user>@<deploy-host> 'systemctl --user kill -s HUP gpt'
 ```
 
 Logs: `~/.gpt/channels/discord/gpt.log`.
-
-## Future Roadmap
-
-- **Streaming + lifecycle reactions** (v0.4) — surface `👀 received → 🤔 thinking → ✅ replied` and terminal states (`✂️ truncated`, `🛑 blocked`, `⚠️ denied`, `❌ errored`).
-- **Multimodal + DM intent** (v0.5).
-- **ToolRegistry + web_search + fetch_url** (v0.6).
-- **Semantic memory + RAG via sqlite-vss** (v0.7).
-- **Reaction-driven actions** (v0.8) — user reactions on bot replies trigger regenerate / expand / pin / delete / mute / edit.
-- **Summarization scheduler** (v0.9) — persistent rolling per-channel summaries injected into system prompt.
-- **MCP auto-registration** (v0.10) — bridge MCP tool servers (e.g. broker integrations) to OpenAI function-calls.
