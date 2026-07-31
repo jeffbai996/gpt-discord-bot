@@ -3,17 +3,17 @@ type MentionedUser = {
   bot?: boolean
 }
 
-export function isAddressedToAnotherBot(
+export function isAddressedToAnotherUser(
   selfId: string,
   mentionedUsers: Iterable<MentionedUser>
 ): boolean {
   let mentionsSelf = false
-  let mentionsAnotherBot = false
+  let mentionsAnotherUser = false
 
   for (const user of mentionedUsers) {
     if (user.id === selfId) mentionsSelf = true
-    else if (user.bot) mentionsAnotherBot = true
+    else mentionsAnotherUser = true
   }
 
-  return mentionsAnotherBot && !mentionsSelf
+  return mentionsAnotherUser && !mentionsSelf
 }

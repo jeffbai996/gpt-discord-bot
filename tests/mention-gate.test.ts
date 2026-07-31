@@ -1,24 +1,28 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isAddressedToAnotherBot } from '../src/mention-gate.ts'
+import { isAddressedToAnotherUser } from '../src/mention-gate.ts'
 
-describe('isAddressedToAnotherBot', () => {
+describe('isAddressedToAnotherUser', () => {
   test('rejects a message exclusively mentioning another bot', () => {
-    assert.equal(isAddressedToAnotherBot('self', [{ id: 'other', bot: true }]), true)
+    assert.equal(isAddressedToAnotherUser('self', [{ id: 'other', bot: true }]), true)
+  })
+
+  test('rejects a message exclusively mentioning another human', () => {
+    assert.equal(isAddressedToAnotherUser('self', [{ id: 'human', bot: false }]), true)
   })
 
   test('allows a message mentioning this bot', () => {
-    assert.equal(isAddressedToAnotherBot('self', [{ id: 'self', bot: true }]), false)
+    assert.equal(isAddressedToAnotherUser('self', [{ id: 'self', bot: true }]), false)
   })
 
-  test('allows a message mentioning this bot and another bot', () => {
-    assert.equal(isAddressedToAnotherBot('self', [
+  test('allows a message mentioning this bot and another user', () => {
+    assert.equal(isAddressedToAnotherUser('self', [
       { id: 'self', bot: true },
-      { id: 'other', bot: true },
+      { id: 'human', bot: false },
     ]), false)
   })
 
-  test('does not treat a human-only mention as bot addressing', () => {
-    assert.equal(isAddressedToAnotherBot('self', [{ id: 'human', bot: false }]), false)
+  test('allows a message with no user mentions', () => {
+    assert.equal(isAddressedToAnotherUser('self', []), false)
   })
 })
