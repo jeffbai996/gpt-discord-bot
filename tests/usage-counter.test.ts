@@ -34,8 +34,8 @@ test('usage counter blanks zero reasoning while preserving aligned columns', () 
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑ 2,469,135      output ↓   19    ◷ 19.0 s  `',
-    '-# ` cache ↑ 9,876,543                       »  1.0 t/s`',
+    '-# ` input ↑ 2.47m      output ↓   19    ◷ 19.0 s  `',
+    '-# ` cache ↑ 9.88m                       »  1.0 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -76,25 +76,22 @@ test('usage counter drops the second row when cache and reasoning are zero', () 
   assert.equal(footer, '\n\n-# ` input ↑     100      output ↓   20    ◷ 12.3 s `')
 })
 
-test('usage counter expands every numeric column for large values', () => {
+test('usage counter compacts large values before a mobile pill can wrap', () => {
   const footer = formatUsageCounter('both', {
-    inputTokens: 1_222_222_221,
-    outputTokens: 12_345_678,
-    cachedInputTokens: 987_654_321,
-    reasoningTokens: 9_876_543,
-  }, 123_456_789)
+    inputTokens: 5_715_362,
+    outputTokens: 16_642,
+    cachedInputTokens: 5_582_336,
+    reasoningTokens: 4_437,
+  }, 723_800)
 
   const rows = footer.split('\n').slice(2)
-  assert.match(rows[0], /input ↑ 234,567,900/)
-  assert.match(rows[0], /output ↓ 12,345,678/)
-  assert.match(rows[1], /cache ↑ 987,654,321/)
-  assert.match(rows[1], /reasoning ↓  9,876,543/)
+  assert.match(rows[0], /input ↑  133k/)
+  assert.match(rows[0], /output ↓ 16\.6k/)
+  assert.match(rows[1], /cache ↑ 5\.58m/)
+  assert.match(rows[1], /reasoning ↓ 4\.44k/)
   assert.equal(rows[0].length, rows[1].length)
-  assert.equal(
-    rows[0].indexOf('12,345,678') + '12,345,678'.length,
-    rows[1].indexOf('9,876,543') + '9,876,543'.length,
-  )
   assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
+  assert.ok(rows[0].length <= 60)
 })
 
 test('usage counter shows duration without a wall label', () => {
