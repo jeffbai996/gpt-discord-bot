@@ -44,6 +44,7 @@ import { PinnedFactsStore } from './pinned-facts.ts'
 import { PendingPlaceholders } from './pending-placeholders.ts'
 import { RestartInbox } from './restart-inbox.ts'
 import { DeferredActions } from './deferred-actions.ts'
+import { describeFailure, FailedTurnStore, formatFailureDiagnostic } from './failed-turn-store.ts'
 import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
@@ -87,8 +88,6 @@ import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 dotenv.config({ path: path.join(STATE_DIR, '.env') })
-
-const failedTurns = new Map<string, { source: Message }>()
 
 function failureActions(messageId: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -305,6 +304,7 @@ const pendingPlaceholders = new PendingPlaceholders(path.join(STATE_DIR, 'pendin
 const restartInbox = new RestartInbox(path.join(STATE_DIR, 'restart-inbox.json'))
 initGlobalStats(path.join(STATE_DIR, 'global-stats.json'))
 const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
+const failedTurns = new FailedTurnStore(path.join(STATE_DIR, 'failed-turns.json'))
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for metered OpenAI endpoints that have no local equivalent:
@@ -570,7 +570,22 @@ client.on('interactionCreate', async interaction => {
       return
     }
     if (action === 'gpt_error') {
-      await interaction.reply({ content: interaction.message.content, ephemeral: true }).catch(() => {})
+      await interaction.reply({
+        content: formatFailureDiagnostic(failed.diagnostic),
+        ephemeral: true,
+      }).catch(() => {})
+      return
+    }
+    const sourceChannel = await client.channels.fetch(failed.channelId).catch(() => null)
+    const source = sourceChannel?.isTextBased()
+      ? await sourceChannel.messages.fetch(failed.sourceMessageId).catch(() => null)
+      : null
+    if (!source) {
+      failedTurns.delete(messageId)
+      await interaction.reply({
+        content: 'The original message is gone, so this turn cannot be retried.',
+        ephemeral: true,
+      }).catch(() => {})
       return
     }
     await interaction.deferUpdate()
@@ -580,9 +595,9 @@ client.on('interactionCreate', async interaction => {
     }
     const resume = action === 'gpt_resume'
     const content = resume
-      ? `${failed.source.content}\n\n[Resume the interrupted work from the last safe boundary. Reuse the existing Codex session and do not restart completed steps.]`
+      ? `${source.content}\n\n[Resume the interrupted work from the last safe boundary. Reuse the existing Codex session and do not restart completed steps.]`
       : undefined
-    await handleUserMessage(failed.source, interaction.message as Message, false, content)
+    await handleUserMessage(source, interaction.message as Message, false, content)
     return
   }
   if (!interaction.isChatInputCommand()) return
@@ -1695,12 +1710,20 @@ async function handleUserMessage(
     try {
       let errorMessage = workMessage
       if (errorMessage) {
-        failedTurns.set(errorMessage.id, { source: message })
+        failedTurns.set(errorMessage.id, {
+          channelId: message.channel.id,
+          sourceMessageId: message.id,
+          diagnostic: describeFailure(e),
+        })
         await errorMessage.edit({ content: errMsg, components: [failureActions(errorMessage.id)] })
       } else {
         errorMessage = await replyOrSend(message, errMsg)
         if (errorMessage) {
-          failedTurns.set(errorMessage.id, { source: message })
+          failedTurns.set(errorMessage.id, {
+            channelId: message.channel.id,
+            sourceMessageId: message.id,
+            diagnostic: describeFailure(e),
+          })
           await errorMessage.edit({ content: errMsg, components: [failureActions(errorMessage.id)] })
         }
       }
