@@ -94,6 +94,21 @@ test('usage counter compacts large values before a mobile pill can wrap', () => 
   assert.ok(rows[0].length <= 60)
 })
 
+test('usage counter drops speed decimals when compact numbers still exceed the mobile ceiling', () => {
+  const footer = formatUsageCounter('both', {
+    inputTokens: 999_999_999_999,
+    outputTokens: 999_999_999,
+    cachedInputTokens: 888_888_888_888,
+    reasoningTokens: 888_888_888,
+  }, 999_999_900)
+
+  const rows = footer.split('\n').slice(2)
+  assert.doesNotMatch(rows[0], /\d+\.\d s/)
+  assert.doesNotMatch(rows[1], /\d+\.\d t\/s/)
+  assert.equal(rows[0].length, rows[1].length)
+  assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
+})
+
 test('usage counter shows duration without a wall label', () => {
   const footer = formatUsageCounter('token', {
     inputTokens: 100,

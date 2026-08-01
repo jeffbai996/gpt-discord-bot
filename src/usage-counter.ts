@@ -25,7 +25,7 @@ export function formatUsageCounter(
   const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens)
   const seconds = durationMs / 1000
   const rate = seconds > 0 ? usage.outputTokens / seconds : 0
-  const renderRows = (compact: boolean) => {
+  const renderRows = (compact: boolean, wholeSpeeds = false) => {
     const n = compact ? compactNumber : (value: number) => value.toLocaleString('en-US')
     const inputWidth = Math.max(compact ? 4 : 7, n(uncachedInput).length, n(usage.cachedInputTokens).length)
     const outputWidth = Math.max(4, n(usage.outputTokens).length, n(usage.reasoningTokens).length)
@@ -38,14 +38,17 @@ export function formatUsageCounter(
     const secondBottom = usage.reasoningTokens > 0
       ? `reasoning ↓ ${right(usage.reasoningTokens, outputWidth)}`
       : ''.padEnd(secondTop.length)
+    const duration = seconds.toFixed(wholeSpeeds ? 0 : 1)
+    const throughput = rate.toFixed(wholeSpeeds ? 0 : 1).padStart(wholeSpeeds ? 2 : 4)
     return {
-      top: `${firstTop}   ${secondTop}    ◷ ${seconds.toFixed(1)} s`,
-      bottom: `${firstBottom}   ${secondBottom}    » ${rate.toFixed(1).padStart(4)} t/s`,
+      top: `${firstTop}   ${secondTop}    ◷ ${duration} s`,
+      bottom: `${firstBottom}   ${secondBottom}    » ${throughput} t/s`,
     }
   }
 
   let { top, bottom } = renderRows(false)
   if (Math.max(top.length, bottom.length) > 50) ({ top, bottom } = renderRows(true))
+  if (Math.max(top.length, bottom.length) > 50) ({ top, bottom } = renderRows(true, true))
   if (mode === 'token') return `\n\n-# \`${top} \``
 
   if (usage.cachedInputTokens <= 0 && usage.reasoningTokens <= 0) {
