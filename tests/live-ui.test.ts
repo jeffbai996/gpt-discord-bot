@@ -47,7 +47,7 @@ test('turn age alone never triggers a heartbeat during active work', () => {
 test('renders heartbeat status in the same small gray style as token counters', () => {
   assert.equal(
     formatHeartbeatFooter(33_000, 4_000, 'cogitating', '✶'),
-    '-# ` ✶ still cogitating · 33s · active 4s ago `',
+    '-# ` ✶ still cogitating · 33s `',
   )
 })
 
@@ -157,7 +157,7 @@ test('keeps the inactivity bar alongside the self-updating brain slot', () => {
   const rendered = formatLiveWorkMessage({
     effortLabel: 'thinking with high effort',
     headline: latestReasoningHeadline('Old line\nNew line'),
-    footer: '-# ` ✶ still cogitating · 1m 3s · active 1m 0s ago `',
+    footer: '-# ` ✶ still cogitating · 1m 3s `',
   })
 
   assert.equal(rendered.match(/🧠/g)?.length, 1)
@@ -177,9 +177,9 @@ test('keeps the thinking header when only a heartbeat is available', () => {
   assert.equal(
     formatLiveWorkMessage({
       effortLabel: 'thinking',
-      footer: '`✻ cogitating · 30s · active 4s ago`',
+      footer: '`✻ cogitating · 30s`',
     }),
-    '💭 ✻ **thinking…**\n\n`✻ cogitating · 30s · active 4s ago`',
+    '💭 ✻ **thinking…**\n\n`✻ cogitating · 30s`',
   )
 })
 
@@ -188,9 +188,9 @@ test('keeps commentary above the compact heartbeat row', () => {
     formatLiveWorkMessage({
       effortLabel: 'thinking',
       detail: 'Checking the actual repos.',
-      footer: '`✻ cogitating · 33s · active 4s ago`',
+      footer: '`✻ cogitating · 33s`',
     }),
-    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n`✻ cogitating · 33s · active 4s ago`',
+    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n`✻ cogitating · 33s`',
   )
 })
 

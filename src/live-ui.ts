@@ -101,14 +101,11 @@ function formatDuration(ms: number): string {
 
 export function formatHeartbeatFooter(
   elapsedMs: number,
-  idleMs: number,
+  _idleMs: number,
   verb: string,
   glyph: string = HEARTBEAT_GLYPHS[0],
 ): string {
-  const activity = idleMs < 1_000
-    ? 'active now'
-    : `active ${formatDuration(idleMs)} ago`
-  return `-# \` ${glyph} still ${verb} · ${formatDuration(elapsedMs)} · ${activity} \``
+  return `-# \` ${glyph} still ${verb} · ${formatDuration(elapsedMs)} \``
 }
 
 export function formatLiveWorkMessage({
