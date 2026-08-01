@@ -286,7 +286,7 @@ ssh <deploy-user>@<deploy-host> \
 For persona or access changes only:
 
 ```bash
-systemctl --user kill -s HUP gpt
+systemctl --user kill --kill-who=main -s HUP gpt
 ```
 
 ---

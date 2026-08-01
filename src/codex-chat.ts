@@ -148,8 +148,10 @@ export function codexTimeoutMs(input: Pick<CodexChatInput, 'userMessage' | 'extr
 export function isIntentionalCodexSilence(
   reply: string,
   processResult: ProcessSupervisorResult | null,
+  emittedAgentMessage: boolean,
 ): boolean {
   return !reply.trim()
+    && !emittedAgentMessage
     && processResult?.code === 0
     && processResult.signal === null
     && processResult.stopReason === null
@@ -903,9 +905,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       }
     } catch { /* diff is best-effort enrichment */ }
   }
-  // Prefer the -o file (the clean final message); fall back to the last
-  // agent_message in the event stream if the file came back empty.
-  const reply = (replyFromFile.trim() || parsed.lastAgentMessage).trim()
+  // The -o file is the only authoritative final answer. Stdout agent_message
+  // events also contain commentary, so promoting the last one to a final reply
+  // turns an interrupted process into a false success (the user sees only
+  // "I'm checking..." forever). A clean process that intentionally stays
+  // silent emits neither an outfile nor agent prose.
+  const reply = replyFromFile.trim()
 
   // One scannable outcome line per turn (the codex path was silent before, so a
   // mid-turn death left no trace). stderr tail rides along on a failure. (Jeff 2026-07-05)
@@ -936,13 +941,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     logOutcome('error', detail)
     throw new CodexProcessDiedError(Date.now() - t0, detail)
   }
-  if (isIntentionalCodexSilence(reply, processResult)) {
+  if (isIntentionalCodexSilence(reply, processResult, !!parsed.lastAgentMessage)) {
     logOutcome('empty', `no answer (lines=${lines.length})`)
   } else if (!reply) {
-    // Defensive: all known unsuccessful process states are handled above. Do
-    // not silently accept an unknown completion shape as intentional silence.
-    logOutcome('error', `no answer from unclassified completion (lines=${lines.length})`)
-    throw new Error(`codex chat produced no answer from an unclassified completion (lines=${lines.length})`)
+    const detail = `codex exited without an authoritative final answer (lines=${lines.length})`
+    logOutcome('error', detail)
+    throw new CodexProcessDiedError(Date.now() - t0, detail)
   } else {
     logOutcome('completed')
   }

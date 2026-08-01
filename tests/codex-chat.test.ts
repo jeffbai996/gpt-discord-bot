@@ -6,7 +6,7 @@ test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
 })
 
-test('codex silence: a clean empty reply for a message addressing someone else does not trigger fallback', () => {
+test('codex silence: a clean empty reply with no emitted prose does not trigger fallback', () => {
   const message = '<@111111111111111111> 我觉得这个功能可以加，您觉得呢'
   assert.match(message, /<@111111111111111111>/)
   assert.equal(isIntentionalCodexSilence('', {
@@ -14,7 +14,7 @@ test('codex silence: a clean empty reply for a message addressing someone else d
     signal: null,
     stopReason: null,
     forced: false,
-  }), true)
+  }, false), true)
 })
 
 test('codex silence: failed or terminated processes are never treated as intentional silence', () => {
@@ -24,14 +24,23 @@ test('codex silence: failed or terminated processes are never treated as intenti
     { code: null, signal: 'SIGKILL' as const, stopReason: 'hard' as const, forced: false },
     { code: null, signal: null, stopReason: null, forced: false, error: new Error('spawn failed') },
   ]) {
-    assert.equal(isIntentionalCodexSilence('', result), false)
+    assert.equal(isIntentionalCodexSilence('', result, false), false)
   }
   assert.equal(isIntentionalCodexSilence('real reply', {
     code: 0,
     signal: null,
     stopReason: null,
     forced: false,
-  }), false)
+  }, false), false)
+})
+
+test('codex silence: commentary without an authoritative final answer is a failed turn', () => {
+  assert.equal(isIntentionalCodexSilence('', {
+    code: 0,
+    signal: null,
+    stopReason: null,
+    forced: false,
+  }, true), false)
 })
 
 test('codex commentary: surfaces in-flight progress text', () => {

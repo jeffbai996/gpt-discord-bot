@@ -51,7 +51,7 @@ for recovery when the bot is unresponsive.
 Hot reload (no restart — reloads `access.json` and `persona.md` only):
 
 ```bash
-ssh <deploy-user>@<deploy-host> 'systemctl --user kill -s HUP gpt'
+ssh <deploy-user>@<deploy-host> 'systemctl --user kill --kill-who=main -s HUP gpt'
 ```
 
 Logs: `~/.gpt/channels/discord/gpt.log`.
