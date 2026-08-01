@@ -802,8 +802,6 @@ async function handleUserMessage(
   const throwIfStopped = () => {
     if (stopController.signal.aborted) throw new CodexStoppedError(0)
   }
-  let currentStatus = `💭 ${effortLabel}`
-
   // Typing-dots-first (Jeff 2026-06-29, ported from gem-bot): show the native
   // "GPT is typing…" indicator immediately, and only post the 💭 placeholder
   // bubble + spinner if the turn is STILL working after PLACEHOLDER_DELAY_MS.
@@ -1128,10 +1126,8 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'status') {
-      // Generic animated label for the placeholder only. The live trace rows now
-      // come from real tool_start events (codex emits the actual command/query/path
-      // alongside this status), so we no longer push the coarse label as a row.
-      currentStatus = event.label
+      // Tool events already drive the lifecycle reaction and detailed trace.
+      // Do not duplicate them as a generic narration line in the work card.
       return
     }
     if (event.type === 'progress') {
@@ -1157,8 +1153,7 @@ async function handleUserMessage(
         }
         return
       }
-      const initialStatus = `💭 ${effortLabel}`
-      const base = lastProgressText || (currentStatus === initialStatus ? '' : `${currentStatus}…`)
+      const base = lastProgressText
       const visual = heartbeatVisual(heartbeatFrame, heartbeatVerb)
       heartbeatFrame++
       heartbeatVerb = visual.verb
@@ -1203,7 +1198,6 @@ async function handleUserMessage(
         let resumeSessionId = channelSessions.get(channelId)
         const lastInput = channelSessions.lastUsage(channelId)?.input ?? 0
         if (resumeSessionId && CODEX_SESSION_MAX_INPUT_TOKENS > 0 && lastInput >= CODEX_SESSION_MAX_INPUT_TOKENS) {
-          currentStatus = '🧹 compacting'
           await compactAndDropCodexSession('preflight', lastInput)
           throwIfStopped()
           resumeSessionId = undefined

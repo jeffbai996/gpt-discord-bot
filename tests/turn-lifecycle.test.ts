@@ -76,6 +76,17 @@ test('live narration is reposted beneath the complete tool trace stack', async (
   )
 })
 
+test('heartbeat never invents a generic tool-status narration line', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const start = source.indexOf("if (event.type === 'heartbeat')")
+  const end = source.indexOf("\n    if (event.type === 'partial')", start)
+  const branch = source.slice(start, end)
+
+  assert.ok(start >= 0)
+  assert.match(branch, /const base = lastProgressText/)
+  assert.doesNotMatch(branch, /currentStatus/)
+})
+
 test('collapsed earlier-call summary is not styled as a tool command', async () => {
   const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
 
