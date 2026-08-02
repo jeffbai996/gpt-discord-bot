@@ -14,11 +14,11 @@ test('live update interval keeps the original 1.5-second cadence', () => {
   assert.equal(resolveLiveUpdateInterval('nope'), 1500)
 })
 
-test('completed live state lingers for fifteen seconds by default', () => {
-  assert.equal(resolveLiveEndLinger(undefined), 15_000)
+test('completed live state lingers for thirty seconds by default', () => {
+  assert.equal(resolveLiveEndLinger(undefined), 30_000)
   assert.equal(resolveLiveEndLinger('2500'), 2500)
   assert.equal(resolveLiveEndLinger('0'), 0)
-  assert.equal(resolveLiveEndLinger('nope'), 15_000)
+  assert.equal(resolveLiveEndLinger('nope'), 30_000)
 })
 
 test('end linger applies only when a normal turn rendered live state', () => {
