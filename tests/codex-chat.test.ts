@@ -300,36 +300,36 @@ test('toolCallsFromCompletedItem: maps file changes per path', () => {
   ])
 })
 
-test('codexTimeoutMs: gives recovery/meta pings enough time to finish real work', () => {
+test('codexTimeoutMs: recovery wording cannot shorten a turn', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
-    600_000,
+    7_200_000,
   )
   assert.deepEqual(
     codexWatchdogPolicy({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
-    { idleTimeoutMs: 600_000, hardTimeoutMs: 600_000, quick: true },
+    { idleTimeoutMs: 1_800_000, hardTimeoutMs: 7_200_000 },
   )
 })
 
 test('codexTimeoutMs: keeps long timeout for actionable hang repairs', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: 'gpt keeps pooping out mid-turn for some reason, squash that bug', extraText: '' }),
-    2_700_000,
+    7_200_000,
   )
   assert.equal(
     codexTimeoutMs({ userMessage: 'you got hung again, solve the mid-flight death first', extraText: '' }),
-    2_700_000,
+    7_200_000,
   )
   assert.deepEqual(
     codexWatchdogPolicy({ userMessage: 'gpt keeps pooping out mid-turn for some reason, squash that bug', extraText: '' }),
-    { idleTimeoutMs: 600_000, hardTimeoutMs: 2_700_000, quick: false },
+    { idleTimeoutMs: 1_800_000, hardTimeoutMs: 7_200_000 },
   )
 })
 
 test('codexTimeoutMs: keeps long timeout for ordinary task turns', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: 'implement live tool trace output and run the tests', extraText: '' }),
-    2_700_000,
+    7_200_000,
   )
 })
 
@@ -338,17 +338,17 @@ test('codexTimeoutMs: a genuine QUESTION about a hang is not a throwaway ping', 
   // the full window, else debugging the hang self-sabotages at 120s. (Jeff 2026-07-05)
   assert.equal(
     codexTimeoutMs({ userMessage: 'gpt is hung, can you tell me why?', extraText: '' }),
-    2_700_000,
+    7_200_000,
     'question form with "?" should get the full window',
   )
   assert.equal(
     codexTimeoutMs({ userMessage: 'why do you keep getting stuck mid-turn', extraText: '' }),
-    2_700_000,
+    7_200_000,
     '"why …" is a real question, not a status poke',
   )
   assert.equal(
     codexTimeoutMs({ userMessage: 'what made you time out on that last one', extraText: '' }),
-    2_700_000,
+    7_200_000,
     '"what …" question needs the real window',
   )
 })
@@ -421,10 +421,8 @@ test('codex plan args are read-only and never use the bypass flag', () => {
   assert.ok(args.includes('approval_policy="never"'))
 })
 
-test('codexTimeoutMs: bare status pokes use the shorter ten-minute leash', () => {
-  // No question, no work verb — just "are you alive" noise. Keep these shorter
-  // than task turns without killing a healthy child after only two minutes.
+test('codexTimeoutMs: bare status pokes cannot receive a shorter hard cap', () => {
   for (const m of ['you alive?', 'ping', 'where did you go', 'you pooping out again lol']) {
-    assert.equal(codexTimeoutMs({ userMessage: m, extraText: '' }), 600_000, `bare poke: ${m}`)
+    assert.equal(codexTimeoutMs({ userMessage: m, extraText: '' }), 7_200_000, `bare poke: ${m}`)
   }
 })

@@ -56,14 +56,8 @@ const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv =>
 // Real repo work can run for a long time as long as Codex is still emitting JSONL
 // progress. The idle watchdog kills only a silent/wedged child; the hard timeout is
 // a final runaway fuse so a broken process cannot live forever.
-const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 10 * 60_000
-const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 45 * 60_000
-// A recovery-looking message can still contain real implementation work (for
-// example, a UI bug report that says an animation is "stuck"). Two minutes was
-// short enough to kill healthy Codex turns before they finished verification.
-// Keep the quick policy below the 45-minute task fuse, but give it the same
-// silence allowance as ordinary work.
-const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 10 * 60_000
+const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 30 * 60_000
+const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 2 * 60 * 60_000
 // Five seconds keeps the live row visibly animated while remaining far below
 // Discord's REST edit pressure. discord.js still owns bucket-level throttling.
 const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 5_000
@@ -119,30 +113,16 @@ export function mapEffort(effort?: string): string {
 export interface CodexWatchdogPolicy {
   idleTimeoutMs: number
   hardTimeoutMs: number
-  quick: boolean
 }
 
-export function codexWatchdogPolicy(input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): CodexWatchdogPolicy {
-  const text = `${input.userMessage}\n${input.extraText ?? ''}`.toLowerCase()
-  // Recovery/meta pings should fail fast into the API fallback instead of tying
-  // up the channel behind a 10-minute Codex leash. But an actionable repair
-  // request can contain the same words ("fix why gpt is hung") and still needs
-  // the full task window; otherwise debugging the hang self-sabotages at 120s.
-  const isRecoveryPing = /\b(where'?d ya go|where did you go|pooping out|hung|stuck|choked|timeout|token limit|response time|alive|ping)\b/.test(text)
-  const asksForWork = /\b(fix|solve|squash|patch|debug|diagnose|diagnosis|investigate|figure out|prevent|repair|implement)\b/.test(text)
-  // A message that ASKS FOR AN EXPLANATION ("why are you stuck", "what made you
-  // time out", "how come you hung") is a real diagnostic question, not a throwaway
-  // status poke — it needs the full window or the answer self-sabotages at 120s.
-  // Bare pokes ("you alive?", "where'd ya go?") have no why/what/how, so they still
-  // fail fast. (Jeff 2026-07-05 — real questions were getting killed mid-work.)
-  const asksForExplanation = /\b(why|what made|what caused|what happened|how come|how'?d|how did)\b/.test(text)
-  if (text.length < 400 && isRecoveryPing && !asksForWork && !asksForExplanation) {
-    return { idleTimeoutMs: DEFAULT_QUICK_TIMEOUT_MS, hardTimeoutMs: DEFAULT_QUICK_TIMEOUT_MS, quick: true }
-  }
+export function codexWatchdogPolicy(_input: Pick<CodexChatInput, 'userMessage' | 'extraText'>): CodexWatchdogPolicy {
+  // Message wording must never shorten a turn. A bug report can legitimately
+  // contain recovery words such as "stuck" or "timeout", and classifying those
+  // with regexes previously killed healthy implementation work. The idle timer
+  // still catches a silent child; meaningful activity refreshes that timer.
   return {
     idleTimeoutMs: DEFAULT_TASK_IDLE_TIMEOUT_MS,
     hardTimeoutMs: Math.max(DEFAULT_TASK_HARD_TIMEOUT_MS, DEFAULT_TASK_IDLE_TIMEOUT_MS + 60_000),
-    quick: false,
   }
 }
 
