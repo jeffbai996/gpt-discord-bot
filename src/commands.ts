@@ -407,7 +407,7 @@ export async function executeGptCommand(
       const raw = interaction.options.getString('value')
       if (!raw) {
         const cur = access.channelFlags(channel.id).codexModel ?? DEFAULT_CODEX_MODEL
-        return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API-fallback path uses its own model).`, ephemeral: true })
+        return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API postmortem path uses its own model).`, ephemeral: true })
       }
       const value = raw.trim().toLowerCase()
       if (!(CODEX_MODELS as readonly string[]).includes(value)) {

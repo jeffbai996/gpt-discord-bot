@@ -12,7 +12,7 @@ import { closeDanglingInlineCode } from './discord-markdown.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
-import type { LifecycleEvent, RespondResult, ToolCall } from './openai.ts'
+import type { LifecycleEvent, RespondInput, RespondResult, ToolCall } from './openai.ts'
 import {
   CodexInterruptedError,
   CodexProcessDiedError,
@@ -22,7 +22,11 @@ import {
   requiresCodexContinuation,
   respondViaCodex,
 } from './codex-chat.ts'
-import { codexFallbackWaitMs } from './codex-fallback.ts'
+import {
+  buildCodexFailurePostmortemRequest,
+  codexFallbackWaitMs,
+  isCodexFailurePostmortemEligible,
+} from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI, selectPriorImages, type HistoryMessage } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
@@ -134,7 +138,7 @@ const ARG_DIGEST_PREFERENCE = [
 ]
 
 // Single-line, ID-shaped arg digest, <= maxLen chars.
-// codex accepts none|low|medium|high|xhigh|max; the OpenAI API fallback only
+// codex accepts none|low|medium|high|xhigh|max; the OpenAI API engine only
 // takes minimal|low|medium|high. Map the codex extremes down for the API call.
 // Duration like the Claude bots: "40s" under a minute, "1m 5s" over.
 function fmtDur(ms: number): string {
@@ -624,7 +628,7 @@ client.on('interactionCreate', async interaction => {
 // targetMessage non-null → edit that bot message instead of posting fresh.
 // expansion=true → prepend an "expand on your prior reply" instruction.
 // Presence: @gpt sets its own status via a [[presence: …]] reply directive →
-// applyBasePresence(). The API-fallback indicator (setEnginePresence) temporarily
+// applyBasePresence(). The API-postmortem indicator (setEnginePresence) temporarily
 // overrides with ⚠️ and restores the base on recovery.
 let basePresenceText = initialPresenceText
 let lastDegraded = false
@@ -638,7 +642,7 @@ function applyBasePresence(text: string): void {
 function setEnginePresence(degraded: boolean): void {
   if (degraded === lastDegraded) return
   lastDegraded = degraded
-  const text = degraded ? '⚠️ on API (codex fell back)' : basePresenceText
+  const text = degraded ? '⚠️ API postmortem (codex failed)' : basePresenceText
   try { client.user?.setPresence({ activities: [presenceActivity(text)] }) } catch {}
 }
 
@@ -1180,9 +1184,11 @@ async function handleUserMessage(
     throwIfStopped()
     // Codex-as-default-chat: route text turns through the Codex CLI (flat-sub,
     // self-web-searching) instead of the metered API. Downloaded images are passed
-    // to Codex as local files. Runtime fallback is reserved for a confirmed
-    // dead Codex child after the grace window. Kill switch: GPT_CODEX_CHAT=0.
-    const apiRespond = () => openai.respond({
+    // to Codex as local files. Automatic API routing is reserved for a confirmed
+    // dead Codex child and can only report a postmortem; it never continues the
+    // task. Explicit API-engine channels still receive the normal tool-capable
+    // request. Kill switch: GPT_CODEX_CHAT=0.
+    const apiInput: RespondInput = {
       systemPrompt,
       history,
       userMessage: userText,
@@ -1195,9 +1201,19 @@ async function handleUserMessage(
       channelId,
       userId,
       onEvent
-    })
+    }
+    const apiRespond = () => openai.respond(apiInput)
+    const apiPostmortemRespond = (
+      error: CodexInterruptedError | CodexProcessDiedError,
+    ) => openai.respond(buildCodexFailurePostmortemRequest({
+      base: apiInput,
+      error,
+      lastProgress: lastProgressText || liveDetail || liveHeadline,
+      recentTools: liveToolRows.map(tool => `${tool.name}${tool.failed ? ' (failed)' : ''}`),
+    }))
 
     let result: RespondResult
+    let codexFailureLifecycle: 'interrupted' | 'errored' | null = null
     if (flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0') {
       try {
         let resumeSessionId = channelSessions.get(channelId)
@@ -1321,7 +1337,7 @@ async function handleUserMessage(
           }
           return
         }
-        // An intentional restart must never become an API fallback. Deploys now
+        // An intentional restart must never become an API postmortem. Deploys now
         // signal only MainPID, but retain this guard for shutdown races and old
         // senders that may still target the service cgroup.
         if (shutdownGate.isDraining()) {
@@ -1333,25 +1349,25 @@ async function handleUserMessage(
             fallbackReason: 'restart_drain',
             restartPhase: 'draining',
           })
-          console.error('codex exited during graceful restart; suppressing API fallback')
+          console.error('codex exited during graceful restart; suppressing API postmortem')
           await settleLiveUi()
           await deleteLiveTrace()
           if (workMessage) await workMessage.edit('↻ **restart in progress — queued work will resume when gpt is back**').catch(() => {})
           return
         }
-        const fallbackWaitMs = codexFallbackWaitMs(e, CODEX_FALLBACK_MIN_ELAPSED_MS)
-        if (fallbackWaitMs === null) {
+        if (!isCodexFailurePostmortemEligible(e)) {
           logTurnLifecycle({
             event: 'fallback_suppressed', channelId, generation: turnGeneration,
             engine: 'codex', fallbackReason: 'codex_failure_unconfirmed',
           })
-          console.error('codex failed without a confirmed child-process death; suppressing API fallback:', e)
+          console.error('codex failed without a confirmed child-process death; suppressing API postmortem:', e)
           await settleLiveUi()
           await deleteLiveTrace()
           void applyLifecycle(message, 'errored')
-          if (workMessage) await workMessage.edit('⚠️ **codex hit an error — API fallback suppressed**').catch(() => {})
+          if (workMessage) await workMessage.edit('⚠️ **codex hit an error — API postmortem suppressed**').catch(() => {})
           return
         }
+        const fallbackWaitMs = codexFallbackWaitMs(e, CODEX_FALLBACK_MIN_ELAPSED_MS)!
 
         // A confirmed dead/timed-out Codex child invalidates the resumable session.
         // Wait until the attempt has been dead or running for the configured grace
@@ -1359,7 +1375,7 @@ async function handleUserMessage(
         channelSessions.dropSession(channelId)
         if (fallbackWaitMs > 0) {
           if (workMessage) await workMessage.edit(
-            `⏳ **codex exited — waiting ${Math.ceil(fallbackWaitMs / 1000)}s before API fallback…**`,
+            `⏳ **codex exited — waiting ${Math.ceil(fallbackWaitMs / 1000)}s before API postmortem…**`,
           ).catch(() => {})
           try {
             await sleep(fallbackWaitMs, undefined, { signal: stopController.signal })
@@ -1374,20 +1390,22 @@ async function handleUserMessage(
             event: 'engine_fallback', channelId, generation: turnGeneration,
             engine: 'api', fallbackReason: 'codex_interrupted',
           })
-          console.error('codex interrupted by backstop, surfacing + falling back to API:', e.message)
+          console.error('codex interrupted by backstop; requesting API postmortem:', e.message)
           void applyLifecycle(message, 'interrupted')
-          if (workMessage) { await workMessage.edit('⏳ **codex turn interrupted — retrying on the API…**').catch(() => {}) }
+          codexFailureLifecycle = 'interrupted'
+          if (workMessage) { await workMessage.edit('⏳ **codex turn interrupted — API is writing the postmortem…**').catch(() => {}) }
         } else if (e instanceof CodexProcessDiedError) {
           logTurnLifecycle({
             event: 'engine_fallback', channelId, generation: turnGeneration,
             engine: 'api', fallbackReason: 'codex_process_died',
           })
-          console.error('codex process confirmed dead after fallback grace; using API:', e)
+          console.error('codex process confirmed dead after fallback grace; requesting API postmortem:', e)
           void applyLifecycle(message, 'errored')
-          if (workMessage) { await workMessage.edit('⚠️ **codex exited — retrying on the API…**').catch(() => {}) }
+          codexFailureLifecycle = 'errored'
+          if (workMessage) { await workMessage.edit('⚠️ **codex exited — API is writing the postmortem…**').catch(() => {}) }
         }
         throwIfStopped()
-        result = await apiRespond()
+        result = await apiPostmortemRespond(e)
         setEnginePresence(true)
       }
     } else {
@@ -1512,7 +1530,7 @@ async function handleUserMessage(
     const body = stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim() && !result.files?.length) {
-      await applyLifecycle(message, 'silenced')
+      await applyLifecycle(message, codexFailureLifecycle ?? 'silenced')
       if (workMessage && !targetMessage) {
         try { await workMessage.delete() } catch {}
       }
@@ -1526,7 +1544,7 @@ async function handleUserMessage(
       if (message.channel.isSendable()) {
         await message.channel.send({ files: result.files.slice(0, 10) })
       }
-      await applyLifecycle(message, 'replied')
+      await applyLifecycle(message, codexFailureLifecycle ?? 'replied')
       return
     }
 
@@ -1668,9 +1686,9 @@ async function handleUserMessage(
     }
 
     if (result.finishReason === 'length') {
-      await applyLifecycle(message, 'truncated')
+      await applyLifecycle(message, codexFailureLifecycle ?? 'truncated')
     } else {
-      await applyLifecycle(message, 'replied')
+      await applyLifecycle(message, codexFailureLifecycle ?? 'replied')
     }
   } catch (e: any) {
     if (e instanceof CodexStoppedError) {

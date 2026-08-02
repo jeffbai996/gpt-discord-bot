@@ -1,8 +1,8 @@
 # gpt-bot
 
-**A Discord bot that runs OpenAI's Codex CLI as a persistent, agentic chat engine.** It combines flat-subscription Codex sessions with live tool traces, multimodal input, voice, semantic memory, browser automation, and a metered API fallback.
+**A Discord bot that runs OpenAI's Codex CLI as a persistent, agentic chat engine.** It combines flat-subscription Codex sessions with live tool traces, multimodal input, voice, semantic memory, browser automation, and a metered API engine.
 
-Most turns run through **Codex with `gpt-5.6-sol`** on a ChatGPT subscription. The bot streams public progress and tool events into Discord while Codex searches, reads, edits, runs commands, and verifies work. The OpenAI API remains available as an explicit per-channel engine and as a guarded fallback after a confirmed Codex process failure.
+Most turns run through **Codex with `gpt-5.6-sol`** on a ChatGPT subscription. The bot streams public progress and tool events into Discord while Codex searches, reads, edits, runs commands, and verifies work. The OpenAI API remains available as an explicit per-channel engine. After a confirmed Codex process failure, automatic API routing is limited to a tool-less postmortem and cannot continue the original task.
 
 > **Current shape:** persistent Codex sessions, four-mode thinking and trace surfaces, per-turn token telemetry, safe queueing and steering, plan approval, multimodal carryover, realtime voice, local RAG, and drain-safe deployment.
 
@@ -51,7 +51,7 @@ Thinking, trace, and counter surfaces are independently configurable per channel
 | **`codex`** (default) | persistent Codex CLI session; per-channel model and reasoning effort | ChatGPT subscription | shell, filesystem, network, web search, installed tools, MCP, images |
 | **`api`** | OpenAI API request loop | metered tokens | built-in function registry, web/fetch/browser, semantic memory, MCP |
 
-Codex receives images directly with `codex exec --image`; image turns no longer detour through the API. Fallback is intentionally conservative: an ordinary adapter error does not silently swap a repository task onto a weaker surface. The API path is used only when selected explicitly or after the bot confirms the Codex child actually died and the fallback grace window elapsed.
+Codex receives images directly with `codex exec --image`; image turns no longer detour through the API. Automatic failure routing is intentionally conservative: ordinary adapter errors do not invoke the API, and a confirmed dead or timed-out Codex child can trigger only a tool-less crash report after the grace window. The original task remains unfinished. Full API agent behavior is available only when the channel explicitly selects the API engine.
 
 Normal Codex execution uses approvals and sandbox bypass so implementation requests can actually edit, test, commit, deploy, and use browser/MCP tools. Run the service under an appropriately isolated OS account. `/gpt plan` is the read-only exception: it launches the next turn with a read-only sandbox and waits for explicit approval before execution.
 
@@ -249,13 +249,13 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | `GPT_CODEX_MAX_SESSION_INPUT_TOKENS` | session rollover threshold |
 | `GPT_CODEX_IDLE_TIMEOUT_MS` / `GPT_CODEX_CHAT_TIMEOUT_MS` | meaningful-activity watchdog and hard runaway fuse |
 | `GPT_CODEX_HEARTBEAT_DELAY_MS` / `GPT_CODEX_HEARTBEAT_MS` | proof-of-life delay and refresh interval |
-| `GPT_CODEX_FALLBACK_MIN_ELAPSED_MS` | minimum elapsed time before a confirmed Codex death can fall back |
+| `GPT_CODEX_FALLBACK_MIN_ELAPSED_MS` | minimum elapsed time before a confirmed Codex death can trigger an API postmortem |
 | `GPT_CODEX_KILL_GRACE_MS` | process-tree shutdown grace |
 | `GPT_LIVE_UPDATE_INTERVAL_MS` / `GPT_LIVE_UI_SETTLE_MS` | Discord edit pacing and final settle bound |
 | `GPT_LIVE_END_LINGER_MS` / `GPT_THOUGHT_LINGER_MS` | completed live-thinking and collapse cleanup timing |
 | `GPT_TRACE_FAILSAFE_MS` | optional transient-trace crash-cleanup override |
 | `GPT_HISTORY_TOKEN_BUDGET` | Discord-history budget |
-| `GPT_MODEL` | API engine/fallback model |
+| `GPT_MODEL` | explicit API engine and postmortem model |
 | `GPT_MAX_TOOL_LOOPS` | API tool-loop cap |
 | `GPT_MCP_URL` / `GPT_MCP_LABEL` | comma-separated MCP endpoints and labels |
 | `OLLAMA_URL` | local OpenAI-compatible embeddings/summarization endpoint |

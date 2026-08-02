@@ -6,8 +6,10 @@ This document provides context for agents working on `gpt-bot`.
 
 A standalone Discord bot using Discord.js with the Codex CLI as its default
 agentic chat engine. Channels can switch among the supported Codex models or
-use the metered OpenAI API engine; confirmed Codex failures can also fall back
-to the API. It supports multimodal input and tool use.
+explicitly use the metered OpenAI API engine. After a confirmed Codex failure,
+automatic API routing is postmortem-only: it reports the failure without tools
+and never continues the original task. The bot supports multimodal input and
+tool use on its normal engines.
 
 This file is injected as deep runtime context. Keep it limited to durable
 gpt-specific architecture and operating facts. Voice, people, squad-wide

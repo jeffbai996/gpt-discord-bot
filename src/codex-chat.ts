@@ -13,8 +13,11 @@ import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 // Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
 // surface an explicit 'interrupted' indicator instead of failing silently.
 export class CodexInterruptedError extends Error {
-  constructor(public readonly afterMs: number) {
-    super(`codex turn interrupted by runaway-process backstop after ${Math.round(afterMs/1000)}s`)
+  constructor(
+    public readonly afterMs: number,
+    public readonly timeoutKind: 'idle' | 'hard' | 'unknown' = 'unknown',
+  ) {
+    super(`codex turn interrupted by ${timeoutKind} watchdog after ${Math.round(afterMs/1000)}s`)
     this.name = 'CodexInterruptedError'
   }
 }
@@ -1019,7 +1022,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   if (timedOut) {
     const forced = processResult?.forced ? '; forced settle after failed child close' : ''
     logOutcome('timeout', `${timeoutKind ?? 'unknown'} watchdog fired${forced}`)
-    throw new CodexInterruptedError(Date.now() - t0)
+    throw new CodexInterruptedError(Date.now() - t0, timeoutKind ?? 'unknown')
   }
   if (processResult?.error) {
     logOutcome('error', processResult.error.message)

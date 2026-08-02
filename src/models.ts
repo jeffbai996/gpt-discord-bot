@@ -1,5 +1,6 @@
-// The API fallback handles confirmed Codex failures, including failures during image turns. Keep it on a
-// generally available API model; subscription-only Codex slugs fail there.
+// Automatic API routing only writes a postmortem after confirmed Codex failure.
+// Keep that report on a generally available API model; subscription-only Codex
+// slugs fail there. Explicit API-engine channels also use this model normally.
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
 export const DEFAULT_SUMMARIZATION_MODEL = 'gpt-5.5'
