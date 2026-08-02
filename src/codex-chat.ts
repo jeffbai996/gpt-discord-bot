@@ -1054,7 +1054,13 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     usage: parsed.usage,
     finishReason: 'stop',
     durationMs: Date.now() - t0,
-    modelUsed: 'codex',
+    // The REAL model, not a flat 'codex'. Both `model` and `effort` are already
+    // resolved above (and passed to the CLI via -c), so the label was the only
+    // thing throwing the information away — every codex turn bucketed under one
+    // "codex" key while the API path recorded real version strings from
+    // resp.model. That also merged concurrent sessions on different models into
+    // a single pile; keyed by the actual model they separate on their own.
+    modelUsed: effort ? `${model} ${effort}` : model,
     reasoning: parsed.reasoning,
     toolCalls: parsed.toolCalls,
     threadId,
