@@ -34,14 +34,30 @@ test('usage counter blanks zero reasoning while preserving aligned columns', () 
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑ 2.47m      output ↓   19    ◷ 19.0 s  `',
-    '-# ` cache ↑ 9.88m                       »  1.0 t/s`',
+    '-# ` input ↑ 2,469,135      output ↓   19    ◷ 19.0 s  `',
+    '-# ` cache ↑ 9,876,543                       »  1.0 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
   assert.equal(rows[0].length, rows[1].length)
   assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
   assert.doesNotMatch(rows[1], /reasoning/)
+})
+
+test('usage counter keeps eight-digit cache values exact on mobile', () => {
+  const footer = formatUsageCounter('both', {
+    inputTokens: 99_765_431,
+    outputTokens: 19,
+    cachedInputTokens: 98_765_432,
+    reasoningTokens: 0,
+  }, 19_000)
+
+  const rows = footer.split('\n').slice(2)
+  assert.match(rows[1], /cache ↑ 98,765,432/)
+  assert.doesNotMatch(rows[1], /98\.8m/)
+  assert.ok(rows[0].length <= 66)
+  assert.equal(rows[0].length, rows[1].length)
+  assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
 })
 
 test('usage counter blanks zero cache while preserving aligned columns', () => {
@@ -76,7 +92,7 @@ test('usage counter drops the second row when cache and reasoning are zero', () 
   assert.equal(footer, '\n\n-# ` input ↑     100      output ↓   20    ◷ 12.3 s `')
 })
 
-test('usage counter compacts large values before a mobile pill can wrap', () => {
+test('usage counter keeps readable values exact while the mobile pill still fits', () => {
   const footer = formatUsageCounter('both', {
     inputTokens: 5_715_362,
     outputTokens: 16_642,
@@ -85,10 +101,10 @@ test('usage counter compacts large values before a mobile pill can wrap', () => 
   }, 723_800)
 
   const rows = footer.split('\n').slice(2)
-  assert.match(rows[0], /input ↑  133k/)
-  assert.match(rows[0], /output ↓ 16\.6k/)
-  assert.match(rows[1], /cache ↑ 5\.58m/)
-  assert.match(rows[1], /reasoning ↓ 4\.44k/)
+  assert.match(rows[0], /input ↑   133,026/)
+  assert.match(rows[0], /output ↓ 16,642/)
+  assert.match(rows[1], /cache ↑ 5,582,336/)
+  assert.match(rows[1], /reasoning ↓  4,437/)
   assert.equal(rows[0].length, rows[1].length)
   assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
   assert.ok(rows[0].length <= 60)

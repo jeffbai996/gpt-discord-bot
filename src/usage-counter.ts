@@ -5,6 +5,9 @@ export interface CounterUsage {
   reasoningTokens: number
 }
 
+const MOBILE_ROW_CEILING = 60
+const COMPACT_SPEED_ROW_CEILING = 50
+
 function compactNumber(value: number): string {
   if (value < 1_000) return value.toLocaleString('en-US')
   const divisor = value >= 1_000_000 ? 1_000_000 : 1_000
@@ -47,8 +50,13 @@ export function formatUsageCounter(
   }
 
   let { top, bottom } = renderRows(false)
-  if (Math.max(top.length, bottom.length) > 50) ({ top, bottom } = renderRows(true))
-  if (Math.max(top.length, bottom.length) > 50) ({ top, bottom } = renderRows(true, true))
+  if (Math.max(top.length, bottom.length) > MOBILE_ROW_CEILING) ({ top, bottom } = renderRows(false, true))
+  if (Math.max(top.length, bottom.length) > MOBILE_ROW_CEILING) {
+    ({ top, bottom } = renderRows(true))
+    if (Math.max(top.length, bottom.length) > COMPACT_SPEED_ROW_CEILING) {
+      ({ top, bottom } = renderRows(true, true))
+    }
+  }
   if (mode === 'token') return `\n\n-# \`${top} \``
 
   if (usage.cachedInputTokens <= 0 && usage.reasoningTokens <= 0) {
