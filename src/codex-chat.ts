@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline'
-import { mkdtemp, rm, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, open, rm, readFile, readdir, writeFile, type FileHandle } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -469,9 +469,102 @@ export function commentaryProgress(ev: any): string | null {
 export function reasoningProgress(ev: any): string | null {
   // Only render reasoning text Codex explicitly places on the public JSONL
   // protocol. Encrypted/internal thought state is intentionally ignored.
-  if (ev?.type !== 'item.completed' || ev.item?.type !== 'reasoning') return null
-  const text = typeof ev.item.text === 'string' ? ev.item.text.trim() : ''
+  const raw = ev?.type === 'item.completed' && ev.item?.type === 'reasoning'
+    ? ev.item.text
+    : ev?.type === 'event_msg' && ev.payload?.type === 'agent_reasoning'
+      ? ev.payload.text
+      : ''
+  const text = typeof raw === 'string' ? raw.trim() : ''
   return text || null
+}
+
+const ROLLOUT_POLL_MS = Number(process.env.GPT_CODEX_ROLLOUT_POLL_MS) || 1_000
+
+async function findRolloutPath(threadId: string): Promise<string | null> {
+  const base = path.join(os.homedir(), '.codex', 'sessions')
+  let entries: string[] = []
+  try { entries = (await readdir(base, { recursive: true })) as string[] } catch { return null }
+  const rel = entries.find(entry => entry.endsWith(`${threadId}.jsonl`))
+  return rel ? path.join(base, rel) : null
+}
+
+// `codex exec --json` currently drops the frequent public agent_reasoning
+// summaries. The canonical rollout retains them, so incrementally tail that
+// file and feed only those explicitly-public rows into the normal live UI.
+function watchRolloutReasoning(
+  threadId: string,
+  startedAtMs: number,
+  onText: (text: string) => void,
+): { stop: () => Promise<void> } {
+  let stopped = false
+  let polling = false
+  let handle: FileHandle | null = null
+  let offset = 0
+  let remainder = ''
+  let lastText = ''
+  let stopTask: Promise<void> | null = null
+
+  const consume = (chunk: string) => {
+    const rows = (remainder + chunk).split('\n')
+    remainder = rows.pop() ?? ''
+    for (const row of rows) {
+      try {
+        const event = JSON.parse(row)
+        const timestamp = Date.parse(String(event?.timestamp ?? ''))
+        if (Number.isFinite(timestamp) && timestamp < startedAtMs) continue
+        const text = reasoningProgress(event)
+        if (text && text !== lastText) {
+          lastText = text
+          onText(text)
+        }
+      } catch { /* a rollout can end on a partially-written JSON row */ }
+    }
+  }
+
+  const poll = async () => {
+    if (stopped || polling) return
+    polling = true
+    try {
+      if (!handle) {
+        const rolloutPath = await findRolloutPath(threadId)
+        if (!rolloutPath || stopped) return
+        handle = await open(rolloutPath, 'r')
+      }
+      const size = Number((await handle.stat()).size)
+      if (size <= offset) return
+      const buffer = Buffer.allocUnsafe(size - offset)
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset)
+      offset += bytesRead
+      consume(buffer.subarray(0, bytesRead).toString('utf8'))
+    } catch {
+      await handle?.close().catch(() => {})
+      handle = null
+      offset = 0
+      remainder = ''
+    } finally {
+      polling = false
+    }
+  }
+
+  const timer = setInterval(() => { void poll() }, ROLLOUT_POLL_MS)
+  void poll()
+  return {
+    stop: () => {
+      if (stopTask) return stopTask
+      stopTask = (async () => {
+        stopped = true
+        clearInterval(timer)
+        while (polling) await new Promise(resolve => setTimeout(resolve, 10))
+        // Capture a summary written immediately before the child exited.
+        stopped = false
+        await poll()
+        stopped = true
+        await handle?.close().catch(() => {})
+        handle = null
+      })()
+      return stopTask
+    },
+  }
 }
 
 export function isMeaningfulCodexActivity(ev: any): boolean {
@@ -793,6 +886,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
   const lines: string[] = []
   let threadId = ''
+  const rolloutReasoningWatchers: Array<ReturnType<typeof watchRolloutReasoning>> = []
   let stderrTail = ''
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk: string) => {
@@ -805,7 +899,15 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     try {
       const obj = JSON.parse(line)
       if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
-      if (obj?.type === 'thread.started' && obj.thread_id) threadId = String(obj.thread_id)
+      if (obj?.type === 'thread.started' && obj.thread_id) {
+        threadId = String(obj.thread_id)
+        if (!rolloutReasoningWatchers.length) {
+          rolloutReasoningWatchers.push(watchRolloutReasoning(threadId, t0, text => {
+            supervisor.markActivity()
+            input.onEvent?.({ type: 'reasoning_progress', text })
+          }))
+        }
+      }
       // Barge-safety: track whether codex is mid a DESTRUCTIVE tool (shell/file-edit)
       // so canBarge() blocks a barge that would SIGKILL a half-written file. Set on
       // the item.started, cleared on the matching item.completed. web_search/reasoning
@@ -866,11 +968,13 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   let processResult: Awaited<ReturnType<typeof supervisor.wait>> | null = null
   try {
     processResult = await supervisor.wait()
+    await Promise.all(rolloutReasoningWatchers.map(watcher => watcher.stop()))
     timedOut = processResult.stopReason === 'idle' || processResult.stopReason === 'hard'
     timeoutKind = timedOut ? processResult.stopReason as 'idle' | 'hard' : null
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
     codexStderr = stderrTail.trim()
   } finally {
+    await Promise.all(rolloutReasoningWatchers.map(watcher => watcher.stop()))
     if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})

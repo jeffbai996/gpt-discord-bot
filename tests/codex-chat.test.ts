@@ -73,6 +73,17 @@ test('codex reasoning: surfaces explicit reasoning summaries, never encrypted th
   }), null)
 })
 
+test('codex reasoning: promotes public rollout agent_reasoning summaries', () => {
+  assert.equal(reasoningProgress({
+    type: 'event_msg',
+    payload: { type: 'agent_reasoning', text: '**Running live smoke tests**' },
+  }), '**Running live smoke tests**')
+  assert.equal(reasoningProgress({
+    type: 'event_msg',
+    payload: { type: 'agent_reasoning', encrypted_content: 'opaque-private-state' },
+  }), null)
+})
+
 test('codex liveness: only meaningful state transitions refresh the idle watchdog', () => {
   for (const event of [
     { type: 'thread.started', thread_id: 'thread-1' },

@@ -1135,10 +1135,14 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'reasoning_progress') {
-      if (flags.thinking === 'collapse') liveReasoningTrace.push(event.text)
-      else if (flags.thinking !== 'off') liveHeadline = latestReasoningHeadline(event.text)
+      if (flags.thinking === 'collapse') {
+        if (liveReasoningTrace.at(-1) !== event.text) liveReasoningTrace.push(event.text)
+      } else if (flags.thinking !== 'off') {
+        liveHeadline = latestReasoningHeadline(event.text)
+      }
       lastProgressText = ''
       liveDetail = ''
+      liveFooter = ''
       queueLiveRender()
       return
     }
