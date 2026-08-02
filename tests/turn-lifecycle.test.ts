@@ -49,11 +49,12 @@ test('completed reasoning is merged beneath the thought duration instead of stra
   assert.doesNotMatch(branch, /channel\.send|workMessage\.edit/)
 })
 
-test('thinking collapse uses the accumulated trace while live uses the latest thought', async () => {
+test('thinking on and collapse accumulate while live uses the latest thought', async () => {
   const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
 
-  assert.match(source, /flags\.thinking === 'collapse'\s*\?\s*formatReasoningTraceSnapshot/)
-  assert.match(source, /reasoningTrace:\s*flags\.thinking === 'collapse'/)
+  assert.match(source, /flags\.thinking === 'on' \|\| flags\.thinking === 'collapse'/)
+  assert.match(source, /const accumulatesReasoning = flags\.thinking === 'on' \|\| flags\.thinking === 'collapse'/)
+  assert.match(source, /reasoningTrace: accumulatesReasoning \? liveReasoningTrace : \[\]/)
 })
 
 test('live narration is reposted beneath the complete tool trace stack', async () => {

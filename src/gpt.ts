@@ -894,10 +894,11 @@ async function handleUserMessage(
       if (liveUiClosed) return
       await postPlaceholder()
       if (!workMessage || liveUiClosed) return
+      const accumulatesReasoning = flags.thinking === 'on' || flags.thinking === 'collapse'
       const display = formatLiveWorkMessage({
         effortLabel,
-        headline: flags.thinking === 'collapse' ? '' : liveHeadline,
-        reasoningTrace: flags.thinking === 'collapse' ? liveReasoningTrace : [],
+        headline: accumulatesReasoning ? '' : liveHeadline,
+        reasoningTrace: accumulatesReasoning ? liveReasoningTrace : [],
         detail: liveDetail,
         footer: liveFooter,
         spinnerGlyph,
@@ -1135,7 +1136,7 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'reasoning_progress') {
-      if (flags.thinking === 'collapse') {
+      if (flags.thinking === 'on' || flags.thinking === 'collapse') {
         if (liveReasoningTrace.at(-1) !== event.text) liveReasoningTrace.push(event.text)
       } else if (flags.thinking !== 'off') {
         liveHeadline = latestReasoningHeadline(event.text)
@@ -1536,7 +1537,7 @@ async function handleUserMessage(
     const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
     let completedThinking = thoughtLine
     if (willThinking) {
-      completedThinking = flags.thinking === 'collapse'
+      completedThinking = flags.thinking === 'on' || flags.thinking === 'collapse'
         ? formatReasoningTraceSnapshot(
             liveReasoningTrace.length ? liveReasoningTrace : [result.reasoning!],
             thoughtLine,
