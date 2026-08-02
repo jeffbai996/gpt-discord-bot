@@ -1,5 +1,6 @@
 import OpenAI from 'openai'
 import type { ToolRegistry } from './tools/registry.ts'
+import type { CodexAgentSnapshot } from './codex-agents.ts'
 
 export interface ParsedResponse {
   react: string | null   // optional emoji to add to the user's message
@@ -31,6 +32,7 @@ export type LifecycleEvent =
   | { type: 'progress', reply: string }  // Codex commentary during a long turn
   | { type: 'reasoning_progress', text: string } // explicit Codex reasoning summary (never hidden CoT)
   | { type: 'heartbeat', elapsedMs: number, idleMs: number } // supervisor pulse even when model is silent
+  | { type: 'agents', agents: CodexAgentSnapshot[] } // live Codex subagent workflow state
   | { type: 'status', label: string }  // live activity status (codex tool events)
   | { type: 'tool_start', name: string, args?: string }
   | {
@@ -111,6 +113,8 @@ export interface RespondResult extends ParsedResponse {
   reasoning: string
   // Per-call tool dispatches, for the post-hoc trace card in gpt.ts.
   toolCalls: ToolCall[]
+  // Codex subagents spawned during this turn. API turns leave this empty.
+  agents?: CodexAgentSnapshot[]
   // Absolute paths of files a tool produced this turn (Playwright screenshots)
   // for gpt.ts to ATTACH to the Discord reply. Optional/empty when no tool emitted
   // a file (so other RespondResult producers needn't set it).

@@ -1,5 +1,5 @@
 import { createInterface } from 'node:readline'
-import { mkdtemp, open, rm, readFile, readdir, writeFile, type FileHandle } from 'node:fs/promises'
+import { mkdtemp, open, rm, readFile, readdir, stat, writeFile, type FileHandle } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -9,6 +9,7 @@ import { spawnSupervisedProcess, type ProcessSupervisorResult } from './process-
 import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
+import { CodexAgentRegistry, type CodexAgentSnapshot } from './codex-agents.ts'
 
 // Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
 // surface an explicit 'interrupted' indicator instead of failing silently.
@@ -494,18 +495,38 @@ async function findRolloutPath(threadId: string): Promise<string | null> {
 // `codex exec --json` currently drops the frequent public agent_reasoning
 // summaries. The canonical rollout retains them, so incrementally tail that
 // file and feed only those explicitly-public rows into the normal live UI.
-function watchRolloutReasoning(
+function watchRolloutActivity(
   threadId: string,
   startedAtMs: number,
   onText: (text: string) => void,
-): { stop: () => Promise<void> } {
+  onAgents: (agents: CodexAgentSnapshot[]) => void,
+): { stop: () => Promise<void>; snapshot: () => CodexAgentSnapshot[] } {
   let stopped = false
   let polling = false
   let handle: FileHandle | null = null
+  let rolloutPath = ''
   let offset = 0
   let remainder = ''
   let lastText = ''
+  let lastAgents = ''
   let stopTask: Promise<void> | null = null
+  const agentRegistry = new CodexAgentRegistry(threadId, startedAtMs)
+  const childFiles = new Map<string, {
+    handle: FileHandle
+    offset: number
+    remainder: string
+  }>()
+  const seenSiblings = new Set<string>()
+  const pendingChildren = new Map<string, any>()
+
+  const publishAgents = (force = false) => {
+    const agents = agentRegistry.snapshot()
+    const signature = JSON.stringify(agents)
+    if (force || signature !== lastAgents) {
+      lastAgents = signature
+      onAgents(agents)
+    }
+  }
 
   const consume = (chunk: string) => {
     const rows = (remainder + chunk).split('\n')
@@ -515,6 +536,7 @@ function watchRolloutReasoning(
         const event = JSON.parse(row)
         const timestamp = Date.parse(String(event?.timestamp ?? ''))
         if (Number.isFinite(timestamp) && timestamp < startedAtMs) continue
+        if (agentRegistry.consumeRoot(event)) publishAgents()
         const text = reasoningProgress(event)
         if (text && text !== lastText) {
           lastText = text
@@ -524,21 +546,104 @@ function watchRolloutReasoning(
     }
   }
 
+  const consumeChild = (threadId: string, state: { remainder: string }, chunk: string) => {
+    const rows = (state.remainder + chunk).split('\n')
+    state.remainder = rows.pop() ?? ''
+    let changed = false
+    for (const row of rows) {
+      try {
+        changed = agentRegistry.consumeChild(threadId, JSON.parse(row)) || changed
+      } catch { /* child rollouts can end on a partial JSON row */ }
+    }
+    return changed
+  }
+
+  const discoverChildren = async () => {
+    if (!rolloutPath) return
+    const dir = path.dirname(rolloutPath)
+    let names: string[] = []
+    try { names = await readdir(dir) } catch { return }
+    for (const name of names) {
+      if (!name.endsWith('.jsonl') || seenSiblings.has(name)) continue
+      const filePath = path.join(dir, name)
+      if (filePath === rolloutPath) {
+        seenSiblings.add(name)
+        continue
+      }
+      try {
+        const info = await stat(filePath)
+        // A resumed root file can be old, but every child for this turn is new.
+        if (info.mtimeMs < startedAtMs - 5_000) {
+          seenSiblings.add(name)
+          continue
+        }
+        const firstLine = (await readFile(filePath, 'utf8')).split('\n', 1)[0]
+        const event = JSON.parse(firstLine)
+        if (event?.type !== 'session_meta') continue
+        const childId = String(event?.payload?.id ?? '')
+        if (!childId || childId === threadId) {
+          seenSiblings.add(name)
+          continue
+        }
+        pendingChildren.set(filePath, event)
+        seenSiblings.add(name)
+      } catch { /* unrelated or half-created rollout */ }
+    }
+
+    // Resolve repeatedly so a grandchild discovered before its parent still lands.
+    let advanced = true
+    while (advanced) {
+      advanced = false
+      for (const [filePath, event] of pendingChildren) {
+        const childId = String(event?.payload?.id ?? '')
+        const parentId = String(event?.payload?.parent_thread_id ?? '')
+        if (!agentRegistry.acceptsParent(parentId)) continue
+        const childHandle = await open(filePath, 'r').catch(() => null)
+        if (!childHandle) continue
+        agentRegistry.consumeChild(childId, event)
+        childFiles.set(childId, { handle: childHandle, offset: 0, remainder: '' })
+        pendingChildren.delete(filePath)
+        advanced = true
+      }
+    }
+    publishAgents()
+  }
+
+  const pollChildren = async () => {
+    for (const [childId, state] of childFiles) {
+      try {
+        const size = Number((await state.handle.stat()).size)
+        if (size <= state.offset) continue
+        const buffer = Buffer.allocUnsafe(size - state.offset)
+        const { bytesRead } = await state.handle.read(buffer, 0, buffer.length, state.offset)
+        state.offset += bytesRead
+        consumeChild(childId, state, buffer.subarray(0, bytesRead).toString('utf8'))
+        // Child tools/reasoning are meaningful proof-of-life even when the
+        // visible row fields did not change; they also give the running dot a pulse.
+        publishAgents(true)
+      } catch { /* next poll can still recover other children */ }
+    }
+  }
+
   const poll = async () => {
     if (stopped || polling) return
     polling = true
     try {
       if (!handle) {
-        const rolloutPath = await findRolloutPath(threadId)
-        if (!rolloutPath || stopped) return
-        handle = await open(rolloutPath, 'r')
+        const found = await findRolloutPath(threadId)
+        if (!found || stopped) return
+        rolloutPath = found
+        handle = await open(found, 'r')
       }
       const size = Number((await handle.stat()).size)
-      if (size <= offset) return
-      const buffer = Buffer.allocUnsafe(size - offset)
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset)
-      offset += bytesRead
-      consume(buffer.subarray(0, bytesRead).toString('utf8'))
+      if (size > offset) {
+        const buffer = Buffer.allocUnsafe(size - offset)
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset)
+        offset += bytesRead
+        consume(buffer.subarray(0, bytesRead).toString('utf8'))
+      }
+      await discoverChildren()
+      await pollChildren()
     } catch {
       await handle?.close().catch(() => {})
       handle = null
@@ -564,9 +669,12 @@ function watchRolloutReasoning(
         stopped = true
         await handle?.close().catch(() => {})
         handle = null
+        await Promise.all([...childFiles.values()].map(child => child.handle.close().catch(() => {})))
+        childFiles.clear()
       })()
       return stopTask
     },
+    snapshot: () => agentRegistry.snapshot(),
   }
 }
 
@@ -889,7 +997,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
   const lines: string[] = []
   let threadId = ''
-  const rolloutReasoningWatchers: Array<ReturnType<typeof watchRolloutReasoning>> = []
+  const rolloutWatchers: Array<ReturnType<typeof watchRolloutActivity>> = []
   let stderrTail = ''
   child.stderr.setEncoding('utf8')
   child.stderr.on('data', (chunk: string) => {
@@ -904,11 +1012,19 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
       if (obj?.type === 'thread.started' && obj.thread_id) {
         threadId = String(obj.thread_id)
-        if (!rolloutReasoningWatchers.length) {
-          rolloutReasoningWatchers.push(watchRolloutReasoning(threadId, t0, text => {
-            supervisor.markActivity()
-            input.onEvent?.({ type: 'reasoning_progress', text })
-          }))
+        if (!rolloutWatchers.length) {
+          rolloutWatchers.push(watchRolloutActivity(
+            threadId,
+            t0,
+            text => {
+              supervisor.markActivity()
+              input.onEvent?.({ type: 'reasoning_progress', text })
+            },
+            agents => {
+              supervisor.markActivity()
+              input.onEvent?.({ type: 'agents', agents })
+            },
+          ))
         }
       }
       // Barge-safety: track whether codex is mid a DESTRUCTIVE tool (shell/file-edit)
@@ -971,19 +1087,20 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   let processResult: Awaited<ReturnType<typeof supervisor.wait>> | null = null
   try {
     processResult = await supervisor.wait()
-    await Promise.all(rolloutReasoningWatchers.map(watcher => watcher.stop()))
+    await Promise.all(rolloutWatchers.map(watcher => watcher.stop()))
     timedOut = processResult.stopReason === 'idle' || processResult.stopReason === 'hard'
     timeoutKind = timedOut ? processResult.stopReason as 'idle' | 'hard' : null
     replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
     codexStderr = stderrTail.trim()
   } finally {
-    await Promise.all(rolloutReasoningWatchers.map(watcher => watcher.stop()))
+    await Promise.all(rolloutWatchers.map(watcher => watcher.stop()))
     if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
     rl.close()
     await rm(outfile, { force: true }).catch(() => {})
   }
 
   const parsed = parseCodexEvents(lines.join('\n'))
+  const agents = rolloutWatchers.at(-1)?.snapshot() ?? []
   // Enrich file edits with the real unified diff from codex's session rollout.
   if (threadId && parsed.toolCalls.some(t => t.name === 'edit')) {
     try {
@@ -1063,6 +1180,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     modelUsed: effort ? `${model} ${effort}` : model,
     reasoning: parsed.reasoning,
     toolCalls: parsed.toolCalls,
+    agents,
     threadId,
     files: generatedFiles,
     temporaryFiles: generatedFiles,

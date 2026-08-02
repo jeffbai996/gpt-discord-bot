@@ -87,6 +87,7 @@ import {
   resolveLiveUpdateInterval,
   shouldLingerLiveEnd,
 } from './live-update.ts'
+import { appendAgentsPanel, type CodexAgentSnapshot } from './codex-agents.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -767,6 +768,7 @@ async function handleUserMessage(
   let liveFooter = ''
   let spinnerGlyph = '✻'
   let spinnerDots = '…'
+  let pulseAgentPanel: () => void = () => {}
   let liveUiClosed = false
   const LIVE_UI_SETTLE_MS = Number(process.env.GPT_LIVE_UI_SETTLE_MS) || 5_000
   const LIVE_UPDATE_INTERVAL_MS = resolveLiveUpdateInterval(process.env.GPT_LIVE_UPDATE_INTERVAL_MS)
@@ -837,6 +839,7 @@ async function handleUserMessage(
       spinnerDots = dots[fi % dots.length]
       fi++
       queueLiveRender()
+      pulseAgentPanel()
     }, LIVE_UPDATE_INTERVAL_MS)
   }
 
@@ -972,6 +975,8 @@ async function handleUserMessage(
   // row with output/failure/diff when the tool completes. The final render still
   // replaces this with canonical result.toolCalls after the turn.
   const liveToolRows: ToolCall[] = []
+  let liveAgents: CodexAgentSnapshot[] = []
+  let agentSpinnerFrame = 0
   let liveTraceMsgs: Message[] = []
   let liveTracePending = false
   let liveTraceDirty = false
@@ -1023,10 +1028,17 @@ async function handleUserMessage(
     if (liveWorkRehomeTask === task) liveWorkRehomeTask = null
   }
   const flushLiveTrace = () => {
-    if (liveTraceClosed || liveTracePending || !liveToolRows.length || !message.channel.isSendable()) return
+    if (liveTraceClosed || liveTracePending
+        || (!liveToolRows.length && !liveAgents.length)
+        || !message.channel.isSendable()) return
     const traceChannel = message.channel as TextChannel | DMChannel | ThreadChannel
     liveTracePending = true
-    const cards = renderTraceCards(buildTraceLines(liveToolRows), flags.trace)
+    const cards = appendAgentsPanel(
+      liveToolRows.length ? renderTraceCards(buildTraceLines(liveToolRows), flags.trace) : [],
+      liveAgents,
+      Date.now(),
+      agentSpinnerFrame,
+    )
     ;(async () => {
       if (liveTraceClosed) return
       let appendedTraceCard = false
@@ -1064,6 +1076,11 @@ async function handleUserMessage(
     if (liveTracePending) liveTraceDirty = true
     else flushLiveTrace()
   }
+  pulseAgentPanel = () => {
+    if (!liveAgents.some(agent => agent.status === 'running')) return
+    agentSpinnerFrame++
+    markLiveTraceDirty()
+  }
   const deleteLiveTrace = async () => {
     liveTraceClosed = true
     const msgs = liveTraceMsgs
@@ -1095,6 +1112,14 @@ async function handleUserMessage(
     if (event.type === 'thinking_start') { void applyLifecycle(message, 'thinking'); return }
     if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
     if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
+    if (event.type === 'agents') {
+      if (flags.trace !== 'off') {
+        liveAgents = event.agents
+        agentSpinnerFrame++
+        markLiveTraceDirty()
+      }
+      return
+    }
     if (event.type === 'tool_start') {
       void applyLifecycle(message, 'tooling')
       if (flags.trace !== 'off') {
@@ -1277,6 +1302,7 @@ async function handleUserMessage(
             durationMs: previous.durationMs + resumed.durationMs,
             reasoning: [previous.reasoning, resumed.reasoning].filter(Boolean).join('\n\n'),
             toolCalls: [...previous.toolCalls, ...resumed.toolCalls],
+            agents: [...(previous.agents ?? []), ...(resumed.agents ?? [])],
             files: [...(previous.files ?? []), ...(resumed.files ?? [])],
             temporaryFiles: [...(previous.temporaryFiles ?? []), ...(resumed.temporaryFiles ?? [])],
           }
@@ -1549,7 +1575,10 @@ async function handleUserMessage(
     }
 
     const willThinking = flags.thinking !== 'off' && !!result.reasoning?.trim() && message.channel.isSendable()
-    const willTrace = flags.trace !== 'off' && result.toolCalls.length > 0 && message.channel.isSendable()
+    const finalAgents = result.agents?.length ? result.agents : liveAgents
+    const willTrace = flags.trace !== 'off'
+      && (result.toolCalls.length > 0 || finalAgents.length > 0)
+      && message.channel.isSendable()
     await settleLiveUi()
     const transientTraceMsgs: Message[] = []
     const thoughtLine = `💭 ✓ **thought for ${fmtDur(result.durationMs)}**`
@@ -1566,7 +1595,13 @@ async function handleUserMessage(
     // Tool-trace card — gem-bot diff format: `+ ● shortName(argDigest) [Nms]`
     // (green), `- ● ... FAILED [Nms]` (red) on failure, grey `  ⎿ resultPreview`.
     if (willTrace && !liveTraceMsgs.length) {
-      const cards = renderTraceCards(buildTraceLines(result.toolCalls), flags.trace)
+      const cards = appendAgentsPanel(
+        result.toolCalls.length ? renderTraceCards(buildTraceLines(result.toolCalls), flags.trace) : [],
+        finalAgents,
+        Date.now(),
+        agentSpinnerFrame,
+        true,
+      )
       for (const card of cards) {
         try {
           const sent = await message.channel.send(card)
@@ -1577,9 +1612,15 @@ async function handleUserMessage(
 
     // If we streamed the trace live, replace it with the final canonical version
     // (full names + per-call timings from result.toolCalls).
-    if (liveTraceMsgs.length && willTrace && result.toolCalls.length) {
+    if (liveTraceMsgs.length && willTrace) {
       const lines = buildTraceLines(result.toolCalls)
-      const cards = renderTraceCards(lines, flags.trace)
+      const cards = appendAgentsPanel(
+        lines.length ? renderTraceCards(lines, flags.trace) : [],
+        finalAgents,
+        Date.now(),
+        agentSpinnerFrame,
+        true,
+      )
       for (let i = 0; i < cards.length; i++) {
         if (liveTraceMsgs[i]) {
           if (liveTraceMsgs[i].content !== cards[i]) {
