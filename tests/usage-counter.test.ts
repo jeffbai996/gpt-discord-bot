@@ -34,8 +34,8 @@ test('usage counter blanks zero reasoning while preserving aligned columns', () 
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑ 2,469,135      output ↓   19    ◷ 19.0 s  `',
-    '-# ` cache ↑ 9,876,543                       »  1.0 t/s`',
+    '-# ` input ↑ 2,469,135    output ↓   19  ◷ 19.0 s  `',
+    '-# ` cache ↑ 9,876,543                   »  1.0 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -44,7 +44,7 @@ test('usage counter blanks zero reasoning while preserving aligned columns', () 
   assert.doesNotMatch(rows[1], /reasoning/)
 })
 
-test('usage counter keeps eight-digit cache values exact on mobile', () => {
+test('usage counter keeps eight-digit cache values exact when tightened rows fit', () => {
   const footer = formatUsageCounter('both', {
     inputTokens: 99_765_431,
     outputTokens: 19,
@@ -55,9 +55,24 @@ test('usage counter keeps eight-digit cache values exact on mobile', () => {
   const rows = footer.split('\n').slice(2)
   assert.match(rows[1], /cache ↑ 98,765,432/)
   assert.doesNotMatch(rows[1], /98\.8m/)
-  assert.ok(rows[0].length <= 66)
+  assert.ok(rows[0].length <= 55)
   assert.equal(rows[0].length, rows[1].length)
   assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
+})
+
+test('usage counter tightens column gaps before compacting readable values', () => {
+  const footer = formatUsageCounter('both', {
+    inputTokens: 2_883_507,
+    outputTokens: 13_192,
+    cachedInputTokens: 2_783_232,
+    reasoningTokens: 5_978,
+  }, 614_100)
+
+  const rows = footer.split('\n').slice(2)
+  assert.match(rows[0], /input ↑\s+100,275\s+output ↓ 13,192\s+◷ 614\.1 s/)
+  assert.match(rows[1], /cache ↑ 2,783,232\s+reasoning ↓\s+5,978\s+» 21\.5 t\/s/)
+  assert.ok(rows[0].length <= 55)
+  assert.equal(rows[0].length, rows[1].length)
 })
 
 test('usage counter blanks zero cache while preserving aligned columns', () => {

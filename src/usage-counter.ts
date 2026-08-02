@@ -5,8 +5,8 @@ export interface CounterUsage {
   reasoningTokens: number
 }
 
-const MOBILE_ROW_CEILING = 60
-const COMPACT_SPEED_ROW_CEILING = 50
+const MOBILE_ROW_CEILING = 50
+const COMPACT_SPEED_ROW_CEILING = 47
 
 function compactNumber(value: number): string {
   if (value < 1_000) return value.toLocaleString('en-US')
@@ -28,7 +28,7 @@ export function formatUsageCounter(
   const uncachedInput = Math.max(0, usage.inputTokens - usage.cachedInputTokens)
   const seconds = durationMs / 1000
   const rate = seconds > 0 ? usage.outputTokens / seconds : 0
-  const renderRows = (compact: boolean, wholeSpeeds = false) => {
+  const renderRows = (compact: boolean, wholeSpeeds = false, tight = false) => {
     const n = compact ? compactNumber : (value: number) => value.toLocaleString('en-US')
     const inputWidth = Math.max(compact ? 4 : 7, n(uncachedInput).length, n(usage.cachedInputTokens).length)
     const outputWidth = Math.max(4, n(usage.outputTokens).length, n(usage.reasoningTokens).length)
@@ -43,18 +43,21 @@ export function formatUsageCounter(
       : ''.padEnd(secondTop.length)
     const duration = seconds.toFixed(wholeSpeeds ? 0 : 1)
     const throughput = rate.toFixed(wholeSpeeds ? 0 : 1).padStart(wholeSpeeds ? 2 : 4)
+    const columnGap = tight ? ' ' : '   '
+    const speedGap = tight ? '  ' : '    '
     return {
-      top: `${firstTop}   ${secondTop}    ◷ ${duration} s`,
-      bottom: `${firstBottom}   ${secondBottom}    » ${throughput} t/s`,
+      top: `${firstTop}${columnGap}${secondTop}${speedGap}◷ ${duration} s`,
+      bottom: `${firstBottom}${columnGap}${secondBottom}${speedGap}» ${throughput} t/s`,
     }
   }
 
   let { top, bottom } = renderRows(false)
-  if (Math.max(top.length, bottom.length) > MOBILE_ROW_CEILING) ({ top, bottom } = renderRows(false, true))
+  if (Math.max(top.length, bottom.length) > MOBILE_ROW_CEILING) ({ top, bottom } = renderRows(false, false, true))
+  if (Math.max(top.length, bottom.length) > MOBILE_ROW_CEILING) ({ top, bottom } = renderRows(false, true, true))
   if (Math.max(top.length, bottom.length) > MOBILE_ROW_CEILING) {
-    ({ top, bottom } = renderRows(true))
+    ({ top, bottom } = renderRows(true, false, true))
     if (Math.max(top.length, bottom.length) > COMPACT_SPEED_ROW_CEILING) {
-      ({ top, bottom } = renderRows(true, true))
+      ({ top, bottom } = renderRows(true, true, true))
     }
   }
   if (mode === 'token') return `\n\n-# \`${top} \``
