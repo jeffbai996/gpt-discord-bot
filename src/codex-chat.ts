@@ -58,7 +58,12 @@ const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv =>
 // a final runaway fuse so a broken process cannot live forever.
 const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 10 * 60_000
 const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 45 * 60_000
-const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 120_000
+// A recovery-looking message can still contain real implementation work (for
+// example, a UI bug report that says an animation is "stuck"). Two minutes was
+// short enough to kill healthy Codex turns before they finished verification.
+// Keep the quick policy below the 45-minute task fuse, but give it the same
+// silence allowance as ordinary work.
+const DEFAULT_QUICK_TIMEOUT_MS = Number(process.env.GPT_CODEX_QUICK_TIMEOUT_MS) || 10 * 60_000
 // Five seconds keeps the live row visibly animated while remaining far below
 // Discord's REST edit pressure. discord.js still owns bucket-level throttling.
 const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 5_000

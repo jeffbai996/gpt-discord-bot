@@ -300,14 +300,14 @@ test('toolCallsFromCompletedItem: maps file changes per path', () => {
   ])
 })
 
-test('codexTimeoutMs: uses quick timeout for recovery/meta pings', () => {
+test('codexTimeoutMs: gives recovery/meta pings enough time to finish real work', () => {
   assert.equal(
     codexTimeoutMs({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
-    120_000,
+    600_000,
   )
   assert.deepEqual(
     codexWatchdogPolicy({ userMessage: "Where'd ya go, did token limits choke you", extraText: '' }),
-    { idleTimeoutMs: 120_000, hardTimeoutMs: 120_000, quick: true },
+    { idleTimeoutMs: 600_000, hardTimeoutMs: 600_000, quick: true },
   )
 })
 
@@ -421,9 +421,10 @@ test('codex plan args are read-only and never use the bypass flag', () => {
   assert.ok(args.includes('approval_policy="never"'))
 })
 
-test('codexTimeoutMs: bare status pokes still fail fast', () => {
-  // No question, no work verb — just "are you alive" noise. Keep these quick.
+test('codexTimeoutMs: bare status pokes use the shorter ten-minute leash', () => {
+  // No question, no work verb — just "are you alive" noise. Keep these shorter
+  // than task turns without killing a healthy child after only two minutes.
   for (const m of ['you alive?', 'ping', 'where did you go', 'you pooping out again lol']) {
-    assert.equal(codexTimeoutMs({ userMessage: m, extraText: '' }), 120_000, `bare poke: ${m}`)
+    assert.equal(codexTimeoutMs({ userMessage: m, extraText: '' }), 600_000, `bare poke: ${m}`)
   }
 })
