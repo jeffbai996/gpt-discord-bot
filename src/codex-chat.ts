@@ -939,7 +939,7 @@ function findRateLimits(o: any): any {
   return null
 }
 
-// Freshest ChatGPT-sub rate-limit snapshot codex logged — rides a token_count event
+// Freshest Codex-subscription rate-limit snapshot logged in a token_count event.
 // in the session rollout (not the --json stream), so scan the newest rollouts for the
 // most recent one. primary = 5h window, secondary = weekly. Best-effort; null if none.
 export async function readLatestRateLimits(): Promise<RateLimits | null> {

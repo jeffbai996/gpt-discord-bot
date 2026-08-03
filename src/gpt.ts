@@ -320,7 +320,7 @@ const agentCommands = new GptAgentCommandStore(
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for metered OpenAI endpoints that have no local equivalent:
-// audio.transcriptions (Whisper), web-search side-call, Responses fallback.
+// audio transcriptions, web-search side calls, explicit API turns, and API postmortems.
 const openaiRaw = new OpenAI({ apiKey: OPENAI_KEY })
 
 // Local Ollama client (OpenAI-compatible /v1) for the cost-sensitive background
@@ -1225,7 +1225,7 @@ async function handleUserMessage(
 
   try {
     throwIfStopped()
-    // Codex-as-default-chat: route text turns through the Codex CLI (flat-sub,
+    // Codex-as-default-chat: route text turns through the Codex subscription CLI,
     // self-web-searching) instead of the metered API. Downloaded images are passed
     // to Codex as local files. Automatic API routing is reserved for a confirmed
     // dead Codex child and can only report a postmortem; it never continues the

@@ -81,14 +81,12 @@ export interface RespondResult extends ParsedResponse {
     totalTokens: number
     // OpenAI's automatic prompt-prefix caching credits hits as
     // usage.input_tokens_details.cached_tokens in the Responses usage block.
-    // gpt-4o and gpt-5 support it; cached input tokens
-    // bill at ~50% of the normal rate. Surface here so callers can log
-    // cache health without re-parsing the upstream payload.
+    // Supported models report cached input tokens here. Surface them so
+    // callers can log cache health without assuming one model's billing rate.
     cachedInputTokens: number
-    // reasoning_tokens are billed separately on gpt-5 (internal
-    // chain-of-thought), reported via output_tokens_details.reasoning_tokens.
-    // Already counted toward outputTokens but worth surfacing for telemetry
-    // (lets you see how much the model spent reasoning vs replying).
+    // reasoning_tokens are reported via output_tokens_details.reasoning_tokens
+    // and already counted toward outputTokens. Exact billing depends on the
+    // selected engine/model rather than this usage shape.
     reasoningTokens: number
   } | null
   // Per-turn MARGINAL token usage (this turn only), for the ↑/↓ counter display.

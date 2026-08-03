@@ -1,8 +1,8 @@
 # gpt-bot
 
-**A Discord bot that runs OpenAI's Codex CLI as a persistent, agentic chat engine.** It combines flat-subscription Codex sessions with live tool traces, multimodal input, voice, semantic memory, browser automation, and a metered API engine.
+**A Discord bot that runs OpenAI's Codex CLI as a persistent, agentic chat engine.** It combines Codex subscription sessions with live tool traces, multimodal input, voice, semantic memory, browser automation, and a metered API engine.
 
-Most turns run through **Codex with `gpt-5.6-sol`** on a ChatGPT subscription. The bot streams public progress and tool events into Discord while Codex searches, reads, edits, runs commands, and verifies work. The OpenAI API remains available as an explicit per-channel engine. After a confirmed Codex process failure, automatic API routing is limited to a tool-less postmortem and cannot continue the original task.
+Most turns run through **Codex with `gpt-5.6-sol`** on a Codex subscription. The bot streams public progress and tool events into Discord while Codex searches, reads, edits, runs commands, and verifies work. The OpenAI API remains available as an explicit per-channel engine. After a confirmed Codex process failure, automatic API routing is limited to a tool-less postmortem and cannot continue the original task.
 
 > **Current shape:** persistent Codex sessions, four-mode thinking and trace surfaces, per-turn token telemetry, safe queueing and steering, plan approval, multimodal carryover, realtime voice, local RAG, and drain-safe deployment.
 
@@ -48,7 +48,7 @@ Thinking, trace, and counter surfaces are independently configurable per channel
 
 | Engine | Runs | Billing | Tool surface |
 |---|---|---|---|
-| **`codex`** (default) | persistent Codex CLI session; per-channel model and reasoning effort | ChatGPT subscription | shell, filesystem, network, web search, installed tools, MCP, images |
+| **`codex`** (default) | persistent Codex CLI session; per-channel model and reasoning effort | Codex subscription | shell, filesystem, network, web search, installed tools, MCP, images |
 | **`api`** | OpenAI API request loop | metered tokens | built-in function registry, web/fetch/browser, semantic memory, MCP |
 
 Codex receives images directly with `codex exec --image`; image turns no longer detour through the API. Automatic failure routing is intentionally conservative: ordinary adapter errors do not invoke the API, and a confirmed dead or timed-out Codex child can trigger only a tool-less crash report after the grace window. The original task remains unfinished. Full API agent behavior is available only when the channel explicitly selects the API engine.
@@ -75,9 +75,9 @@ Codex reports cumulative usage when a session resumes, so gpt-bot stores the pri
 
 Longer-horizon views:
 
-- **`/gpt stats`** — persistent totals across restarts and channels, cache/reasoning splits, API-cost equivalent, model counts, uptime, context pressure, and the latest subscription-limit snapshot.
+- **`/gpt stats`** — persistent totals across restarts and channels, cache/reasoning splits, Sol API-rate equivalent, model counts, uptime, context pressure, and the latest subscription-limit snapshot.
 - **`/gpt cache`** — rolling 50-turn prompt-cache telemetry for one channel.
-- **`/gpt limits`** — live ChatGPT subscription windows with usage bars and reset countdowns.
+- **`/gpt limits`** — live Codex subscription windows with usage bars and reset countdowns.
 
 ---
 
@@ -193,7 +193,7 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt compact [#channel]` | force a rolling-summary update |
 | `/gpt stats` | show persistent usage, context, and limit telemetry |
 | `/gpt cache [#channel]` | show rolling automatic prompt-cache telemetry |
-| `/gpt limits` | show ChatGPT subscription usage windows |
+| `/gpt limits` | show Codex subscription usage windows |
 | `/gpt persona <filename>` | hot-swap the runtime persona |
 | `/gpt voice join\|type\|leave\|speak` | control realtime voice |
 
@@ -208,7 +208,7 @@ Requirements:
 - Node.js 22+
 - an installed and authenticated Codex CLI;
 - a Discord application with Message Content intent;
-- an OpenAI API key for fallback, search, transcription, and voice;
+- an OpenAI API key for the explicit API engine, postmortems, search, transcription, and voice;
 - optionally, an Ollama-compatible endpoint for local embeddings and summaries.
 
 ```bash

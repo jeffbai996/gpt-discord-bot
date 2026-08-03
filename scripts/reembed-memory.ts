@@ -1,7 +1,7 @@
 // One-off migration: re-embed the passive-memory store from OpenAI
 // text-embedding-3-small (1536-dim) to local Ollama bge-m3 (1024-dim).
 //
-// Why: gpt-bot's chat engine moved to the flat-sub Codex CLI, but the
+// Why: gpt-bot's chat engine moved to the Codex subscription CLI, but the
 // per-message embedding path was left on the metered OpenAI API. Repointing it
 // at Ollama changes the vector dimension, which is baked into the vss0 virtual
 // table — so the existing vectors are incompatible and must be rebuilt.

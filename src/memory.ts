@@ -5,7 +5,7 @@ import OpenAI from 'openai'
 // Embedding backend. We embed every passive message, so this runs constantly —
 // it's pointed at the local Ollama `bge-m3` embedder (1024-dim) rather than the
 // metered OpenAI `text-embedding-3-small` (1536-dim) it used through v0.9. The
-// chat engine moved to the flat-sub Codex CLI; this closes the last metered
+// chat engine moved to the Codex subscription CLI; this closes the last metered
 // per-message API call. Override both together — model and dim MUST agree, and
 // changing them requires re-embedding the store (dimension is baked into the
 // vss table). Mirrors llm-bot's memory backend.

@@ -5,7 +5,7 @@ import fs from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { AccessManager, CODEX_MODELS, type ReasoningEffort, type CodexModel } from './access.ts'
 import { PersonaLoader } from './persona.ts'
-import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
+import { snapshot as cacheSnapshot, globalSnapshot, type CacheSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionHistory, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
@@ -69,6 +69,30 @@ export function fmtClearAcknowledgement(channelId: string): string {
 export function fmtSettingChange(label: string, value: string, previous: string): string {
   const changed = value === previous ? '' : ` (was \`${previous}\`)`
   return `✅ ${label} → \`${value}\`${changed}`
+}
+
+export function fmtCacheTelemetry(channelId: string, snap: CacheSnapshot): string {
+  const ageMs = snap.newestTs && snap.oldestTs ? snap.newestTs - snap.oldestTs : 0
+  const ageMin = (ageMs / 60000).toFixed(1)
+  const hitPct = (snap.cacheHitRate * 100).toFixed(1)
+  const inK = (snap.inputTokens / 1000).toFixed(1)
+  const cachedK = (snap.cachedInputTokens / 1000).toFixed(1)
+  const outK = (snap.outputTokens / 1000).toFixed(1)
+  const reasoningLine = snap.reasoningTokens > 0
+    ? `\nreasoning:      ${snap.reasoningTokens.toLocaleString('en-US')} tokens (included in output telemetry)`
+    : ''
+  const modelsLine = snap.models.length > 0
+    ? `\nmodels seen:    ${snap.models.join(', ')}`
+    : ''
+  return [
+    `📊 <#${channelId}> prompt-cache telemetry (last ${snap.turns} turns, window ${ageMin}min)`,
+    '```',
+    `cache hit rate: ${hitPct}%`,
+    `input tokens:   ${inK}k total · ${cachedK}k cached`,
+    `output tokens:  ${outK}k` + reasoningLine + modelsLine,
+    '```',
+    '_Cached input is provider-reported prefix reuse; billing depends on engine and model._',
+  ].join('\n')
 }
 
 export interface DoctorCheck { name: string; ok: boolean; detail: string }
@@ -209,7 +233,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('stats')
-    .setDescription('Show token usage since boot')
+    .setDescription('Show cumulative token usage')
   )
   .addSubcommand(s => s
     .setName('limits')
@@ -225,10 +249,10 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Set or show the Codex model')
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
-        { name: 'gpt-5.5 — previous flagship', value: 'gpt-5.5' },
-        { name: 'gpt-5.6-sol — Sol, flagship reasoning/coding', value: 'gpt-5.6-sol' },
-        { name: 'gpt-5.6-terra — balanced cost/intelligence', value: 'gpt-5.6-terra' },
-        { name: 'gpt-5.6-luna — cheapest high-volume 5.6', value: 'gpt-5.6-luna' },
+        { name: 'gpt-5.5 - legacy', value: 'gpt-5.5' },
+        { name: 'gpt-5.6-sol - frontier coding', value: 'gpt-5.6-sol' },
+        { name: 'gpt-5.6-terra - balanced', value: 'gpt-5.6-terra' },
+        { name: 'gpt-5.6-luna - high-throughput', value: 'gpt-5.6-luna' },
       ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
@@ -291,7 +315,7 @@ export const gptCommand = new SlashCommandBuilder()
       .setDescription('codex | api')
       .setRequired(true)
       .addChoices(
-        { name: 'codex - flat sub (default)', value: 'codex' },
+        { name: 'codex - Codex subscription (default)', value: 'codex' },
         { name: 'api - metered OpenAI API', value: 'api' },
       )
     )
@@ -552,7 +576,7 @@ export async function executeGptCommand(
         `output:   ${h(g.outputTokens)} tok  (${h(g.reasoningTokens)} reasoning)`,
         `total:    ${h(total)} tok`,
         '',
-        `$-equiv:  $${dTotal.toFixed(2)}   (gpt-5.6-sol API rates, est.)`,
+        `Sol-equiv: $${dTotal.toFixed(2)}   (API-rate estimate)`,
         `          in $${dIn.toFixed(2)} \u00b7 cached $${dCached.toFixed(2)} \u00b7 out $${dOut.toFixed(2)}`,
         '',
         `engines:  ${engines}`,
@@ -589,29 +613,8 @@ export async function executeGptCommand(
           ephemeral: true
         })
       }
-      const ageMs = snap.newestTs && snap.oldestTs ? snap.newestTs - snap.oldestTs : 0
-      const ageMin = (ageMs / 60000).toFixed(1)
-      const hitPct = (snap.cacheHitRate * 100).toFixed(1)
-      const inK = (snap.inputTokens / 1000).toFixed(1)
-      const cachedK = (snap.cachedInputTokens / 1000).toFixed(1)
-      const outK = (snap.outputTokens / 1000).toFixed(1)
-      const reasoningK = (snap.reasoningTokens / 1000).toFixed(1)
-      const reasoningLine = snap.reasoningTokens > 0
-        ? `\nReasoning tokens: ${reasoningK}k (counted in output, billed separately)`
-        : ''
-      const modelsLine = snap.models.length > 0
-        ? `\nModels seen: ${snap.models.join(', ')}`
-        : ''
       return interaction.reply({
-        content: [
-          `📊 <#${channel.id}> prompt-cache telemetry (last ${snap.turns} turns, window ${ageMin}min)`,
-          '```',
-          `cache hit rate: ${hitPct}%`,
-          `input tokens:   ${inK}k total · ${cachedK}k cached (50% rate)`,
-          `output tokens:  ${outK}k` + reasoningLine + modelsLine,
-          '```',
-          `_OpenAI caches prompt prefixes automatically — no TTL or flush controls. Cached tokens bill at ~50% of the input rate._`
-        ].join('\n'),
+        content: fmtCacheTelemetry(channel.id, snap),
         ephemeral: true
       })
     }

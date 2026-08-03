@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, fmtSettingChange, gptCommand } from '../src/commands.ts'
+import { fmtCacheTelemetry, fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, fmtSettingChange, gptCommand } from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 
@@ -74,6 +74,54 @@ test('/gpt effort labels xhigh without an extra descriptor', () => {
   const xhigh = value?.choices?.find((choice: any) => choice.value === 'xhigh')
 
   assert.equal(xhigh?.name, 'xhigh')
+})
+
+test('/gpt engine names the Codex subscription instead of a flat sub', () => {
+  const json = gptCommand.toJSON()
+  const engine: any = json.options?.find((option: any) => option.name === 'engine')
+  const value: any = engine?.options?.find((option: any) => option.name === 'value')
+  const codex = value?.choices?.find((choice: any) => choice.value === 'codex')
+
+  assert.equal(codex?.name, 'codex - Codex subscription (default)')
+})
+
+test('/gpt stats describes persisted cumulative usage', () => {
+  const json = gptCommand.toJSON()
+  const stats = json.options?.find((option: any) => option.name === 'stats')
+
+  assert.equal(stats?.description, 'Show cumulative token usage')
+})
+
+test('/gpt model choices use durable tier labels', () => {
+  const json = gptCommand.toJSON()
+  const model: any = json.options?.find((option: any) => option.name === 'model')
+  const value: any = model?.options?.find((option: any) => option.name === 'value')
+
+  assert.deepEqual(value?.choices?.map((choice: any) => choice.name), [
+    'gpt-5.5 - legacy',
+    'gpt-5.6-sol - frontier coding',
+    'gpt-5.6-terra - balanced',
+    'gpt-5.6-luna - high-throughput',
+  ])
+})
+
+test('cache telemetry reports observed usage without inventing one billing rate', () => {
+  const message = fmtCacheTelemetry('123', {
+    turns: 4,
+    oldestTs: 1_000,
+    newestTs: 61_000,
+    inputTokens: 10_000,
+    outputTokens: 2_000,
+    cachedInputTokens: 8_000,
+    reasoningTokens: 500,
+    cacheHitRate: 0.8,
+    models: ['gpt-5.6-sol', 'gpt-5.6-terra'],
+  })
+
+  assert.match(message, /8\.0k cached/)
+  assert.match(message, /reasoning:\s+500 tokens/)
+  assert.match(message, /billing depends on engine and model/)
+  assert.doesNotMatch(message, /50% rate|billed separately/i)
 })
 
 test('setting acknowledgements include the previous value only when changed', () => {
