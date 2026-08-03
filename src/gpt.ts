@@ -19,7 +19,6 @@ import {
   CodexStoppedError,
   codexTimeoutMs,
   isInFlightStatusPing,
-  requiresCodexContinuation,
   respondViaCodex,
 } from './codex-chat.ts'
 import {
@@ -1264,54 +1263,6 @@ async function handleUserMessage(
           onEvent,
           readOnly: !!planArm,
         })
-        // A model-level continuity rule is not enforcement: Codex can cleanly
-        // exit after saying "I'm tracing that now", which leaves no child for
-        // the idle watchdog to watch. Resume the same session automatically and
-        // require a terminal outcome. The cap prevents a pathological model
-        // from creating an infinite self-resume loop.
-        for (let continuation = 1;
-          !planArm
-          && continuation <= 3
-          && requiresCodexContinuation(userText, result.reply ?? '');
-          continuation++) {
-          console.error(`[codex-continuity] resuming channel=${channelId} attempt=${continuation}`)
-          onEvent({
-            type: 'progress',
-            reply: 'That was narration, not completion. Continuing the same task now.',
-          })
-          const previous = result
-          const resumed = await respondViaCodex({
-            systemPrompt,
-            history,
-            userMessage:
-              'Harness continuity check: your previous response ended by promising ongoing or future work. '
-              + 'Continue the original user request now. Do not return another progress-only final response; '
-              + 'finish the implementation, verification, and deployment, or report a concrete blocker.',
-            userName: message.author.username,
-            reasoningEffort: flags.reasoning,
-            codexModel: flags.codexModel,
-            channelId,
-            turnGeneration,
-            resumeSessionId: previous.threadId || resumeSessionId,
-            signal: stopController.signal,
-            onEvent,
-            readOnly: false,
-          })
-          result = {
-            ...resumed,
-            durationMs: previous.durationMs + resumed.durationMs,
-            reasoning: [previous.reasoning, resumed.reasoning].filter(Boolean).join('\n\n'),
-            toolCalls: [...previous.toolCalls, ...resumed.toolCalls],
-            agents: [...(previous.agents ?? []), ...(resumed.agents ?? [])],
-            files: [...(previous.files ?? []), ...(resumed.files ?? [])],
-            temporaryFiles: [...(previous.temporaryFiles ?? []), ...(resumed.temporaryFiles ?? [])],
-          }
-        }
-        if (!planArm && requiresCodexContinuation(userText, result.reply ?? '')) {
-          result.reply =
-            'Blocked: the continuity guard resumed this task three times, but each run still ended with '
-            + 'a promise of future work instead of a completed result. No further work is running.'
-        }
         if (result.threadId) channelSessions.set(channelId, result.threadId)
         // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
         // on a RESUMED session is the running session CUMULATIVE, so showing it
