@@ -84,6 +84,7 @@ import {
   advanceLiveProgressDwell,
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
+  liveProgressHoldForReplacement,
   shouldLingerLiveEnd,
 } from './live-update.ts'
 import { appendAgentsPanel, type CodexAgentSnapshot } from './codex-agents.ts'
@@ -959,6 +960,13 @@ async function handleUserMessage(
 
   const queueLiveText = (raw: string, rememberProgress: boolean, footer = ''): void => {
     if (liveUiClosed) return
+    if (rememberProgress) {
+      liveProgressHoldUntil = liveProgressHoldForReplacement({
+        text: raw,
+        currentText: liveDetail,
+        holdUntil: liveProgressHoldUntil,
+      })
+    }
     liveDetail = raw.trim()
     liveFooter = footer.trim()
     if (rememberProgress) lastProgressText = liveDetail

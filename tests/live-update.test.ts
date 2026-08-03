@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   advanceLiveProgressDwell,
   liveProgressDwellMs,
+  liveProgressHoldForReplacement,
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
   shouldLingerLiveEnd,
@@ -27,12 +28,33 @@ test('end linger applies only when a normal turn rendered live state', () => {
   assert.equal(shouldLingerLiveEnd({ isRegeneration: true, hasLiveState: true }), false)
 })
 
-test('substantial progress gets paragraph-scale read time', () => {
-  assert.equal(liveProgressDwellMs('short status'), 0)
+test('every narration gets at least ten seconds of read time', () => {
+  assert.equal(liveProgressDwellMs(''), 0)
+  assert.equal(liveProgressDwellMs('short status'), 10_000)
   assert.equal(liveProgressDwellMs('first line\nsecond line'), 10_000)
   assert.equal(liveProgressDwellMs('word '.repeat(50)), 15_000)
   assert.equal(liveProgressDwellMs('word '.repeat(100)), 30_000)
   assert.equal(liveProgressDwellMs('x'.repeat(1000), 8000), 8000)
+})
+
+test('new narration replaces the previous narration hold immediately', () => {
+  const previousHoldUntil = 30_000
+  assert.equal(
+    liveProgressHoldForReplacement({
+      text: 'new narration',
+      currentText: 'old narration',
+      holdUntil: previousHoldUntil,
+    }),
+    0,
+  )
+  assert.equal(
+    liveProgressHoldForReplacement({
+      text: 'same narration',
+      currentText: 'same narration',
+      holdUntil: previousHoldUntil,
+    }),
+    previousHoldUntil,
+  )
 })
 
 test('new substantial progress starts one reading dwell', () => {

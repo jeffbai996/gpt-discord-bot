@@ -21,18 +21,28 @@ export function shouldLingerLiveEnd(input: {
   return !input.isRegeneration && input.hasLiveState
 }
 
-/** Give substantial live narration enough screen time before replacing it. */
+/** Give every live narration enough screen time to be readable. */
 export function liveProgressDwellMs(
   text: string,
   capMs = DEFAULT_PROGRESS_DWELL_CAP_MS,
 ): number {
   const clean = text.trim()
-  if (clean.length < 240 && !clean.includes('\n')) return 0
+  if (!clean) return 0
   const words = clean.split(/\s+/).filter(Boolean).length
   return Math.min(
     Math.max(0, capMs),
     Math.max(MIN_PROGRESS_DWELL_MS, words * READING_MS_PER_WORD),
   )
+}
+
+/** A newer narration may replace the current one without waiting for its dwell. */
+export function liveProgressHoldForReplacement(input: {
+  text: string
+  currentText: string
+  holdUntil: number
+}): number {
+  const next = input.text.trim()
+  return next && next !== input.currentText ? 0 : input.holdUntil
 }
 
 export function advanceLiveProgressDwell(input: {
