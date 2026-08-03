@@ -87,6 +87,11 @@ import {
   shouldLingerLiveEnd,
 } from './live-update.ts'
 import { appendAgentsPanel, type CodexAgentSnapshot } from './codex-agents.ts'
+import {
+  GptAgentCommandStore,
+  parseAgentCommand,
+  runAgentCommand,
+} from './agent-commands.ts'
 import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
@@ -308,6 +313,10 @@ const restartInbox = new RestartInbox(path.join(STATE_DIR, 'restart-inbox.json')
 initGlobalStats(path.join(STATE_DIR, 'global-stats.json'))
 const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
 const failedTurns = new FailedTurnStore(path.join(STATE_DIR, 'failed-turns.json'))
+const agentCommands = new GptAgentCommandStore(
+  path.join(STATE_DIR, 'agent-registry'),
+  process.env.GPT_INSTANCE_ID || APP_ID,
+)
 persona.setPinnedFactsStore(pinnedFacts)
 const openai = new OpenAIClient(OPENAI_KEY, DEFAULT_MODEL)
 // Raw SDK client for metered OpenAI endpoints that have no local equivalent:
@@ -437,6 +446,7 @@ const client = new Client({
 const shutdownGate = new ShutdownGate()
 const plans = new PlanModeStore()
 const queueMarker = new LatestQueueMarker(() => client.user?.id)
+const activeAgentViews = new Map<string, (agents: CodexAgentSnapshot[]) => Promise<void>>()
 const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 1_000
 interface QueuedChannelTurn {
   message: Message
@@ -668,6 +678,7 @@ async function handleUserMessage(
   const selfId = client.user?.id ?? ''
   const stopController = new AbortController()
   const turnGeneration = activeTurns.register(channelId, () => stopController.abort())
+  const agentWorkflowId = `${message.id}:${turnGeneration}`
   logTurnLifecycle({
     event: 'turn_registered',
     channelId,
@@ -1087,6 +1098,13 @@ async function handleUserMessage(
     liveTraceDirty = false
     for (const m of msgs) await m.delete().catch(() => {})
   }
+  const refreshAgentView = async (agents: CodexAgentSnapshot[]) => {
+    liveAgents = agents
+    agentSpinnerFrame++
+    if (!liveAgents.length && !liveToolRows.length) await deleteLiveTrace()
+    else markLiveTraceDirty()
+  }
+  activeAgentViews.set(channelId, refreshAgentView)
 
   const findLiveToolRow = (name: string, args?: Record<string, unknown>): ToolCall | null => {
     const short = shortToolName(name)
@@ -1112,8 +1130,9 @@ async function handleUserMessage(
     if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
     if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
     if (event.type === 'agents') {
+      agentCommands.record(channelId, agentWorkflowId, event.agents)
       if (flags.trace !== 'off') {
-        liveAgents = event.agents
+        liveAgents = agentCommands.snapshot(channelId, agentWorkflowId)
         agentSpinnerFrame++
         markLiveTraceDirty()
       }
@@ -1526,7 +1545,11 @@ async function handleUserMessage(
     }
 
     const willThinking = flags.thinking !== 'off' && !!result.reasoning?.trim() && message.channel.isSendable()
-    const finalAgents = result.agents?.length ? result.agents : liveAgents
+    let finalAgents = result.agents?.length ? result.agents : liveAgents
+    if (finalAgents.length) {
+      agentCommands.record(channelId, agentWorkflowId, finalAgents)
+      finalAgents = agentCommands.snapshot(channelId, agentWorkflowId)
+    }
     const willTrace = flags.trace !== 'off'
       && (result.toolCalls.length > 0 || finalAgents.length > 0)
       && message.channel.isSendable()
@@ -1735,6 +1758,7 @@ async function handleUserMessage(
       }
     } catch {}
   } finally {
+    if (activeAgentViews.get(channelId) === refreshAgentView) activeAgentViews.delete(channelId)
     await cleanupAttachmentFiles(imagePaths).catch(e => console.error('attachment cleanup failed:', e))
     const temporaryDirs = new Set(temporaryResultFiles.map(file => path.dirname(file)))
     for (const file of temporaryResultFiles) {
@@ -1826,6 +1850,18 @@ async function handleInboundMessage(message: Message): Promise<void> {
   }
 
   if (!access.canHandle({ channelId, userId, isMention })) return
+
+  // Reserved before barge/queue handling: these are gpt's view-only agent
+  // controls, never shell commands and never a reason to interrupt live work.
+  const agentCommand = parseAgentCommand(message.content, client.user?.id)
+  if (agentCommand) {
+    const response = runAgentCommand(agentCommands, channelId, agentCommand)
+    if (agentCommand.action === 'clear') {
+      await activeAgentViews.get(channelId)?.(agentCommands.snapshot(channelId))
+    }
+    await replyOrSend(message, response)
+    return
+  }
 
   // Lone ❌ / X message: hard-kill the in-flight turn before queue/barge logic.
   if (isHardStopMessage(message.content)) {

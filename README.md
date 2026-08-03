@@ -237,12 +237,14 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | `global-stats.json` | cumulative token telemetry |
 | `pending-placeholders.json` / `deferred-actions.json` | crash recovery and delayed cleanup |
 | `plan-mode.json` / `restart-inbox.json` | plan approvals and restart-preserved work |
+| `agent-registry/*.json` | per-instance Codex subagent snapshots for `!agents` |
 
 ### Key environment variables
 
 | Variable | Purpose |
 |---|---|
 | `GPT_STATE_DIR` | runtime state directory |
+| `GPT_INSTANCE_ID` | optional agent-registry namespace; defaults to `DISCORD_APP_ID` |
 | `GPT_CODEX_BIN` | Codex CLI path |
 | `GPT_CODEX_CHAT` | set `0` to disable Codex as the default engine |
 | `GPT_CODEX_DEFAULT_REPO` | default repository for delegated Codex work |
