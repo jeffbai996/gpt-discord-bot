@@ -60,6 +60,16 @@ test('/gpt plan is a one-shot read-only planning command', () => {
   assert.ok(plan)
   assert.match(plan.description, /next message read-only/i)
 })
+
+test('/gpt effort labels xhigh without an extra descriptor', () => {
+  const json = gptCommand.toJSON()
+  const effort: any = json.options?.find((option: any) => option.name === 'effort')
+  const value: any = effort?.options?.find((option: any) => option.name === 'value')
+  const xhigh = value?.choices?.find((choice: any) => choice.value === 'xhigh')
+
+  assert.equal(xhigh?.name, 'xhigh')
+})
+
 test('setting acknowledgements include the previous value only when changed', () => {
   assert.equal(fmtSettingChange('effort', 'high', 'medium'), '✅ effort → `high` (was `medium`)')
   assert.equal(fmtSettingChange('effort', 'high', 'high'), '✅ effort → `high`')

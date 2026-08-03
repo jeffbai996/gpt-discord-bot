@@ -183,7 +183,7 @@ export const gptCommand = new SlashCommandBuilder()
         { name: 'low', value: 'low' },
         { name: 'medium', value: 'medium' },
         { name: 'high', value: 'high' },
-        { name: 'xhigh - extra deep', value: 'xhigh' },
+        { name: 'xhigh', value: 'xhigh' },
         { name: 'max - deepest, slowest', value: 'max' },
       )
     )
