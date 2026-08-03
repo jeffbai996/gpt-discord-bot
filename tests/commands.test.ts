@@ -34,6 +34,12 @@ test('limits labels other windows from their actual duration', () => {
   assert.match(lines[1], /^2-hour:/)
 })
 
+test('limits slash command names the Codex subscription', () => {
+  const command = gptCommand.toJSON()
+  const limits = command.options?.find((option: any) => option.name === 'limits')
+  assert.equal(limits?.description, 'Show Codex subscription usage')
+})
+
 test('stats formats the latest codex prompt pressure against its context window', () => {
   assert.equal(
     fmtContextPressureLine({ lastInputTokens: 208_035, modelContextWindow: 258_400 }),

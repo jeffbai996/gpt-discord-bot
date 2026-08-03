@@ -12,7 +12,7 @@ import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
 import { PLAN_MODE_ACK, type PlanModeStore } from './plan-mode.ts'
 import { presetPatch, type ChannelPreset } from './presets.ts'
 
-// Render the ChatGPT-sub rate-limit windows as bars + reset countdowns. Shared by
+// Render the Codex subscription rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
 export function fmtLimitLines(rl: RateLimits | null): string[] {
   if (!rl || (!rl.primary && !rl.secondary)) return ['limits:   (no codex snapshot yet — run a turn first)']
@@ -213,7 +213,7 @@ export const gptCommand = new SlashCommandBuilder()
   )
   .addSubcommand(s => s
     .setName('limits')
-    .setDescription('Show ChatGPT subscription usage')
+    .setDescription('Show Codex subscription usage')
   )
   .addSubcommand(s => s
     .setName('settings')
@@ -523,7 +523,7 @@ export async function executeGptCommand(
     if (subcommand === 'limits') {
       const rl = await readLatestRateLimits()
       const plan = rl?.planType ? ` (plan: ${rl.planType})` : ''
-      const body = ['\ud83c\udfab @gpt — ChatGPT-sub limits' + plan, '```', ...fmtLimitLines(rl), '```'].join('\n')
+      const body = ['\ud83c\udfab @gpt — Codex subscription limits' + plan, '```', ...fmtLimitLines(rl), '```'].join('\n')
       return interaction.reply({ content: body, ephemeral: true })
     }
 
