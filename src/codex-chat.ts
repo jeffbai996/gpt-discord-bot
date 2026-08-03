@@ -857,6 +857,72 @@ export async function readSessionHistory(sessionId: string): Promise<Array<{ rol
   return turns
 }
 
+export interface SessionStats {
+  sessionId: string
+  turns: number
+  model: string
+  effort: string
+  inputTokens: number
+  cachedInputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  totalTokens: number
+  lastInputTokens: number
+  contextWindow: number
+}
+
+/** Read the latest cumulative accounting from one canonical Codex rollout. */
+export async function readSessionStats(
+  sessionId: string,
+  rolloutRoot = path.join(os.homedir(), '.codex', 'sessions'),
+): Promise<SessionStats | null> {
+  let entries: string[] = []
+  try { entries = (await readdir(rolloutRoot, { recursive: true })) as string[] } catch { return null }
+  const rel = entries.find(entry => entry.endsWith(`${sessionId}.jsonl`))
+  if (!rel) return null
+  let content = ''
+  try { content = await readFile(path.join(rolloutRoot, rel), 'utf8') } catch { return null }
+
+  const stats: SessionStats = {
+    sessionId,
+    turns: 0,
+    model: 'unknown',
+    effort: 'unknown',
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    lastInputTokens: 0,
+    contextWindow: 0,
+  }
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const event = JSON.parse(line)
+      const payload = event?.payload ?? {}
+      if (event?.type === 'turn_context') {
+        stats.model = String(payload.model ?? stats.model)
+        stats.effort = String(payload.effort ?? payload.reasoning_effort ?? stats.effort)
+      }
+      if (event?.type !== 'event_msg') continue
+      if (payload.type === 'user_message') stats.turns += 1
+      if (payload.type !== 'token_count') continue
+      const info = payload.info ?? {}
+      const usage = info.total_token_usage ?? {}
+      const lastUsage = info.last_token_usage ?? {}
+      stats.inputTokens = Number(usage.input_tokens) || 0
+      stats.cachedInputTokens = Number(usage.cached_input_tokens) || 0
+      stats.outputTokens = Number(usage.output_tokens) || 0
+      stats.reasoningTokens = Number(usage.reasoning_output_tokens) || 0
+      stats.totalTokens = Number(usage.total_tokens) || stats.inputTokens + stats.outputTokens
+      stats.lastInputTokens = Number(lastUsage.input_tokens) || 0
+      stats.contextWindow = Number(info.model_context_window) || 0
+    } catch { /* malformed/partial rows are not session-fatal */ }
+  }
+  return stats
+}
+
 export interface RateWindow { usedPercent: number; windowMinutes: number; resetsAt: number }
 export interface RateLimits {
   primary?: RateWindow

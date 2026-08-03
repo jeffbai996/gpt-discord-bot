@@ -1,10 +1,12 @@
 import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction, AttachmentBuilder } from 'discord.js'
 import path from 'node:path'
 import os from 'node:os'
+import fs from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import { AccessManager, CODEX_MODELS, type ReasoningEffort, type CodexModel } from './access.ts'
 import { PersonaLoader } from './persona.ts'
 import { snapshot as cacheSnapshot, globalSnapshot } from './cache-stats.ts'
-import { readLatestRateLimits, readSessionHistory, type RateLimits, type RateWindow } from './codex-chat.ts'
+import { readLatestRateLimits, readSessionHistory, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
 import { PLAN_MODE_ACK, type PlanModeStore } from './plan-mode.ts'
@@ -67,6 +69,62 @@ export function fmtClearAcknowledgement(channelId: string): string {
 export function fmtSettingChange(label: string, value: string, previous: string): string {
   const changed = value === previous ? '' : ` (was \`${previous}\`)`
   return `✅ ${label} → \`${value}\`${changed}`
+}
+
+export interface DoctorCheck { name: string; ok: boolean; detail: string }
+export interface DoctorReport { ok: boolean; checks: DoctorCheck[] }
+
+/** Read-only runtime diagnostics. It deliberately creates no probe files. */
+export async function runGptDoctor(
+  stateDir = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord'),
+  rolloutDir = path.join(os.homedir(), '.codex', 'sessions'),
+): Promise<DoctorReport> {
+  const checks: DoctorCheck[] = [
+    { name: 'process', ok: true, detail: `running · pid ${process.pid} · node ${process.version}` },
+    { name: 'slash schema', ok: true, detail: `${gptCommand.toJSON().options?.length ?? 0} controls loaded` },
+  ]
+  const directoryCheck = async (name: string, dir: string) => {
+    try {
+      await fs.access(dir, fsConstants.R_OK | fsConstants.W_OK)
+      checks.push({ name, ok: true, detail: 'read/write' })
+    } catch (error: any) {
+      checks.push({ name, ok: false, detail: error?.code ?? String(error) })
+    }
+  }
+  const lazyDirectoryCheck = async (name: string, dir: string) => {
+    try {
+      await fs.access(dir, fsConstants.R_OK | fsConstants.W_OK)
+      checks.push({ name, ok: true, detail: 'read/write' })
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') {
+        checks.push({ name, ok: false, detail: error?.code ?? String(error) })
+        return
+      }
+      try {
+        await fs.access(path.dirname(dir), fsConstants.R_OK | fsConstants.W_OK)
+        checks.push({ name, ok: true, detail: 'ready · created on first agent' })
+      } catch (parentError: any) {
+        checks.push({ name, ok: false, detail: parentError?.code ?? String(parentError) })
+      }
+    }
+  }
+  await directoryCheck('state directory', stateDir)
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(stateDir, 'access.json'), 'utf8'))
+    const ok = parsed && typeof parsed === 'object' && parsed.channels && typeof parsed.channels === 'object'
+    checks.push({ name: 'access config', ok: !!ok, detail: ok ? `version ${parsed.version ?? 'legacy'}` : 'invalid shape' })
+  } catch (error: any) {
+    checks.push({ name: 'access config', ok: false, detail: error?.code ?? error?.message ?? String(error) })
+  }
+  try {
+    const persona = (await fs.readFile(path.join(stateDir, 'persona.md'), 'utf8')).trim()
+    checks.push({ name: 'persona', ok: persona.length > 0, detail: persona ? `${persona.length} chars` : 'empty' })
+  } catch (error: any) {
+    checks.push({ name: 'persona', ok: false, detail: error?.code ?? error?.message ?? String(error) })
+  }
+  await directoryCheck('rollout store', rolloutDir)
+  await lazyDirectoryCheck('agent registry', path.join(stateDir, 'agent-registry'))
+  return { ok: checks.every(check => check.ok), checks }
 }
 
 import { channelSessions } from './channel-sessions.ts'
@@ -140,6 +198,14 @@ export const gptCommand = new SlashCommandBuilder()
   .addSubcommand(s => s
     .setName('history')
     .setDescription('Show session history')
+  )
+  .addSubcommand(s => s
+    .setName('session')
+    .setDescription('Show this channel’s current Codex session usage')
+  )
+  .addSubcommand(s => s
+    .setName('doctor')
+    .setDescription('Validate gpt runtime state and rollout plumbing')
   )
   .addSubcommand(s => s
     .setName('stats')
@@ -357,6 +423,42 @@ export async function executeGptCommand(
         await interaction.editReply({ content: `📜 Session history — ${turns.length} turns, ${text.length} chars (too long for inline, attached):`, files: [file] })
       }
       return
+    }
+
+    if (subcommand === 'session') {
+      const sid = channelSessions.get(interaction.channelId)
+      if (!sid) {
+        return interaction.reply({ content: 'ℹ️ No active Codex session in this channel.', ephemeral: true })
+      }
+      await interaction.deferReply({ ephemeral: true })
+      const stats = await readSessionStats(sid)
+      if (!stats) return interaction.editReply('⚠️ Session pointer exists but its rollout is unreadable.')
+      const h = (value: number) => value.toLocaleString('en-US')
+      const contextPct = stats.contextWindow > 0
+        ? `${Math.round(stats.lastInputTokens / stats.contextWindow * 100)}%`
+        : 'unknown'
+      return interaction.editReply([
+        `🧠 **gpt session** — \`${sid.slice(0, 8)}\``,
+        '```',
+        `turns:      ${h(stats.turns)}`,
+        `model:      ${stats.model} · effort ${stats.effort}`,
+        `input:      ${h(stats.inputTokens)} (${h(stats.cachedInputTokens)} cached)`,
+        `output:     ${h(stats.outputTokens)} (${h(stats.reasoningTokens)} reasoning)`,
+        `total:      ${h(stats.totalTokens)}`,
+        `context:    ${h(stats.lastInputTokens)} / ${h(stats.contextWindow)} (${contextPct})`,
+        '```',
+      ].join('\n'))
+    }
+
+    if (subcommand === 'doctor') {
+      await interaction.deferReply({ ephemeral: true })
+      const report = await runGptDoctor()
+      const lines = report.checks.map(check =>
+        `${check.ok ? 'ok' : 'FAIL'}  ${check.name.padEnd(16)} ${check.detail}`)
+      return interaction.editReply([
+        `${report.ok ? '✅' : '⚠️'} **gpt doctor**`,
+        '```', ...lines, '```',
+      ].join('\n'))
     }
 
     if (subcommand === 'stop') {
