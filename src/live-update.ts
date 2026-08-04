@@ -45,6 +45,11 @@ export function liveProgressHoldForReplacement(input: {
   return next && next !== input.currentText ? 0 : input.holdUntil
 }
 
+/** Hidden reasoning cannot replace visible narration because it renders nothing. */
+export function shouldReplaceNarrationWithReasoning(thinkingVisible: boolean): boolean {
+  return thinkingVisible
+}
+
 export function advanceLiveProgressDwell(input: {
   text: string
   lastText: string

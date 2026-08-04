@@ -86,6 +86,7 @@ import {
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
   liveProgressHoldForReplacement,
+  shouldReplaceNarrationWithReasoning,
   shouldLingerLiveEnd,
 } from './live-update.ts'
 import { appendAgentsPanel, type CodexAgentSnapshot } from './codex-agents.ts'
@@ -1195,15 +1196,18 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'reasoning_progress') {
+      const reasoningIsVisible = flags.thinking !== 'off'
       if (flags.thinking === 'on' || flags.thinking === 'collapse') {
         if (liveReasoningTrace.at(-1) !== event.text) liveReasoningTrace.push(event.text)
-      } else if (flags.thinking !== 'off') {
+      } else if (reasoningIsVisible) {
         liveHeadline = latestReasoningHeadline(event.text)
       }
-      lastProgressText = ''
-      liveDetail = ''
-      liveFooter = ''
-      queueLiveRender()
+      if (shouldReplaceNarrationWithReasoning(reasoningIsVisible)) {
+        lastProgressText = ''
+        liveDetail = ''
+        liveFooter = ''
+        queueLiveRender()
+      }
       return
     }
     if (event.type === 'heartbeat') {

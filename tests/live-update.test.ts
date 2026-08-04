@@ -6,6 +6,7 @@ import {
   liveProgressHoldForReplacement,
   resolveLiveEndLinger,
   resolveLiveUpdateInterval,
+  shouldReplaceNarrationWithReasoning,
   shouldLingerLiveEnd,
 } from '../src/live-update.ts'
 
@@ -55,6 +56,11 @@ test('new narration replaces the previous narration hold immediately', () => {
     }),
     previousHoldUntil,
   )
+})
+
+test('hidden reasoning cannot evict visible narration', () => {
+  assert.equal(shouldReplaceNarrationWithReasoning(false), false)
+  assert.equal(shouldReplaceNarrationWithReasoning(true), true)
 })
 
 test('new substantial progress starts one reading dwell', () => {
