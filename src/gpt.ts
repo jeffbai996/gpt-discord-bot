@@ -6,6 +6,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { isAddressedToAnotherUser } from './mention-gate.ts'
+import { formatReplyContext, resolveReplyContext, type ReplyContext } from './reply-context.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { closeDanglingInlineCode } from './discord-markdown.ts'
@@ -462,10 +463,11 @@ interface QueuedChannelTurn {
 const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
   async (channelId, batch) => {
     const carrier = batch[batch.length - 1]
-    const combined = batch
-      .map(item => item.contentOverride ?? item.message.content)
-      .filter(Boolean)
-      .join('\n')
+    const combined = (await Promise.all(batch.map(async item => {
+      if (item.contentOverride !== undefined) return item.contentOverride
+      const replyText = formatReplyContext(await resolveReplyContext(item.message))
+      return [replyText, item.message.content].filter(Boolean).join('\n\n')
+    }))).filter(Boolean).join('\n')
     await queueMarker.clear(channelId)
     logTurnLifecycle({
       event: 'channel_batch_started',
@@ -673,6 +675,7 @@ async function handleUserMessage(
   // When a batched-queue turn folds several messages together, the combined
   // text comes in via contentOverride; otherwise use the message's own content.
   const userText = contentOverride ?? message.content
+  const replyContext = await resolveReplyContext(message)
   const planArm = plans.consumeArm(channelId, userId)
   const flags = access.channelFlags(channelId)
   const transientTrace = flags.trace === 'live' || flags.trace === 'collapse'
@@ -723,10 +726,15 @@ async function handleUserMessage(
   await applyLifecycle(message, 'received')
 
   const uploadedAttachments = [...message.attachments.values()]
-  const carriedImages = uploadedAttachments.length === 0
+  const repliedAttachments = uploadedAttachments.length === 0
+    ? replyContext?.attachments ?? []
+    : []
+  const carriedImages = uploadedAttachments.length === 0 && repliedAttachments.length === 0
     ? selectPriorImages(rawHistory, userId, message.reference?.messageId, userText)
     : []
-  const attachments = uploadedAttachments.length > 0 ? uploadedAttachments : carriedImages
+  const attachments = uploadedAttachments.length > 0
+    ? uploadedAttachments
+    : repliedAttachments.length > 0 ? repliedAttachments : carriedImages
   let imageParts: NonNullable<Parameters<typeof openai.respond>[0]['imageParts']> = []
   let imagePaths: string[] = []
   let temporaryResultFiles: string[] = []
@@ -738,14 +746,20 @@ async function handleUserMessage(
       imageParts = processed.imageParts
       imagePaths = processed.imagePaths
       extraText = processed.text
-      if (carriedImages.length > 0) {
-        const names = carriedImages.map(att => att.name).join(', ')
-        extraText = `[Reused image from prior Discord message: ${names}]`
+      if (repliedAttachments.length > 0 || carriedImages.length > 0) {
+        const reused = repliedAttachments.length > 0 ? repliedAttachments : carriedImages
+        const names = reused.map(att => att.name).join(', ')
+        extraText = `[Reused attachment from replied-to Discord message: ${names}]`
           + (extraText ? `\n\n${extraText}` : '')
       }
     } catch (e) {
       console.error('attachment processing failed:', e)
     }
+  }
+
+  if (contentOverride === undefined) {
+    const quotedReply = formatReplyContext(replyContext)
+    if (quotedReply) extraText = [quotedReply, extraText].filter(Boolean).join('\n\n')
   }
 
   // The expansion preamble is just a small steer appended to extraText so
@@ -1819,10 +1833,12 @@ async function runChannelTurn(
 
 async function dispatchInboundMessage(message: Message): Promise<void> {
   if (message.author.bot) return
+  const replyContext = await resolveReplyContext(message)
   if (client.user && isAddressedToAnotherUser(
     client.user.id,
     message.mentions.users.values(),
     message.content,
+    replyContext ? { id: replyContext.authorId, bot: replyContext.authorIsBot } : null,
   )) return
   const release = shutdownGate.enter()
   if (!release) {
@@ -1831,7 +1847,9 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
     // unconditionally put a ⏳ on messages in channels gpt-bot merely has
     // read access to — where it is not the responder and the other bots
     // handle in-flight messages themselves (Jeff 2026-07-31, family channel).
-    const isMention = client.user ? message.mentions.users.has(client.user.id) : false
+    const isMention = client.user
+      ? message.mentions.users.has(client.user.id) || replyContext?.authorId === client.user.id
+      : false
     const mine = access.canHandle({
       channelId: message.channel.id, userId: message.author.id, isMention,
     })
@@ -1850,20 +1868,23 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
     return
   }
   try {
-    await handleInboundMessage(message)
+    await handleInboundMessage(message, replyContext)
   } finally {
     release()
   }
 }
 
-async function handleInboundMessage(message: Message): Promise<void> {
+async function handleInboundMessage(message: Message, replyContext?: ReplyContext | null): Promise<void> {
   const channelId = message.channel.id
   const userId = message.author.id
-  const isMention = client.user ? message.mentions.users.has(client.user.id) : false
+  const isMention = client.user
+    ? message.mentions.users.has(client.user.id) || replyContext?.authorId === client.user.id
+    : false
   if (client.user && isAddressedToAnotherUser(
     client.user.id,
     message.mentions.users.values(),
     message.content,
+    replyContext ? { id: replyContext.authorId, bot: replyContext.authorIsBot } : null,
   )) return
 
   if (memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId)) {

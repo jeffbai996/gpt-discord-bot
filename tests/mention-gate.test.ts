@@ -42,6 +42,24 @@ describe('isAddressedToAnotherUser', () => {
     ], 'following up on this'), false)
   })
 
+  test('allows a reply to self when reply-ping is disabled', () => {
+    assert.equal(isAddressedToAnotherUser('111', [], 'following up', {
+      id: '111', bot: true,
+    }), false)
+  })
+
+  test('rejects a reply to another bot when reply-ping is disabled', () => {
+    assert.equal(isAddressedToAnotherUser('111', [], 'following up', {
+      id: '222', bot: true,
+    }), true)
+  })
+
+  test('explicit self mention overrides a reply to another bot', () => {
+    assert.equal(isAddressedToAnotherUser('111', [], '<@111> weigh in', {
+      id: '222', bot: true,
+    }), false)
+  })
+
   test('allows a message with no user mentions', () => {
     assert.equal(isAddressedToAnotherUser('self', []), false)
   })

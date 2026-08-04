@@ -20,6 +20,7 @@ export function isAddressedToAnotherUser(
   selfId: string,
   mentionedUsers: Iterable<MentionedUser>,
   content?: string,
+  repliedAuthor?: MentionedUser | null,
 ): boolean {
   // Discord includes the author of a replied-to message in `mentions.users`
   // when reply-ping is enabled, even when the user explicitly addressed
@@ -31,6 +32,10 @@ export function isAddressedToAnotherUser(
       return !explicitIds.has(selfId)
     }
   }
+
+  // A reply is an address to the referenced bot even when reply-ping is off
+  // and Discord therefore omits it from mentions.users.
+  if (repliedAuthor?.bot) return repliedAuthor.id !== selfId
 
   let mentionsSelf = false
   let mentionsAnotherUser = false
