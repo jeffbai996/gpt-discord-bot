@@ -6,7 +6,13 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import dotenv from 'dotenv'
 import { AccessManager } from './access.ts'
 import { isAddressedToAnotherUser } from './mention-gate.ts'
-import { formatReplyContext, resolveReplyContext, type ReplyContext } from './reply-context.ts'
+import {
+  formatPinContext,
+  formatReplyContext,
+  resolvePinContext,
+  resolveReplyContext,
+  type ReplyContext,
+} from './reply-context.ts'
 import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { closeDanglingInlineCode } from './discord-markdown.ts'
@@ -466,7 +472,8 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
     const combined = (await Promise.all(batch.map(async item => {
       if (item.contentOverride !== undefined) return item.contentOverride
       const replyText = formatReplyContext(await resolveReplyContext(item.message))
-      return [replyText, item.message.content].filter(Boolean).join('\n\n')
+      const pinText = formatPinContext(await resolvePinContext(item.message))
+      return [replyText, pinText, item.message.content].filter(Boolean).join('\n\n')
     }))).filter(Boolean).join('\n')
     await queueMarker.clear(channelId)
     logTurnLifecycle({
@@ -676,6 +683,7 @@ async function handleUserMessage(
   // text comes in via contentOverride; otherwise use the message's own content.
   const userText = contentOverride ?? message.content
   const replyContext = await resolveReplyContext(message)
+  const pinContext = await resolvePinContext(message)
   const planArm = plans.consumeArm(channelId, userId)
   const flags = access.channelFlags(channelId)
   const transientTrace = flags.trace === 'live' || flags.trace === 'collapse'
@@ -727,7 +735,7 @@ async function handleUserMessage(
 
   const uploadedAttachments = [...message.attachments.values()]
   const repliedAttachments = uploadedAttachments.length === 0
-    ? replyContext?.attachments ?? []
+    ? replyContext?.attachments ?? pinContext?.message?.attachments ?? []
     : []
   const carriedImages = uploadedAttachments.length === 0 && repliedAttachments.length === 0
     ? selectPriorImages(rawHistory, userId, message.reference?.messageId, userText)
