@@ -3,10 +3,35 @@ type MentionedUser = {
   bot?: boolean
 }
 
+const USER_MENTION_RE = /<@!?(\d+)>/g
+
+export function explicitUserMentionIds(content: string): Set<string> {
+  const ids = new Set<string>()
+  for (const match of content.matchAll(USER_MENTION_RE)) ids.add(match[1])
+  return ids
+}
+
+export function isExplicitlyAddressedToAnotherUser(selfId: string, content: string): boolean {
+  const explicitIds = explicitUserMentionIds(content)
+  return explicitIds.size > 0 && !explicitIds.has(selfId)
+}
+
 export function isAddressedToAnotherUser(
   selfId: string,
-  mentionedUsers: Iterable<MentionedUser>
+  mentionedUsers: Iterable<MentionedUser>,
+  content?: string,
 ): boolean {
+  // Discord includes the author of a replied-to message in `mentions.users`
+  // when reply-ping is enabled, even when the user explicitly addressed
+  // somebody else in the message body. Explicit mention tokens are the real
+  // addressing signal; a synthetic reply mention must not override them.
+  if (content !== undefined) {
+    const explicitIds = explicitUserMentionIds(content)
+    if (explicitIds.size > 0) {
+      return !explicitIds.has(selfId)
+    }
+  }
+
   let mentionsSelf = false
   let mentionsAnotherUser = false
 

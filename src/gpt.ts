@@ -1815,6 +1815,11 @@ async function runChannelTurn(
 
 async function dispatchInboundMessage(message: Message): Promise<void> {
   if (message.author.bot) return
+  if (client.user && isAddressedToAnotherUser(
+    client.user.id,
+    message.mentions.users.values(),
+    message.content,
+  )) return
   const release = shutdownGate.enter()
   if (!release) {
     // Only signal in channels this bot would actually have answered in. The
@@ -1851,7 +1856,11 @@ async function handleInboundMessage(message: Message): Promise<void> {
   const channelId = message.channel.id
   const userId = message.author.id
   const isMention = client.user ? message.mentions.users.has(client.user.id) : false
-  if (client.user && isAddressedToAnotherUser(client.user.id, message.mentions.users.values())) return
+  if (client.user && isAddressedToAnotherUser(
+    client.user.id,
+    message.mentions.users.values(),
+    message.content,
+  )) return
 
   if (memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId)) {
     void ingestMessage(message)

@@ -3,6 +3,7 @@ import type OpenAI from 'openai'
 import { selectWithinBudget, defaultCountTokens, type CountTokens } from './token-budget.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import type { AttachmentInput } from './attachments.ts'
+import { isExplicitlyAddressedToAnotherUser } from './mention-gate.ts'
 
 export interface HistoryAttachment {
   name: string
@@ -178,6 +179,10 @@ export async function formatHistoryForOpenAI(
   const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = []
   for (const m of messages) {
     const isBot = m.authorId === selfId
+    // Do not quietly ingest messages explicitly addressed to somebody else.
+    // Discord reply metadata is unavailable in this normalized history shape,
+    // so body mention tokens are intentionally the source of truth here too.
+    if (!isBot && isExplicitlyAddressedToAnotherUser(selfId, m.content)) continue
     const attachmentNote = m.attachments.length
       ? '\n' + m.attachments.map(describeAttachment).join('\n')
       : ''

@@ -151,6 +151,21 @@ test('formatHistoryForOpenAI: maps roles by author', async () => {
   assert.equal(out[1].content, 'hello alice')
 })
 
+test('formatHistoryForOpenAI: excludes messages explicitly addressed elsewhere', async () => {
+  const msgs = [
+    userMsg('1', 'alice', '<@222> this is for you'),
+    userMsg('2', 'bob', 'ordinary room context'),
+  ]
+  const out = await formatHistoryForOpenAI(msgs, '111')
+  assert.deepEqual(out.map(message => message.content), ['bob: ordinary room context'])
+})
+
+test('formatHistoryForOpenAI: keeps messages that explicitly include self', async () => {
+  const msgs = [userMsg('1', 'alice', '<@111> compare notes with <@222>')]
+  const out = await formatHistoryForOpenAI(msgs, '111')
+  assert.equal(out.length, 1)
+})
+
 test('formatHistoryForOpenAI: skips messages that strip to empty', async () => {
   // A bot message that is entirely a -# metadata directive strips to nothing
   // and must be dropped (the user prefix keeps user messages non-empty).

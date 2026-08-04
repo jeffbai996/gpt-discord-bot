@@ -22,6 +22,26 @@ describe('isAddressedToAnotherUser', () => {
     ]), false)
   })
 
+  test('rejects an explicit foreign mention when Discord injects self from a reply', () => {
+    assert.equal(isAddressedToAnotherUser('111', [
+      { id: '111', bot: true },
+      { id: '222', bot: false },
+    ], '<@222>'), true)
+  })
+
+  test('allows an explicit self mention even when another user is also explicit', () => {
+    assert.equal(isAddressedToAnotherUser('111', [
+      { id: '111', bot: true },
+      { id: '222', bot: false },
+    ], '<@111> please compare with <@222>'), false)
+  })
+
+  test('allows an ordinary reply whose only self mention is synthetic', () => {
+    assert.equal(isAddressedToAnotherUser('111', [
+      { id: '111', bot: true },
+    ], 'following up on this'), false)
+  })
+
   test('allows a message with no user mentions', () => {
     assert.equal(isAddressedToAnotherUser('self', []), false)
   })
