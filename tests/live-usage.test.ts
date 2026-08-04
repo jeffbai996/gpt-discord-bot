@@ -90,3 +90,33 @@ test('writing works before init and simply keeps no file', () => {
   noteRoundtrip('thread-a', 50)
   assert.equal(liveSnapshot().output, 50)
 })
+
+test('replaying a turn roundtrip-by-roundtrip lands on codex own total', async () => {
+  // The invariant the whole design rests on: the per-roundtrip deltas sum to
+  // the session total codex reports at the end. Shape and numbers are lifted
+  // from a real rollout. If codex ever redefines last_token_usage, the live
+  // needle would start disagreeing with the billed total — this catches it.
+  const roundtrips = [
+    { total: 172, last: 172 },
+    { total: 233, last: 61 },
+    { total: 350, last: 117 },
+    { total: 625, last: 275 },
+  ]
+  _reset()
+  initLiveUsage(await tmpFile())
+  for (const r of roundtrips) {
+    const delta = rolloutOutputDelta({
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: { output_tokens: r.total },
+          last_token_usage: { output_tokens: r.last },
+        },
+      },
+    })
+    assert.notEqual(delta, null)
+    noteRoundtrip('thread-a', delta!)
+  }
+  assert.equal(liveSnapshot().output, roundtrips.at(-1)!.total)
+})
