@@ -37,6 +37,7 @@ import { logTurnLifecycle } from './turn-lifecycle.ts'
 import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
+import { initLiveUsage } from './live-usage.ts'
 import { channelSessions } from './channel-sessions.ts'
 import { formatUsageCounter } from './usage-counter.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
@@ -312,6 +313,9 @@ const pinnedFacts = new PinnedFactsStore(path.join(STATE_DIR, 'pinned-facts.md')
 const pendingPlaceholders = new PendingPlaceholders(path.join(STATE_DIR, 'pending-placeholders.json'))
 const restartInbox = new RestartInbox(path.join(STATE_DIR, 'restart-inbox.json'))
 initGlobalStats(path.join(STATE_DIR, 'global-stats.json'))
+// Truncates any in-flight turns left behind by a crash or redeploy — they were
+// never billed to the completed total, so carrying them would inflate the rate.
+initLiveUsage(path.join(STATE_DIR, 'live-usage.json'))
 const deferredActions = new DeferredActions(path.join(STATE_DIR, 'deferred-actions.json'))
 const failedTurns = new FailedTurnStore(path.join(STATE_DIR, 'failed-turns.json'))
 const agentCommands = new GptAgentCommandStore(

@@ -10,6 +10,7 @@ import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 import { CodexAgentRegistry, type CodexAgentSnapshot } from './codex-agents.ts'
+import { clearTurn, noteRoundtrip } from './live-usage.ts'
 
 // Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
 // surface an explicit 'interrupted' indicator instead of failing silently.
@@ -470,6 +471,22 @@ export function commentaryProgress(ev: any): string | null {
   return null
 }
 
+/**
+ * OUTPUT tokens produced by one model roundtrip, from a rollout `token_count`
+ * row. Returns null for every other row.
+ *
+ * `last_token_usage` is the delta, `total_token_usage` is the session's running
+ * sum — and gpt-bot RESUMES sessions, so the running sum spans turns that were
+ * already billed. Reading the delta means no baseline to subtract and nothing
+ * to get wrong on resume. (The deltas sum exactly to the total; checked against
+ * live rollouts before relying on it.)
+ */
+export function rolloutOutputDelta(ev: any): number | null {
+  if (ev?.type !== 'event_msg' || ev.payload?.type !== 'token_count') return null
+  const out = ev.payload?.info?.last_token_usage?.output_tokens
+  return typeof out === 'number' && Number.isFinite(out) ? out : null
+}
+
 export function reasoningProgress(ev: any): string | null {
   // Only render reasoning text Codex explicitly places on the public JSONL
   // protocol. Encrypted/internal thought state is intentionally ignored.
@@ -537,6 +554,10 @@ function watchRolloutActivity(
         const timestamp = Date.parse(String(event?.timestamp ?? ''))
         if (Number.isFinite(timestamp) && timestamp < startedAtMs) continue
         if (agentRegistry.consumeRoot(event)) publishAgents()
+        // Live needle: publish each roundtrip's output as codex reports it, so
+        // the fleet tachometer sees a turn happening instead of one lump after.
+        const delta = rolloutOutputDelta(event)
+        if (delta !== null) noteRoundtrip(threadId, delta)
         const text = reasoningProgress(event)
         if (text && text !== lastText) {
           lastText = text
@@ -671,6 +692,10 @@ function watchRolloutActivity(
         handle = null
         await Promise.all([...childFiles.values()].map(child => child.handle.close().catch(() => {})))
         childFiles.clear()
+        // The completed total owns these tokens now. Runs on the abort path too
+        // — a killed turn that never reached recordTurn must not leave its
+        // in-flight bytes propping the needle up forever.
+        clearTurn(threadId)
       })()
       return stopTask
     },
