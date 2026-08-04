@@ -10,7 +10,7 @@ import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 import { CodexAgentRegistry, type CodexAgentSnapshot } from './codex-agents.ts'
-import { clearTurn, noteRoundtrip } from './live-usage.ts'
+import { beginTurn, noteRoundtrip } from './live-usage.ts'
 
 // Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
 // surface an explicit 'interrupted' indicator instead of failing silently.
@@ -692,10 +692,11 @@ function watchRolloutActivity(
         handle = null
         await Promise.all([...childFiles.values()].map(child => child.handle.close().catch(() => {})))
         childFiles.clear()
-        // The completed total owns these tokens now. Runs on the abort path too
-        // — a killed turn that never reached recordTurn must not leave its
-        // in-flight bytes propping the needle up forever.
-        clearTurn(threadId)
+        // Deliberately NOT clearing the in-flight tokens here. The process has
+        // exited but recordTurn has not booked the turn yet, so releasing now
+        // leaves a window where neither side counts it. cache-stats clears on
+        // booking instead; a turn that dies before booking is caught by the
+        // next beginTurn and by the sampler's staleness guard.
       })()
       return stopTask
     },
@@ -1084,6 +1085,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       if (obj?.type === 'thread.started' && obj.thread_id) {
         threadId = String(obj.thread_id)
         if (!rolloutWatchers.length) {
+          beginTurn(threadId)
           rolloutWatchers.push(watchRolloutActivity(
             threadId,
             t0,

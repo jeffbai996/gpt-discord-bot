@@ -1,9 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { initGlobalStats, pacificDay, recordTurn, snapshot, _reset } from '../src/cache-stats.ts'
+import {
+  initLiveUsage, noteRoundtrip, liveSnapshot, _reset as liveReset,
+} from '../src/live-usage.ts'
 import type { RespondResult } from '../src/openai.ts'
 
 function makeResult(over: Partial<RespondResult['usage']> = {}, model = 'gpt-5.6-sol'): RespondResult {
@@ -125,4 +128,31 @@ test('cache-stats: persists per-model usage in a Pacific-day bucket', async () =
     reasoningTokens: 0,
   })
   _reset()
+})
+
+test('booking a codex turn hands its in-flight tokens over atomically', async () => {
+  // The completed total and the live sidecar must never both hold the same
+  // turn, and must never both drop it. Clearing at process exit left a gap:
+  // the sidecar emptied while global-stats had not booked yet, so the fleet
+  // counter dipped and then spiked — the one-lump-per-turn shape this whole
+  // mechanism exists to remove (observed live 2026-08-04, -7441 then +10848).
+  liveReset()
+  initLiveUsage(path.join(await mkdtemp(path.join(os.tmpdir(), 'gpt-cs-')), 'live.json'))
+  noteRoundtrip('thread-x', 7441)
+  assert.equal(liveSnapshot().output, 7441)
+
+  const result = makeResult({ outputTokens: 10848 })
+  result.threadId = 'thread-x'
+  recordTurn('chan-1', result)
+
+  assert.equal(liveSnapshot().output, 0, 'sidecar releases the turn')
+  assert.equal(snapshot('chan-1').outputTokens, 10848, 'completed total holds it')
+})
+
+test('an API-path turn carries no thread and clears nothing', async () => {
+  liveReset()
+  initLiveUsage(path.join(await mkdtemp(path.join(os.tmpdir(), 'gpt-cs-')), 'live.json'))
+  noteRoundtrip('thread-y', 500)
+  recordTurn('chan-2', makeResult())        // no threadId — API fallback
+  assert.equal(liveSnapshot().output, 500)
 })

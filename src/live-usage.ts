@@ -62,10 +62,26 @@ export function noteRoundtrip(turnKey: string, outputDelta: number): void {
   save()
 }
 
-/** Turn finished (or died). Its tokens are the completed total's problem now. */
+/**
+ * Turn finished and is BOOKED. Called after the completed total absorbs it, so
+ * the two never both hold it and never both drop it.
+ *
+ * Not called when the process exits: that fires well before the turn is booked,
+ * and the gap showed up on the live counter as a dip and then a spike — the
+ * exact one-lump shape this module exists to remove.
+ */
 export function clearTurn(turnKey: string): void {
   if (!turns.delete(turnKey)) return
   save()
+}
+
+/**
+ * Turn starting. Drops anything left on this thread by a turn that died before
+ * it could be booked — otherwise the new turn accumulates on top of a corpse
+ * and reads double until the staleness guard expires it.
+ */
+export function beginTurn(turnKey: string): void {
+  clearTurn(turnKey)
 }
 
 export function liveSnapshot(): { output: number; turns: number } {

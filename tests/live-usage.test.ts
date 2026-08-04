@@ -4,7 +4,7 @@ import { readFile, mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  initLiveUsage, noteRoundtrip, clearTurn, liveSnapshot, _reset,
+  initLiveUsage, noteRoundtrip, clearTurn, beginTurn, liveSnapshot, _reset,
 } from '../src/live-usage.ts'
 import { rolloutOutputDelta } from '../src/codex-chat.ts'
 
@@ -89,6 +89,26 @@ test('writing works before init and simply keeps no file', () => {
   _reset()
   noteRoundtrip('thread-a', 50)
   assert.equal(liveSnapshot().output, 50)
+})
+
+test('a new turn starts from zero even if the last one died mid-flight', async () => {
+  // A turn that errors never reaches recordTurn, so nothing clears it. The
+  // next turn on that thread must not inherit the corpse and read double.
+  _reset()
+  initLiveUsage(await tmpFile())
+  noteRoundtrip('thread-a', 900)   // previous turn, killed
+  beginTurn('thread-a')
+  noteRoundtrip('thread-a', 50)
+  assert.equal(liveSnapshot().output, 50)
+})
+
+test('beginTurn leaves other threads alone', async () => {
+  _reset()
+  initLiveUsage(await tmpFile())
+  noteRoundtrip('thread-a', 900)
+  noteRoundtrip('thread-b', 30)
+  beginTurn('thread-a')
+  assert.equal(liveSnapshot().output, 30)
 })
 
 test('replaying a turn roundtrip-by-roundtrip lands on codex own total', async () => {

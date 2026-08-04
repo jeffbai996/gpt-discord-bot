@@ -11,6 +11,7 @@
  * Map grows with active channels, which is fine — squad has <20 channels).
  */
 import type { RespondResult } from './openai.ts'
+import { clearTurn } from './live-usage.ts'
 
 const WINDOW_SIZE = 50  // last N turns per channel
 
@@ -136,6 +137,10 @@ export function recordTurn(channelId: string, result: RespondResult): void {
   globalTotals.days[dayKey] = day
   globalTotals.days = pruneDays(globalTotals.days)
   saveGlobalStats()
+  // Hand-off, in this order: the completed total owns the turn first, THEN the
+  // live sidecar releases it. Reversing these leaves a window where neither
+  // counts the turn and the fleet counter visibly dips.
+  if (result.threadId) clearTurn(result.threadId)
 }
 
 export interface CacheSnapshot {
