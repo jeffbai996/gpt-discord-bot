@@ -37,6 +37,7 @@ import {
 } from './codex-fallback.ts'
 import { fetchHistory, formatHistoryForOpenAI, selectPriorImages, type HistoryMessage } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
+import { extractRichMedia, formatRichContext } from './discord-rich-input.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
@@ -477,7 +478,8 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
       const replyText = formatReplyContext(await resolveReplyContext(item.message))
       const pinText = formatPinContext(await resolvePinContext(item.message))
       const threadText = formatThreadContext(await resolveThreadContext(item.message))
-      return threadText || [replyText, pinText, item.message.content].filter(Boolean).join('\n\n')
+      const richText = formatRichContext(item.message)
+      return threadText || [replyText, pinText, richText, item.message.content].filter(Boolean).join('\n\n')
     }))).filter(Boolean).join('\n')
     void queueMarker.clear(channelId)
     logTurnLifecycle({
@@ -740,7 +742,7 @@ async function handleUserMessage(
 
   await applyLifecycle(message, 'received')
 
-  const uploadedAttachments = [...message.attachments.values()]
+  const uploadedAttachments = [...message.attachments.values(), ...extractRichMedia(message)]
   const repliedAttachments = uploadedAttachments.length === 0
     ? replyContext?.attachments ?? pinContext?.message?.attachments ?? threadContext?.source?.attachments ?? []
     : []
@@ -775,7 +777,8 @@ async function handleUserMessage(
   if (contentOverride === undefined) {
     const quotedReply = formatReplyContext(replyContext)
     const threadText = formatThreadContext(threadContext)
-    extraText = [quotedReply, threadText, extraText].filter(Boolean).join('\n\n')
+    const richText = formatRichContext(message)
+    extraText = [quotedReply, threadText, richText, extraText].filter(Boolean).join('\n\n')
   }
 
   // The expansion preamble is just a small steer appended to extraText so

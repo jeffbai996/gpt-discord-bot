@@ -11,6 +11,7 @@ import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
 import { PLAN_MODE_ACK, type PlanModeStore } from './plan-mode.ts'
 import { presetPatch, type ChannelPreset } from './presets.ts'
+import { buildPoll } from './discord-poll.ts'
 
 // Render the Codex subscription rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -210,6 +211,14 @@ export const gptCommand = new SlashCommandBuilder()
   .addSubcommand(s => s
     .setName('plan')
     .setDescription('Plan the next message read-only')
+  )
+  .addSubcommand(s => s
+    .setName('poll')
+    .setDescription('Post a native Discord poll')
+    .addStringOption(o => o.setName('question').setDescription('Poll question').setRequired(true))
+    .addStringOption(o => o.setName('options').setDescription('2–10 choices: 🍣 Sushi | 🌮 Tacos').setRequired(true))
+    .addIntegerOption(o => o.setName('hours').setDescription('Duration in hours (default 24)').setMinValue(1).setMaxValue(768))
+    .addBooleanOption(o => o.setName('multiple').setDescription('Allow multiple selections'))
   )
   .addSubcommand(s => s
     .setName('stop')
@@ -420,6 +429,19 @@ export async function executeGptCommand(
         content: PLAN_MODE_ACK,
         ephemeral: true,
       })
+    }
+
+    if (subcommand === 'poll') {
+      if (!interaction.channel?.isSendable()) return interaction.reply({ content: '❌ This channel cannot accept polls.', ephemeral: true })
+      const poll = buildPoll(
+        interaction.options.getString('question', true),
+        interaction.options.getString('options', true),
+        interaction.options.getInteger('hours') ?? 24,
+        interaction.options.getBoolean('multiple') ?? false,
+      )
+      await interaction.deferReply({ ephemeral: true })
+      const posted = await interaction.channel.send({ poll })
+      return interaction.editReply(`✅ Poll posted · ${posted.url}`)
     }
 
     if (subcommand === 'history') {

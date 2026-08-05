@@ -119,19 +119,22 @@ test('access: preserves new thinking collapse mode after migration', async () =>
   assert.equal(a.channelFlags('c1').thinking, 'collapse')
 })
 
-test('access: thread inherits parent policy and flags until explicitly overridden', async () => {
+test('access: thread is deaf until explicitly enabled but inherits parent flags', async () => {
   const a = new AccessManager()
   await a.load()
   await a.allowUser('u1')
   await a.setChannel('parent', true, false, { reasoning: 'max', trace: 'live' })
 
-  assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), true)
-  assert.equal(a.canReact('u1', 'thread', 'parent'), true)
+  assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), false)
+  assert.equal(a.canReact('u1', 'thread', 'parent'), false)
   assert.equal(a.channelFlags('thread').reasoning, 'max')
   assert.equal(a.channelFlags('thread').trace, 'live')
-  const inheritedOverride = await a.setChannelFlags('thread', { trace: 'off' })
+  const inheritedOverride = await a.setChannelFlags('thread', { trace: 'off' }, 'parent')
   assert.equal(inheritedOverride.reasoning, 'max')
   assert.equal(inheritedOverride.trace, 'off')
+
+  // A rendering-only override must not silently grant access.
+  assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), false)
 
   await a.setChannel('thread', true, true, { reasoning: 'low', trace: 'off' })
   assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), false)

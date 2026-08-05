@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { parseOffice } from 'officeparser'
 import { extensionMime, extractLocalText, isLocallyExtractable, officeParserType } from './attachment-text.ts'
+import { animationContactSheet } from './animation-frames.ts'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
 // on guild boost tier; the smaller cap protects against "user dropped a 4-hour
@@ -26,6 +27,7 @@ let imageCacheBytes = 0
 const IMAGE_MIMES = new Set([
   'image/png', 'image/jpeg', 'image/webp', 'image/gif'
 ])
+const VIDEO_MIMES = new Set(['video/mp4', 'video/webm'])
 
 // Whisper / gpt-4o-transcribe input — we transcribe audio to text and inject
 // the transcript inline. Saves us the hassle of wiring the realtime audio API.
@@ -154,22 +156,28 @@ export async function processAttachments(
       continue
     }
 
-    if (IMAGE_MIMES.has(mime)) {
+    if (IMAGE_MIMES.has(mime) || VIDEO_MIMES.has(mime)) {
       try {
         // Discord attachment URLs are signed and can expire or be rejected by
         // OpenAI's fetcher. Download while Discord's URL is fresh and send the
         // bytes as a data URI so vision input is deterministic.
-        const buf = await downloadImageToBuffer(att.url)
-        imageDir ??= await mkdtemp(path.join(tmpdir(), 'gpt-discord-images-'))
-        const ext = path.extname(name).toLowerCase() || mimeExtension(mime)
-        const imagePath = path.join(imageDir, `${result.imagePaths.length}${ext}`)
-        await writeFile(imagePath, buf, { mode: 0o600 })
+        const downloaded = await downloadImageToBuffer(att.url)
+        const animated = mime === 'image/gif' || VIDEO_MIMES.has(mime)
+        const sampled = animated
+          ? await animationContactSheet(downloaded, path.extname(name) || (mime === 'video/webm' ? '.webm' : mime === 'video/mp4' ? '.mp4' : '.gif'))
+          : null
+        if (!sampled) imageDir ??= await mkdtemp(path.join(tmpdir(), 'gpt-discord-images-'))
+        const buf = sampled?.bytes ?? downloaded
+        const outputMime = sampled ? 'image/png' : mime
+        const ext = sampled ? '.png' : (path.extname(name).toLowerCase() || mimeExtension(mime))
+        const imagePath = sampled?.path ?? path.join(imageDir!, `${result.imagePaths.length}${ext}`)
+        if (!sampled) await writeFile(imagePath, buf, { mode: 0o600 })
         result.imageParts.push({
           type: 'image_url',
-          image_url: { url: `data:${mime};base64,${buf.toString('base64')}` }
+          image_url: { url: `data:${outputMime};base64,${buf.toString('base64')}` }
         })
         result.imagePaths.push(imagePath)
-        result.imageNames.push(name)
+        result.imageNames.push(animated ? `${name} (sampled animation frames)` : name)
       } catch (e) {
         console.error('image fetch failed for', name, e)
         result.skipped.push({ name, reason: 'download_failed' })

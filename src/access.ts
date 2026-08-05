@@ -138,6 +138,14 @@ export class AccessManager {
     return this.data.channels[channelId] ?? (parent ? this.data.channels[parent] : undefined)
   }
 
+  private resolveAccessChannel(channelId: string, parentChannelId?: string | null): ChannelConfig | undefined {
+    if (parentChannelId) this.threadParents.set(channelId, parentChannelId)
+    // A parent's allow is not consent for every child conversation. Threads
+    // must have their own access entry; parent fallback remains available only
+    // to channelFlags()/setChannelFlags() for presentation defaults.
+    return this.data.channels[channelId]
+  }
+
   noteChannelParent(channelId: string, parentChannelId: string | null): void {
     if (parentChannelId) this.threadParents.set(channelId, parentChannelId)
   }
@@ -146,7 +154,7 @@ export class AccessManager {
     const user = this.data.users[userId]
     if (!user?.allowed) return false
 
-    const channel = this.resolveChannel(channelId, parentChannelId)
+    const channel = this.resolveAccessChannel(channelId, parentChannelId)
     if (!channel?.enabled) return false
 
     if (channel.requireMention && !isMention) return false
@@ -157,7 +165,7 @@ export class AccessManager {
   canReact(userId: string, channelId: string, parentChannelId?: string | null): boolean {
     const user = this.data.users[userId]
     if (!user?.allowed) return false
-    const channel = this.resolveChannel(channelId, parentChannelId)
+    const channel = this.resolveAccessChannel(channelId, parentChannelId)
     if (!channel?.enabled) return false
     return true
   }
@@ -204,6 +212,9 @@ export class AccessManager {
     patch: Partial<ChannelFlags>,
     parentChannelId?: string | null,
   ): Promise<ChannelConfig> {
+    if (parentChannelId) this.threadParents.set(channelId, parentChannelId)
+    const parent = parentChannelId ?? this.threadParents.get(channelId)
+    const exact = this.data.channels[channelId]
     const existing = this.resolveChannel(channelId, parentChannelId)
     if (!existing) {
       throw new Error(`channel ${channelId} not configured — run /gpt channel first`)
@@ -219,6 +230,9 @@ export class AccessManager {
     }
     this.data.channels[channelId] = {
       ...existing,
+      // Changing model/trace inside a previously deaf thread is not an access
+      // grant. Only setChannel(..., enabled=true, ...) can open the thread.
+      ...(parent && !exact ? { enabled: false } : {}),
       ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),

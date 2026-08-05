@@ -79,7 +79,7 @@ describe('reply context', () => {
     const message = {
       id: 'system-message', type: 18, content: 'starter text', channelId: 'parent',
       reference: { channelId: 'thread' },
-      thread: { id: 'thread', name: 'project room', parentId: 'parent' },
+      thread: { id: 'thread', name: 'project room', parentId: 'parent', appliedTags: ['tag-one'] },
       async fetchReference() { throw new Error('not a reply') },
     }
     assert.equal(await resolveReplyContext(message), null)
@@ -87,12 +87,13 @@ describe('reply context', () => {
     assert.match(text, /created a thread/)
     assert.match(text, /project room/)
     assert.match(text, /starter text/)
+    assert.match(text, /tag-one/)
   })
 
   test('renders thread starters from their source message and attachments', async () => {
     const message = {
       id: 'starter', type: 21, content: '', channelId: 'thread',
-      channel: { name: 'project room', parentId: 'parent' },
+      channel: { name: 'project room', parentId: 'parent', appliedTags: ['tag-two'] },
       reference: { messageId: 'source', channelId: 'parent' },
       async fetchReference() {
         return {
@@ -109,6 +110,7 @@ describe('reply context', () => {
     assert.match(text, /thread starter/)
     assert.match(text, /original idea/)
     assert.match(text, /plan\.pdf/)
+    assert.match(text, /tag-two/)
     assert.equal(context?.source?.attachments[0]?.url, 'https://example.invalid/plan.pdf')
   })
 })
