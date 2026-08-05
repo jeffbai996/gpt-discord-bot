@@ -119,6 +119,23 @@ test('access: preserves new thinking collapse mode after migration', async () =>
   assert.equal(a.channelFlags('c1').thinking, 'collapse')
 })
 
+test('access: thread inherits parent policy and flags until explicitly overridden', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.allowUser('u1')
+  await a.setChannel('parent', true, false, { reasoning: 'max', trace: 'live' })
+
+  assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), true)
+  assert.equal(a.canReact('u1', 'thread', 'parent'), true)
+  assert.equal(a.channelFlags('thread', 'parent').reasoning, 'max')
+  assert.equal(a.channelFlags('thread', 'parent').trace, 'live')
+
+  await a.setChannel('thread', true, true, { reasoning: 'low', trace: 'off' })
+  assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), false)
+  assert.equal(a.channelFlags('thread', 'parent').reasoning, 'low')
+  assert.equal(a.channelFlags('thread', 'parent').trace, 'off')
+})
+
 // NOTE: the per-channel API `model` override was removed 2026-06-29 (orphaned —
 // no slash setter; API model is env-driven via DEFAULT_MODEL, like gemma). The
 // old 'model=null clears override' test went with it.

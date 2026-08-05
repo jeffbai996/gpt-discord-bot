@@ -6,7 +6,7 @@ import type { ActionContext } from './actions.ts'
 export interface HandlerDeps {
   client: Client
   buildContext: (message: Message, reactor: User) => ActionContext
-  access: { canReact: (userId: string, channelId: string) => boolean }
+  access: { canReact: (userId: string, channelId: string, parentChannelId?: string | null) => boolean }
 }
 
 export async function handleReaction(
@@ -26,7 +26,10 @@ export async function handleReaction(
   const message = reaction.message
   if (message.author?.id !== deps.client.user?.id) return  // not our message
   if ((user as User).bot) return                            // ignore other bots
-  if (!deps.access.canReact(user.id, message.channelId)) return
+  const parentChannelId = typeof message.channel.isThread === 'function' && message.channel.isThread()
+    ? message.channel.parentId
+    : null
+  if (!deps.access.canReact(user.id, message.channelId, parentChannelId)) return
 
   const emoji = reaction.emoji.name
   if (!emoji) return

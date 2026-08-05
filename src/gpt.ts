@@ -9,8 +9,10 @@ import { isAddressedToAnotherUser } from './mention-gate.ts'
 import {
   formatPinContext,
   formatReplyContext,
+  formatThreadContext,
   resolvePinContext,
   resolveReplyContext,
+  resolveThreadContext,
   type ReplyContext,
 } from './reply-context.ts'
 import { PersonaLoader } from './persona.ts'
@@ -474,7 +476,8 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
       if (item.contentOverride !== undefined) return item.contentOverride
       const replyText = formatReplyContext(await resolveReplyContext(item.message))
       const pinText = formatPinContext(await resolvePinContext(item.message))
-      return [replyText, pinText, item.message.content].filter(Boolean).join('\n\n')
+      const threadText = formatThreadContext(await resolveThreadContext(item.message))
+      return threadText || [replyText, pinText, item.message.content].filter(Boolean).join('\n\n')
     }))).filter(Boolean).join('\n')
     void queueMarker.clear(channelId)
     logTurnLifecycle({
@@ -685,8 +688,10 @@ async function handleUserMessage(
   const userText = contentOverride ?? message.content
   const replyContext = await resolveReplyContext(message)
   const pinContext = await resolvePinContext(message)
+  const threadContext = await resolveThreadContext(message)
+  const parentChannelId = message.channel.isThread() ? message.channel.parentId : null
   const planArm = plans.consumeArm(channelId, userId)
-  const flags = access.channelFlags(channelId)
+  const flags = access.channelFlags(channelId, parentChannelId)
   const transientTrace = flags.trace === 'live' || flags.trace === 'collapse'
   // API-engine model is env-driven (DEFAULT_MODEL / GPT_MODEL), not per-channel —
   // matches gemma's API model. The per-channel `model` override was removed
@@ -736,7 +741,7 @@ async function handleUserMessage(
 
   const uploadedAttachments = [...message.attachments.values()]
   const repliedAttachments = uploadedAttachments.length === 0
-    ? replyContext?.attachments ?? pinContext?.message?.attachments ?? []
+    ? replyContext?.attachments ?? pinContext?.message?.attachments ?? threadContext?.source?.attachments ?? []
     : []
   const carriedImages = uploadedAttachments.length === 0 && repliedAttachments.length === 0
     ? selectPriorImages(rawHistory, userId, message.reference?.messageId, userText)
@@ -768,7 +773,8 @@ async function handleUserMessage(
 
   if (contentOverride === undefined) {
     const quotedReply = formatReplyContext(replyContext)
-    if (quotedReply) extraText = [quotedReply, extraText].filter(Boolean).join('\n\n')
+    const threadText = formatThreadContext(threadContext)
+    extraText = [quotedReply, threadText, extraText].filter(Boolean).join('\n\n')
   }
 
   // The expansion preamble is just a small steer appended to extraText so
@@ -1869,7 +1875,10 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
       ? message.mentions.users.has(client.user.id) || replyContext?.authorId === client.user.id
       : false
     const mine = access.canHandle({
-      channelId: message.channel.id, userId: message.author.id, isMention,
+      channelId: message.channel.id,
+      parentChannelId: message.channel.isThread() ? message.channel.parentId : null,
+      userId: message.author.id,
+      isMention,
     })
     if (!mine) return
 
@@ -1894,6 +1903,7 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
 
 async function handleInboundMessage(message: Message, replyContext?: ReplyContext | null): Promise<void> {
   const channelId = message.channel.id
+  const parentChannelId = message.channel.isThread() ? message.channel.parentId : null
   const userId = message.author.id
   const isMention = client.user
     ? message.mentions.users.has(client.user.id) || replyContext?.authorId === client.user.id
@@ -1905,7 +1915,7 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     replyContext ? { id: replyContext.authorId, bot: replyContext.authorIsBot } : null,
   )) return
 
-  if (memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId)) {
+  if (memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId, parentChannelId)) {
     void ingestMessage(message)
     // Schedule summarization after ingestion so the message we just stored is
     // counted toward the threshold. Single-flight per channel; no-op if a
@@ -1913,7 +1923,7 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     summarizer?.scheduleIfNeeded(channelId)
   }
 
-  if (!access.canHandle({ channelId, userId, isMention })) return
+  if (!access.canHandle({ channelId, parentChannelId, userId, isMention })) return
 
   // Reserved before barge/queue handling: these are gpt's view-only agent
   // controls, never shell commands and never a reason to interrupt live work.

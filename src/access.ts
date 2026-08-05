@@ -43,6 +43,7 @@ export interface AccessFile {
 
 export interface CanHandleInput {
   channelId: string
+  parentChannelId?: string | null
   userId: string
   isMention: boolean
 }
@@ -130,11 +131,15 @@ export class AccessManager {
     await fs.writeFile(this.file, JSON.stringify(this.data, null, 2), 'utf8')
   }
 
-  canHandle({ channelId, userId, isMention }: CanHandleInput): boolean {
+  private resolveChannel(channelId: string, parentChannelId?: string | null): ChannelConfig | undefined {
+    return this.data.channels[channelId] ?? (parentChannelId ? this.data.channels[parentChannelId] : undefined)
+  }
+
+  canHandle({ channelId, parentChannelId, userId, isMention }: CanHandleInput): boolean {
     const user = this.data.users[userId]
     if (!user?.allowed) return false
 
-    const channel = this.data.channels[channelId]
+    const channel = this.resolveChannel(channelId, parentChannelId)
     if (!channel?.enabled) return false
 
     if (channel.requireMention && !isMention) return false
@@ -142,16 +147,16 @@ export class AccessManager {
     return true
   }
 
-  canReact(userId: string, channelId: string): boolean {
+  canReact(userId: string, channelId: string, parentChannelId?: string | null): boolean {
     const user = this.data.users[userId]
     if (!user?.allowed) return false
-    const channel = this.data.channels[channelId]
+    const channel = this.resolveChannel(channelId, parentChannelId)
     if (!channel?.enabled) return false
     return true
   }
 
-  isAllowedAndEnabled(userId: string, channelId: string): boolean {
-    return this.canReact(userId, channelId)
+  isAllowedAndEnabled(userId: string, channelId: string, parentChannelId?: string | null): boolean {
+    return this.canReact(userId, channelId, parentChannelId)
   }
 
   async allowUser(userId: string): Promise<void> {
@@ -189,9 +194,10 @@ export class AccessManager {
 
   async setChannelFlags(
     channelId: string,
-    patch: Partial<ChannelFlags>
+    patch: Partial<ChannelFlags>,
+    parentChannelId?: string | null,
   ): Promise<ChannelConfig> {
-    const existing = this.data.channels[channelId]
+    const existing = this.resolveChannel(channelId, parentChannelId)
     if (!existing) {
       throw new Error(`channel ${channelId} not configured — run /gpt channel first`)
     }
@@ -218,8 +224,8 @@ export class AccessManager {
     return this.data.channels[channelId]
   }
 
-  channelFlags(channelId: string): ChannelFlags {
-    const channel = this.data.channels[channelId]
+  channelFlags(channelId: string, parentChannelId?: string | null): ChannelFlags {
+    const channel = this.resolveChannel(channelId, parentChannelId)
     return {
       reasoning: channel?.reasoning ?? DEFAULT_FLAGS.reasoning,
       trace: channel?.trace ?? DEFAULT_FLAGS.trace,
@@ -231,7 +237,7 @@ export class AccessManager {
     }
   }
 
-  channelConfig(channelId: string): ChannelConfig | undefined {
-    return this.data.channels[channelId]
+  channelConfig(channelId: string, parentChannelId?: string | null): ChannelConfig | undefined {
+    return this.resolveChannel(channelId, parentChannelId)
   }
 }

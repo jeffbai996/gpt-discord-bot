@@ -37,16 +37,22 @@ export async function deleteMessage(ctx: ActionContext): Promise<void> {
 export async function mute(ctx: ActionContext): Promise<void> {
   // Mute = require explicit mention to engage. Preserves all other channel
   // flags (model override, reasoning, trace, thinking, counter, engine).
-  const channel = ctx.access.channelConfig(ctx.message.channelId)
+  const parentChannelId = typeof ctx.message.channel.isThread === 'function' && ctx.message.channel.isThread()
+    ? ctx.message.channel.parentId
+    : null
+  const channel = ctx.access.channelConfig(ctx.message.channelId, parentChannelId)
   if (!channel) return  // never been configured; nothing to mute
-  await ctx.access.setChannel(ctx.message.channelId, true, true, ctx.access.channelFlags(ctx.message.channelId))
+  await ctx.access.setChannel(ctx.message.channelId, true, true, ctx.access.channelFlags(ctx.message.channelId, parentChannelId))
   await ctx.message.react('🤐').catch(() => {})
 }
 
 export async function unmute(ctx: ActionContext): Promise<void> {
-  const channel = ctx.access.channelConfig(ctx.message.channelId)
+  const parentChannelId = typeof ctx.message.channel.isThread === 'function' && ctx.message.channel.isThread()
+    ? ctx.message.channel.parentId
+    : null
+  const channel = ctx.access.channelConfig(ctx.message.channelId, parentChannelId)
   if (!channel) return
-  await ctx.access.setChannel(ctx.message.channelId, true, false, ctx.access.channelFlags(ctx.message.channelId))
+  await ctx.access.setChannel(ctx.message.channelId, true, false, ctx.access.channelFlags(ctx.message.channelId, parentChannelId))
   await ctx.message.react('🗣️').catch(() => {})
 }
 
