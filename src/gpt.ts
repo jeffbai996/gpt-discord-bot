@@ -511,7 +511,7 @@ const restartCoordinator = new RestartCoordinator(
   {
     onDeadline: () => {
       logTurnLifecycle({ event: 'restart_drain_deadline', restartPhase: 'draining' })
-      console.error('[restart] drain exceeded its deadline; restarting with work still active')
+      console.error('[restart] drain exceeded its warning deadline; continuing to wait for active work')
     },
   },
 )
@@ -527,7 +527,7 @@ function requestGracefulRestart(): void {
     restartPhase: 'pending',
     queueDepth: channelTurns.totalQueueDepth(),
   })
-  console.error('[restart] requested; accepting work until all turns are idle')
+  console.error('[restart] requested; deferring new work until active turns are idle')
 }
 
 function installGracefulShutdown(): void {

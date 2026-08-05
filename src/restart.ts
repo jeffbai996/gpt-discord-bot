@@ -20,13 +20,12 @@ type WaitForIdle = () => Promise<void>
 type RestartLauncher = () => void
 
 /**
- * Upper bound on how long a pending restart will wait for active turns.
+ * Point at which a pending restart reports that active work is taking longer
+ * than expected.
  *
- * Without a bound, a single long-running turn holds the restart open
- * indefinitely, and once the final window closes, intake is shut for every
- * channel at once — one slow dev turn takes the whole bot off Discord.
- * Ten minutes leaves room inside the unit's TimeoutStopSec=30min for the
- * SIGTERM path to still drain gracefully afterwards. (Jeff 2026-07-27.)
+ * This is deliberately a warning, not a kill deadline. The turn supervisor
+ * owns wedged workers; a deploy restart must never kill unrelated healthy
+ * turns merely because they outlasted this timer.
  */
 export const RESTART_DRAIN_DEADLINE_MS = 10 * 60_000
 
@@ -63,12 +62,12 @@ interface RestartCoordinatorOptions {
 
 /**
  * Tracks two distinct shutdown phases:
- * - draining stops new Discord work only for the final restart/exit window;
+ * - draining stops new Discord work as soon as a restart is requested;
  * - exiting lets the later systemd SIGTERM run cleanup exactly once.
  *
- * Accepted handlers hold a lease. A pending restart waits for those leases,
- * so intake stays open until closing it and launching the restart can happen
- * back-to-back in the same microtask.
+ * Accepted handlers hold a lease. New arrivals are durably deferred while a
+ * pending restart waits for those leases to drain, preventing fresh work from
+ * extending the drain forever.
  */
 export class ShutdownGate {
   private draining = false
@@ -140,14 +139,14 @@ export class RestartCoordinator {
   request(): boolean {
     if (this.pending) return false
     this.pending = true
+    this.closeIntake()
 
-    // The deadline races the idle wait: whichever lands first performs the one
-    // and only launch. A stuck turn therefore delays the restart, it does not
-    // cancel it. systemd's own TimeoutStopSec still governs the SIGTERM tail.
+    // Report an overrun, but never turn it into a service-wide kill switch.
+    // Genuine stuck turns are bounded by the Codex supervisor; healthy long
+    // turns must be allowed to settle before systemd sees a restart request.
     const timer = setTimeout(() => {
       if (this.launched) return
       this.onDeadline()
-      this.fire()
     }, this.deadlineMs)
     timer.unref?.()
 
@@ -167,7 +166,6 @@ export class RestartCoordinator {
   private fire(): void {
     if (this.launched) return
     this.launched = true
-    this.closeIntake()
     this.launch()
   }
 }
