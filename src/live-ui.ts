@@ -141,7 +141,7 @@ export function formatLiveWorkMessage({
   const heading = header + reasoning
   if (!cleanDetail) return heading + suffix
 
-  const prefix = `${heading}\n💬 ***Narrating…***\n`
+  const prefix = `${heading}\n`
   const available = Math.max(1, maxLength - prefix.length - suffix.length)
   const clippedDetail = cleanDetail.length > available
     ? cleanDetail.slice(0, Math.max(0, available - 1)) + '…'

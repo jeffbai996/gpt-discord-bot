@@ -55,7 +55,7 @@ test('renders heartbeat status in the same small gray style as token counters', 
 test('keeps the thinking header above live progress', () => {
   assert.equal(
     formatLiveWorkMessage({ effortLabel: 'thinking with max effort', detail: 'Checking the renderer.' }),
-    '💭 ✻ **thinking with max effort…**\n💬 ***Narrating…***\nChecking the renderer.',
+    '💭 ✻ **thinking with max effort…**\nChecking the renderer.',
   )
 })
 
@@ -86,17 +86,17 @@ test('renders the spinner frame and reasoning description in the same message ti
       spinnerGlyph: '✶',
       spinnerDots: '..',
     }),
-    '💭 ✶ **thinking with high effort..**\n> 🧠 *checking discord edit ownership*\n💬 ***Narrating…***\nInspecting the live renderer.',
+    '💭 ✶ **thinking with high effort..**\n> 🧠 *checking discord edit ownership*\nInspecting the live renderer.',
   )
 })
 
-test('narration is visibly distinct from final output', () => {
+test('narration renders beneath thinking without an extra label', () => {
   assert.equal(
     formatLiveWorkMessage({
       effortLabel: 'thinking with high effort',
       detail: 'Inspecting the live renderer.',
     }),
-    '💭 ✻ **thinking with high effort…**\n💬 ***Narrating…***\nInspecting the live renderer.',
+    '💭 ✻ **thinking with high effort…**\nInspecting the live renderer.',
   )
 })
 
@@ -113,7 +113,6 @@ test('collapse narration keeps distinct entries in arrival order', () => {
     }),
     [
       '💭 ✻ **thinking with high effort…**',
-      '💬 ***Narrating…***',
       'Checking the first path.',
       '',
       'Checking the second path.',
@@ -222,7 +221,7 @@ test('keeps commentary above the compact heartbeat row', () => {
       detail: 'Checking the actual repos.',
       footer: '`✻ cogitating · 33s`',
     }),
-    '💭 ✻ **thinking…**\n💬 ***Narrating…***\nChecking the actual repos.\n\n`✻ cogitating · 33s`',
+    '💭 ✻ **thinking…**\nChecking the actual repos.\n\n`✻ cogitating · 33s`',
   )
 })
 
@@ -241,10 +240,10 @@ test('clips progress before the footer instead of dropping the heartbeat', () =>
     effortLabel: 'thinking',
     detail: 'abcdefghijklmnopqrstuvwxyz',
     footer: '```\nstill working\n```',
-    maxLength: 80,
+    maxLength: 60,
   })
 
-  assert.ok(message.length <= 80)
+  assert.ok(message.length <= 60)
   assert.match(message, /^💭 ✻ \*\*thinking…\*\*/)
   assert.match(message, /…\n\n```\nstill working\n```$/)
 })
