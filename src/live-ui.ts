@@ -3,10 +3,17 @@ interface LiveWorkMessageOptions {
   headline?: string
   reasoningTrace?: string[]
   detail?: string
+  narrationTrace?: string[]
   footer?: string
   spinnerGlyph?: string
   spinnerDots?: string
   maxLength?: number
+}
+
+export function appendNarrationTrace(trace: string[], text: string): string[] {
+  const clean = text.trim()
+  if (!clean || trace.at(-1) === clean) return trace
+  return [...trace, clean]
 }
 
 function cleanReasoningLine(line: string): string {
@@ -113,6 +120,7 @@ export function formatLiveWorkMessage({
   headline = '',
   reasoningTrace = [],
   detail = '',
+  narrationTrace = [],
   footer = '',
   spinnerGlyph = HEARTBEAT_GLYPHS[0],
   spinnerDots = '…',
@@ -125,13 +133,15 @@ export function formatLiveWorkMessage({
   const reasoning = accumulated.length
     ? `\n${accumulated.join('\n')}`
     : cleanHeadline ? `\n> 🧠 *${cleanHeadline}*` : ''
-  const cleanDetail = detail.trim()
+  const cleanDetail = narrationTrace.length
+    ? narrationTrace.map(part => part.trim()).filter(Boolean).join('\n\n')
+    : detail.trim()
   const cleanFooter = footer.trim()
   const suffix = cleanFooter ? `\n\n${cleanFooter}` : ''
   const heading = header + reasoning
   if (!cleanDetail) return heading + suffix
 
-  const prefix = `${heading}\n`
+  const prefix = `${heading}\n💬 ***Narrating…***\n`
   const available = Math.max(1, maxLength - prefix.length - suffix.length)
   const clippedDetail = cleanDetail.length > available
     ? cleanDetail.slice(0, Math.max(0, available - 1)) + '…'

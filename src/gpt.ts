@@ -79,6 +79,7 @@ import {
   resolveTraceFailsafeMs,
 } from './tool-trace.ts'
 import {
+  appendNarrationTrace,
   formatHeartbeatFooter,
   formatLiveWorkMessage,
   formatReasoningSnapshot,
@@ -802,6 +803,7 @@ async function handleUserMessage(
   let lastProgressText = ''
   let liveHeadline = ''
   const liveReasoningTrace: string[] = []
+  let liveNarrationTrace: string[] = []
   let liveDetail = ''
   let liveFooter = ''
   let spinnerGlyph = '✻'
@@ -945,6 +947,7 @@ async function handleUserMessage(
         headline: accumulatesReasoning ? '' : liveHeadline,
         reasoningTrace: accumulatesReasoning ? liveReasoningTrace : [],
         detail: liveDetail,
+        narrationTrace: flags.thinking === 'collapse' ? liveNarrationTrace : [],
         footer: liveFooter,
         spinnerGlyph,
         spinnerDots,
@@ -1214,6 +1217,9 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'progress') {
+      if (flags.thinking === 'collapse') {
+        liveNarrationTrace = appendNarrationTrace(liveNarrationTrace, event.reply)
+      }
       queueLiveText(event.reply, true)
       return
     }

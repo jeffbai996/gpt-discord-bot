@@ -77,6 +77,20 @@ test('live narration is reposted beneath the complete tool trace stack', async (
   )
 })
 
+test('collapse narration accumulates and survives reasoning redraws until turn end', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const progressStart = source.indexOf("if (event.type === 'progress')")
+  const progressEnd = source.indexOf("if (event.type === 'reasoning_progress')", progressStart)
+  const progressBranch = source.slice(progressStart, progressEnd)
+  const reasoningStart = progressEnd
+  const reasoningEnd = source.indexOf("if (event.type === 'heartbeat')", reasoningStart)
+  const reasoningBranch = source.slice(reasoningStart, reasoningEnd)
+
+  assert.match(progressBranch, /flags\.thinking === 'collapse'/)
+  assert.match(progressBranch, /appendNarrationTrace\(liveNarrationTrace, event\.reply\)/)
+  assert.doesNotMatch(reasoningBranch, /liveNarrationTrace\s*=/)
+})
+
 test('heartbeat never invents a generic tool-status narration line', async () => {
   const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
   const start = source.indexOf("if (event.type === 'heartbeat')")
