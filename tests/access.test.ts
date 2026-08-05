@@ -127,8 +127,11 @@ test('access: thread inherits parent policy and flags until explicitly overridde
 
   assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), true)
   assert.equal(a.canReact('u1', 'thread', 'parent'), true)
-  assert.equal(a.channelFlags('thread', 'parent').reasoning, 'max')
-  assert.equal(a.channelFlags('thread', 'parent').trace, 'live')
+  assert.equal(a.channelFlags('thread').reasoning, 'max')
+  assert.equal(a.channelFlags('thread').trace, 'live')
+  const inheritedOverride = await a.setChannelFlags('thread', { trace: 'off' })
+  assert.equal(inheritedOverride.reasoning, 'max')
+  assert.equal(inheritedOverride.trace, 'off')
 
   await a.setChannel('thread', true, true, { reasoning: 'low', trace: 'off' })
   assert.equal(a.canHandle({ channelId: 'thread', parentChannelId: 'parent', userId: 'u1', isMention: false }), false)
