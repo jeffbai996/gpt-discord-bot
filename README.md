@@ -4,7 +4,7 @@
 
 Most turns run through **Codex with `gpt-5.6-sol`** on a Codex subscription. The bot streams public progress and tool events into Discord while Codex searches, reads, edits, runs commands, and verifies work. The OpenAI API remains available as an explicit per-channel engine. After a confirmed Codex process failure, automatic API routing is limited to a tool-less postmortem and cannot continue the original task.
 
-> **Current shape:** persistent Codex sessions, four-mode thinking and trace surfaces, per-turn token telemetry, safe queueing and steering, plan approval, multimodal carryover, realtime voice, local RAG, and drain-safe deployment.
+> **Current shape:** persistent Codex sessions, four-mode thinking and trace surfaces, per-turn token telemetry, safe queueing and steering, multimodal carryover, realtime voice, local RAG, and drain-safe deployment.
 
 ---
 
@@ -53,7 +53,7 @@ Thinking, trace, and counter surfaces are independently configurable per channel
 
 Codex receives images directly with `codex exec --image`; image turns no longer detour through the API. Automatic failure routing is intentionally conservative: ordinary adapter errors do not invoke the API, and a confirmed dead or timed-out Codex child can trigger only a tool-less crash report after the grace window. The original task remains unfinished. Full API agent behavior is available only when the channel explicitly selects the API engine.
 
-Normal Codex execution uses approvals and sandbox bypass so implementation requests can actually edit, test, commit, deploy, and use browser/MCP tools. Run the service under an appropriately isolated OS account. `/gpt plan` is the read-only exception: it launches the next turn with a read-only sandbox and waits for explicit approval before execution.
+Normal Codex execution uses approvals and sandbox bypass so implementation requests can actually edit, test, commit, deploy, and use browser/MCP tools. Run the service under an appropriately isolated OS account.
 
 The bot consumes Codex's JSONL event stream for live progress and then reads the rollout artifact to recover file-edit hunks that are absent from the stream.
 
@@ -118,7 +118,6 @@ Lifecycle reactions track `received → thinking → searching/tooling → repli
 - **Steering/barge-in** lets a newer message replace stale work, but waits for a safe lifecycle boundary rather than killing Codex halfway through a shell command or file edit.
 - **Hard stop** is available through `/gpt stop`, a lone `❌`/`X` message, or the reaction action. It kills the process group and clears queued follow-ups.
 - **Continuity guard** detects implementation replies that end with “I'll do that next,” resumes the same session automatically, and requires completion or a concrete blocker.
-- **Plan approval** arms the next message as read-only planning. React ✅ to execute the saved plan, ✏️ to revise it, or ❌ to cancel. Plans persist across restarts until their TTL expires.
 - **Drain-safe restarts** let accepted turns finish, preserve deferred messages, coalesce duplicate restart requests, and restart from outside the service cgroup.
 
 ---
@@ -186,7 +185,6 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt thinking off\|on\|live\|collapse [#channel]` | configure reasoning display |
 | `/gpt trace off\|on\|live\|collapse [#channel]` | configure tool-trace display |
 | `/gpt counter off\|token\|both [#channel]` | configure per-turn telemetry |
-| `/gpt plan` | make the next turn a read-only plan with reaction approval |
 | `/gpt stop` | abort the active turn and queued follow-ups |
 | `/gpt clear` | reset this channel's Codex and Discord context |
 | `/gpt history` | show or attach the current Codex session transcript |
@@ -236,7 +234,7 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | `pinned-facts.md` | reaction-pinned channel context |
 | `global-stats.json` | cumulative token telemetry |
 | `pending-placeholders.json` / `deferred-actions.json` | crash recovery and delayed cleanup |
-| `plan-mode.json` / `restart-inbox.json` | plan approvals and restart-preserved work |
+| `restart-inbox.json` | restart-preserved work |
 | `agent-registry/*.json` | per-instance Codex subagent snapshots for `!agents` |
 
 ### Key environment variables
@@ -265,7 +263,6 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | `GPT_EMBED_COOLDOWN_MS` | passive-ingestion throttle |
 | `GPT_SUMMARIZATION_MODEL` / `_THRESHOLD` / `_BATCH_LIMIT` | rolling-summary configuration |
 | `GPT_SEARCH_MODEL` | web-search side-call model |
-| `GPT_PLAN_TTL_MS` | persisted plan approval lifetime |
 | `GPT_CODEX_HELPER_BIN` / `GPT_VOICE_CODEX_TIMEOUT_MS` | optional voice-to-Codex worker |
 | `OPENAI_REALTIME_MODEL` / `OPENAI_REALTIME_VOICE` | realtime voice configuration |
 | `OPENAI_TTS_MODEL` / `OPENAI_TTS_VOICE` | fallback speech configuration |
@@ -300,7 +297,7 @@ npm run test
 npx tsc --noEmit
 ```
 
-The suite uses `node:test` and covers command contracts, access migration, token counters, trace pagination, live UI, Codex supervision, session rollover, queueing, plans, attachments, browser/MCP plumbing, memory, voice, restart recovery, secret redaction, and Discord rendering.
+The suite uses `node:test` and covers command contracts, access migration, token counters, trace pagination, live UI, Codex supervision, session rollover, queueing, attachments, browser/MCP plumbing, memory, voice, restart recovery, secret redaction, and Discord rendering.
 
 ## License
 

@@ -59,12 +59,11 @@ test('clear acknowledgement identifies the reset channel', () => {
   assert.match(message, /cleared — next turn starts fresh\./)
 })
 
-test('/gpt plan is a one-shot read-only planning command', () => {
+test('/gpt plan is not registered', () => {
   const json = gptCommand.toJSON()
   const plan = json.options?.find((option: any) => option.name === 'plan')
 
-  assert.ok(plan)
-  assert.match(plan.description, /next message read-only/i)
+  assert.equal(plan, undefined)
 })
 
 test('/gpt effort labels xhigh without an extra descriptor', () => {

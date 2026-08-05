@@ -9,7 +9,6 @@ import { snapshot as cacheSnapshot, globalSnapshot, type CacheSnapshot } from '.
 import { readLatestRateLimits, readSessionHistory, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
-import { PLAN_MODE_ACK, type PlanModeStore } from './plan-mode.ts'
 import { presetPatch, type ChannelPreset } from './presets.ts'
 import { buildPoll } from './discord-poll.ts'
 
@@ -209,10 +208,6 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
-    .setName('plan')
-    .setDescription('Plan the next message read-only')
-  )
-  .addSubcommand(s => s
     .setName('poll')
     .setDescription('Post a native Discord poll')
     .addStringOption(o => o.setName('question').setDescription('Poll question').setRequired(true))
@@ -370,7 +365,6 @@ export interface CommandDeps {
   // Optional — present only when the SQLite-backed summarization scheduler
   // wired up successfully. /gpt compact reports gracefully when null.
   summarizer: { runForChannel(channelId: string): Promise<{ messageCount: number } | null> } | null
-  plans?: PlanModeStore
 }
 
 export async function executeGptCommand(
@@ -418,17 +412,6 @@ export async function executeGptCommand(
       const filename = interaction.options.getString('filename', true)
       await persona.load(filename)
       return interaction.reply({ content: `✅ Persona swapped to \`${filename}\`.`, ephemeral: true })
-    }
-
-    if (subcommand === 'plan') {
-      if (!deps.plans) {
-        return interaction.reply({ content: '⚠️ Plan mode is unavailable on this runtime.', ephemeral: true })
-      }
-      deps.plans.arm(interaction.channelId, interaction.user.id)
-      return interaction.reply({
-        content: PLAN_MODE_ACK,
-        ephemeral: true,
-      })
     }
 
     if (subcommand === 'poll') {

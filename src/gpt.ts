@@ -67,12 +67,6 @@ import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
 import {
-  executePlanInstruction,
-  PLAN_ONLY_INSTRUCTION,
-  PlanModeStore,
-  revisionInstruction,
-} from './plan-mode.ts'
-import {
   DEFAULT_TOOL_CALL_WIDTH,
   DEFAULT_TOOL_OUTPUT_WIDTH,
   formatUnifiedDiffTrace,
@@ -461,7 +455,6 @@ const client = new Client({
 })
 
 const shutdownGate = new ShutdownGate()
-const plans = new PlanModeStore()
 const queueMarker = new LatestQueueMarker(() => client.user?.id)
 const activeAgentViews = new Map<string, (agents: CodexAgentSnapshot[]) => Promise<void>>()
 const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 0
@@ -646,7 +639,7 @@ client.on('interactionCreate', async interaction => {
     await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '', persona, toolRegistry)
     return
   }
-  await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer, plans })
+  await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer })
 })
 
 // Core message-handling pipeline. Reused by:
@@ -693,7 +686,6 @@ async function handleUserMessage(
   const pinContext = await resolvePinContext(message)
   const threadContext = await resolveThreadContext(message)
   const parentChannelId = message.channel.isThread() ? message.channel.parentId : null
-  const planArm = plans.consumeArm(channelId, userId)
   const flags = access.channelFlags(channelId, parentChannelId)
   const transientTrace = flags.trace === 'live' || flags.trace === 'collapse'
   // API-engine model is env-driven (DEFAULT_MODEL / GPT_MODEL), not per-channel —
@@ -788,13 +780,6 @@ async function handleUserMessage(
     extraText = (extraText ? extraText + '\n\n' : '') +
       '[Expansion request: the user wants you to go deeper on your most recent reply in this channel — add detail, examples, or counter-points. Don\'t repeat what you already said; build on it.]'
   }
-  if (planArm) {
-    const instruction = planArm.kind === 'revise'
-      ? revisionInstruction(planArm.priorPlan ?? '')
-      : PLAN_ONLY_INSTRUCTION
-    extraText = (extraText ? extraText + '\n\n' : '') + instruction
-  }
-
   // "thinking with [effort] effort…" — surface the reasoning effort in the live
   // placeholder (Jeff 2026-06-24). 'none' effort just reads "thinking".
   const effortLabel = flags.reasoning && flags.reasoning !== 'none'
@@ -1334,7 +1319,6 @@ async function handleUserMessage(
           resumeSessionId,
           signal: stopController.signal,
           onEvent,
-          readOnly: !!planArm,
         })
         if (result.threadId) channelSessions.set(channelId, result.threadId)
         // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
@@ -1704,7 +1688,7 @@ async function handleUserMessage(
       isRegeneration: !!targetMessage,
       hasLiveState: transientThinking && willThinking,
     })
-    if (lingerCompletedThinking && mergedMsg && !planArm) {
+    if (lingerCompletedThinking && mergedMsg) {
       const settledMessage = mergedMsg
       const settleThinking = () => {
         void settledMessage.edit(`${thoughtLine}\n${parts[0] ?? ''}`).catch(() => {})
@@ -1714,21 +1698,6 @@ async function handleUserMessage(
         timer.unref?.()
       } else {
         settleThinking()
-      }
-    }
-    // Plan cards stay stable instead of receiving the normal deferred strip.
-    if (planArm && mergedMsg) {
-      await mergedMsg.edit(parts[0] ?? '').catch(() => {})
-      plans.registerPending({
-        messageId: mergedMsg.id,
-        channelId,
-        requesterId: userId,
-        sourceMessageId: message.id,
-        planText: result.reply?.trim() || parts.join('\n').trim(),
-        createdAt: Date.now(),
-      })
-      for (const emoji of ['✅', '✏️', '❌']) {
-        await mergedMsg.react(emoji).catch(() => {})
       }
     }
     // Attach any screenshots a tool produced this turn (Playwright browser_take_
@@ -1744,7 +1713,7 @@ async function handleUserMessage(
     }
     // Transient thought line: after the linger, strip just the thought prefix from
     // the merged message, leaving the reply body intact.
-    if (!persist && mergedMsg && !planArm) {
+    if (!persist && mergedMsg) {
       const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
       deferredActions.schedule(client, { channelId: mergedMsg.channelId, messageId: mergedMsg.id, action: 'strip', content: parts[0] ?? '', dueAt: Date.now() + lingerMs })
     }
@@ -2006,38 +1975,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
       && queueMarker.isLatest(reaction.message.channelId, reaction.message.id)) {
     activeTurns.stopFor(reaction.message.channelId, { clearQueue: false })
     return
-  }
-  const planAction = emoji === '✅' ? 'execute'
-    : emoji === '✏️' ? 'revise'
-      : emoji === '❌' ? 'cancel'
-        : null
-  if (planAction && !user.bot && reaction.message.author?.id === client.user?.id) {
-    const picked = plans.takeAction(reaction.message.id, user.id, planAction)
-    if (picked.status === 'forbidden') return
-    if (picked.status === 'expired') {
-      await reaction.message.reply({ content: '⌛ Plan expired — run `/gpt plan` again', allowedMentions: { repliedUser: false } }).catch(() => {})
-      return
-    }
-    if (picked.status === 'accepted') {
-      await reaction.message.reactions.removeAll().catch(() => {})
-      if (planAction === 'cancel') {
-        await reaction.message.edit(`${reaction.message.content}\n\n❌ **plan cancelled**`).catch(() => {})
-        return
-      }
-      if (planAction === 'revise') {
-        await reaction.message.edit(`${reaction.message.content}\n\n✏️ **revision armed — send the changes**`).catch(() => {})
-        return
-      }
-      await reaction.message.edit(`${reaction.message.content}\n\n✅ **approved — executing**`).catch(() => {})
-      try {
-        const source = await reaction.message.channel.messages.fetch(picked.plan.sourceMessageId)
-        await runChannelTurn(source, null, executePlanInstruction(picked.plan.planText))
-      } catch (e) {
-        console.error('[plan] execute failed:', e)
-        await reaction.message.reply({ content: '❌ Couldn’t resume plan', allowedMentions: { repliedUser: false } }).catch(() => {})
-      }
-      return
-    }
   }
   await handleReaction(reaction, user, {
     client,
