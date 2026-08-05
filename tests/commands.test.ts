@@ -66,6 +66,13 @@ test('/gpt plan is not registered', () => {
   assert.equal(plan, undefined)
 })
 
+test('/gpt poll is not registered', () => {
+  const json = gptCommand.toJSON()
+  const poll = json.options?.find((option: any) => option.name === 'poll')
+
+  assert.equal(poll, undefined)
+})
+
 test('/gpt effort labels xhigh without an extra descriptor', () => {
   const json = gptCommand.toJSON()
   const effort: any = json.options?.find((option: any) => option.name === 'effort')
