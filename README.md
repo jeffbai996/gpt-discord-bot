@@ -76,7 +76,6 @@ Codex reports cumulative usage when a session resumes, so gpt-bot stores the pri
 Longer-horizon views:
 
 - **`/gpt stats`** — persistent totals across restarts and channels, cache/reasoning splits, Sol API-rate equivalent, model counts, uptime, context pressure, and the latest subscription-limit snapshot.
-- **`/gpt cache`** — rolling 50-turn prompt-cache telemetry for one channel.
 - **`/gpt limits`** — live Codex subscription windows with usage bars and reset countdowns.
 
 ---
@@ -111,7 +110,7 @@ Lifecycle reactions track `received → thinking → searching/tooling → repli
 
 ## Persistent conversation and turn control
 
-- **Per-channel Codex sessions** resume across messages and bot restarts. `/gpt history` exposes the readable session transcript; `/gpt clear` drops the session and stamps a Discord-history cutoff so the next turn is genuinely fresh.
+- **Per-channel Codex sessions** resume across messages and bot restarts. `/gpt clear` drops the session and stamps a Discord-history cutoff so the next turn is genuinely fresh.
 - **Automatic rollover** watches session input pressure. Before the context ceiling, the bot rolls older channel history into a summary, drops the oversized Codex session, and continues from the compacted context.
 - **Token-aware Discord history** fetches up to 100 recent messages and trims by budget while always retaining a small recent floor.
 - **Queueing** serializes work within a channel while other channels continue independently. Rapid follow-ups are batched into the next turn instead of spawning competing workers.
@@ -143,7 +142,7 @@ Attachments are processed with bounded sizes and temporary files are cleaned aft
 - **Multiple MCP servers:** comma-separated `GPT_MCP_URL` and `GPT_MCP_LABEL` values load independent streamable-HTTP servers. One failed server registers an explicit unavailable stub without disabling the others.
 - **Shared knowledge tools:** optional HTTP/CLI integrations expose durable memory and file search to both engines.
 - **Local semantic memory:** allowed channel messages are embedded with a local Ollama model and stored in SQLite + sqlite-vss. `search_memory` retrieves channel-scoped history.
-- **Rolling summaries:** older conversation is summarized locally and injected above the recent message window. `/gpt compact` forces a rollup.
+- **Rolling summaries:** older conversation is summarized locally and injected above the recent message window.
 - **Persona layering:** the runtime persona, per-guild overrides, repository `AGENTS.md`, rolling summary, pinned facts, and current wall-clock context are composed for every turn. SIGHUP reloads persona and access state without a full restart.
 
 The bot ignores other bot-authored messages, so multiple agents can share a channel without manufacturing an infinite meeting.
@@ -187,12 +186,10 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt counter off\|token\|both [#channel]` | configure per-turn telemetry |
 | `/gpt stop` | abort the active turn and queued follow-ups |
 | `/gpt clear` | reset this channel's Codex and Discord context |
-| `/gpt history` | show or attach the current Codex session transcript |
-| `/gpt compact [#channel]` | force a rolling-summary update |
+| `/gpt session` | show current session usage and context pressure |
+| `/gpt doctor` | validate runtime state and rollout plumbing |
 | `/gpt stats` | show persistent usage, context, and limit telemetry |
-| `/gpt cache [#channel]` | show rolling automatic prompt-cache telemetry |
 | `/gpt limits` | show Codex subscription usage windows |
-| `/gpt persona <filename>` | hot-swap the runtime persona |
 | `/gpt voice join\|type\|leave\|speak` | control realtime voice |
 
 Current Codex model choices: `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.

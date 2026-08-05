@@ -1,15 +1,13 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction, AttachmentBuilder } from 'discord.js'
+import { SlashCommandBuilder, PermissionFlagsBits, ChatInputCommandInteraction } from 'discord.js'
 import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { AccessManager, CODEX_MODELS, type ReasoningEffort, type CodexModel } from './access.ts'
-import { PersonaLoader } from './persona.ts'
-import { snapshot as cacheSnapshot, globalSnapshot, type CacheSnapshot } from './cache-stats.ts'
-import { readLatestRateLimits, readSessionHistory, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
+import { globalSnapshot } from './cache-stats.ts'
+import { readLatestRateLimits, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
-import { presetPatch, type ChannelPreset } from './presets.ts'
 
 // Render the Codex subscription rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -68,30 +66,6 @@ export function fmtClearAcknowledgement(channelId: string): string {
 export function fmtSettingChange(label: string, value: string, previous: string): string {
   const changed = value === previous ? '' : ` (was \`${previous}\`)`
   return `✅ ${label} → \`${value}\`${changed}`
-}
-
-export function fmtCacheTelemetry(channelId: string, snap: CacheSnapshot): string {
-  const ageMs = snap.newestTs && snap.oldestTs ? snap.newestTs - snap.oldestTs : 0
-  const ageMin = (ageMs / 60000).toFixed(1)
-  const hitPct = (snap.cacheHitRate * 100).toFixed(1)
-  const inK = (snap.inputTokens / 1000).toFixed(1)
-  const cachedK = (snap.cachedInputTokens / 1000).toFixed(1)
-  const outK = (snap.outputTokens / 1000).toFixed(1)
-  const reasoningLine = snap.reasoningTokens > 0
-    ? `\nreasoning:      ${snap.reasoningTokens.toLocaleString('en-US')} tokens (included in output telemetry)`
-    : ''
-  const modelsLine = snap.models.length > 0
-    ? `\nmodels seen:    ${snap.models.join(', ')}`
-    : ''
-  return [
-    `📊 <#${channelId}> prompt-cache telemetry (last ${snap.turns} turns, window ${ageMin}min)`,
-    '```',
-    `cache hit rate: ${hitPct}%`,
-    `input tokens:   ${inK}k total · ${cachedK}k cached`,
-    `output tokens:  ${outK}k` + reasoningLine + modelsLine,
-    '```',
-    '_Cached input is provider-reported prefix reuse; billing depends on engine and model._',
-  ].join('\n')
 }
 
 export interface DoctorCheck { name: string; ok: boolean; detail: string }
@@ -197,26 +171,12 @@ export const gptCommand = new SlashCommandBuilder()
     .addBooleanOption(o => o.setName('require_mention').setDescription('Require explicit mention').setRequired(true))
   )
   .addSubcommand(s => s
-    .setName('persona')
-    .setDescription('Hot-swap the bot persona file')
-    .addStringOption(o => o.setName('filename').setDescription('The persona filename (e.g. persona.md)').setRequired(true))
-  )
-  .addSubcommand(s => s
-    .setName('compact')
-    .setDescription('Force a context-summary rollup now, regardless of the message threshold')
-    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
-  )
-  .addSubcommand(s => s
     .setName('stop')
     .setDescription('Stop the active turn')
   )
   .addSubcommand(s => s
     .setName('clear')
     .setDescription('Reset this channel')
-  )
-  .addSubcommand(s => s
-    .setName('history')
-    .setDescription('Show session history')
   )
   .addSubcommand(s => s
     .setName('session')
@@ -252,11 +212,6 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
-    .setName('cache')
-    .setDescription('Show prompt-cache telemetry')
-    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
-  )
-  .addSubcommand(s => s
     .setName('effort')
     .setDescription('Set or show reasoning effort')
     .addStringOption(o => o
@@ -272,19 +227,6 @@ export const gptCommand = new SlashCommandBuilder()
         { name: 'max - deepest, slowest', value: 'max' },
       )
     )
-    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
-  )
-  .addSubcommand(s => s
-    .setName('preset')
-    .setDescription('Apply a channel UI preset')
-    .addStringOption(o => o
-      .setName('value').setDescription('quiet | normal | dev | deep').setRequired(true)
-      .addChoices(
-        { name: 'Quiet — answer only', value: 'quiet' },
-        { name: 'Normal — live thought, collapsed trace', value: 'normal' },
-        { name: 'Dev — persistent trace and telemetry', value: 'dev' },
-        { name: 'Deep — max-effort Codex with full trace', value: 'deep' },
-      ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
   .addSubcommand(s => s
@@ -352,18 +294,10 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
 
-export interface CommandDeps {
-  // Optional — present only when the SQLite-backed summarization scheduler
-  // wired up successfully. /gpt compact reports gracefully when null.
-  summarizer: { runForChannel(channelId: string): Promise<{ messageCount: number } | null> } | null
-}
-
 export async function executeGptCommand(
   interaction: ChatInputCommandInteraction,
   access: AccessManager,
-  persona: PersonaLoader,
   adminUserId: string | undefined,
-  deps: CommandDeps = { summarizer: null }
 ) {
   if (adminUserId && interaction.user.id !== adminUserId) {
     return interaction.reply({ content: 'Unauthorized. You are not the designated bot admin.', ephemeral: true })
@@ -397,39 +331,6 @@ export async function executeGptCommand(
         content: `✅ <#${channel.id}> ${enabled ? 'enabled' : 'disabled'} · require @ ${requireMention ? 'yes' : 'no'}${was}\n\n${settingsCard(access, channel.id)}`,
         ephemeral: true
       })
-    }
-
-    if (subcommand === 'persona') {
-      const filename = interaction.options.getString('filename', true)
-      await persona.load(filename)
-      return interaction.reply({ content: `✅ Persona swapped to \`${filename}\`.`, ephemeral: true })
-    }
-
-    if (subcommand === 'history') {
-      const sid = channelSessions.get(interaction.channelId)
-      if (!sid) {
-        return interaction.reply({ content: 'ℹ️ No session history', ephemeral: true })
-      }
-      await interaction.deferReply({ ephemeral: true })
-      const turns = await readSessionHistory(sid)
-      if (!turns.length) {
-        return interaction.editReply('⚠️ Session found but no readable conversation in the rollout.')
-      }
-      const raw = turns.map(t => `${t.role === 'user' ? '🧑 USER' : '🤖 GPT'}: ${t.text}`).join('\n\n')
-      const text = raw.replace(/```/g, '`\u200b`\u200b`')  // neutralize fences so they don't break our code block
-      const MAX_INLINE = 10000
-      if (text.length <= MAX_INLINE) {
-        const chunks: string[] = []
-        for (let i = 0; i < text.length; i += 1900) chunks.push(text.slice(i, i + 1900))
-        await interaction.editReply('```\n' + chunks[0] + '\n```')
-        for (let i = 1; i < chunks.length; i++) {
-          await interaction.followUp({ content: '```\n' + chunks[i] + '\n```', ephemeral: true })
-        }
-      } else {
-        const file = new AttachmentBuilder(Buffer.from(raw, 'utf8'), { name: `gpt-session-${sid.slice(0, 8)}.md` })
-        await interaction.editReply({ content: `📜 Session history — ${turns.length} turns, ${text.length} chars (too long for inline, attached):`, files: [file] })
-      }
-      return
     }
 
     if (subcommand === 'session') {
@@ -486,26 +387,6 @@ export async function executeGptCommand(
         content: fmtClearAcknowledgement(interaction.channelId),
         ephemeral: true,
       })
-    }
-
-    if (subcommand === 'compact') {
-      const channel = interaction.options.getChannel('channel') ?? interaction.channel
-      if (!channel) {
-        return interaction.reply({ content: '❌ No channel resolved.', ephemeral: true })
-      }
-      if (!deps.summarizer) {
-        return interaction.reply({ content: '⚠️ Summarization unavailable on this runtime (sqlite-vss / better-sqlite3 didn\'t load — usually means Node version too old).', ephemeral: true })
-      }
-      await interaction.deferReply({ ephemeral: true })
-      try {
-        const result = await deps.summarizer.runForChannel(channel.id)
-        if (!result) {
-          return interaction.editReply(`✅ <#${channel.id}> nothing new to summarize.`)
-        }
-        return interaction.editReply(`✅ <#${channel.id}> compacted ${result.messageCount} messages into the rolling summary.`)
-      } catch (e: any) {
-        return interaction.editReply(`❌ compact failed: ${e?.message ?? String(e)}`)
-      }
     }
 
     if (subcommand === 'model') {
@@ -584,24 +465,6 @@ export async function executeGptCommand(
       return interaction.reply({ content: settingsCard(access, channel.id), ephemeral: true })
     }
 
-    if (subcommand === 'cache') {
-      const channel = interaction.options.getChannel('channel') ?? interaction.channel
-      if (!channel) {
-        return interaction.reply({ content: '❌ No channel resolved.', ephemeral: true })
-      }
-      const snap = cacheSnapshot(channel.id)
-      if (snap.turns === 0) {
-        return interaction.reply({
-          content: `📊 <#${channel.id}> no turns recorded yet (rolling window is empty — try chatting first).`,
-          ephemeral: true
-        })
-      }
-      return interaction.reply({
-        content: fmtCacheTelemetry(channel.id, snap),
-        ephemeral: true
-      })
-    }
-
     if (subcommand === 'effort') {
       const value = interaction.options.getString('value', true).trim().toLowerCase()
       const channel = interaction.options.getChannel('channel') ?? interaction.channel
@@ -618,19 +481,6 @@ export async function executeGptCommand(
       } catch (e: any) {
         return interaction.reply({ content: `Error: ${e.message}`, ephemeral: true })
       }
-    }
-
-    if (subcommand === 'preset') {
-      const value = interaction.options.getString('value', true) as ChannelPreset
-      const channel = interaction.options.getChannel('channel') ?? interaction.channel
-      if (!channel) {
-        return interaction.reply({ content: 'No channel resolved.', ephemeral: true })
-      }
-      await access.setChannelFlags(channel.id, presetPatch(value))
-      return interaction.reply({
-        content: `✅ preset → \`${value}\`\n\n${settingsCard(access, channel.id)}`,
-        ephemeral: true,
-      })
     }
 
     if (subcommand === 'counter') {

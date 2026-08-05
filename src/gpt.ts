@@ -19,6 +19,7 @@ import { PersonaLoader } from './persona.ts'
 import { chunk } from './chunk.ts'
 import { closeDanglingInlineCode } from './discord-markdown.ts'
 import { gptCommand, executeGptCommand } from './commands.ts'
+import { recordCommandUsage } from './command-usage.ts'
 import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/command.ts'
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent, RespondInput, RespondResult, ToolCall } from './openai.ts'
@@ -634,12 +635,17 @@ client.on('interactionCreate', async interaction => {
     return
   }
   if (interaction.commandName !== 'gpt') return
+  const slashPath = [
+    interaction.options.getSubcommandGroup(false),
+    interaction.options.getSubcommand(false),
+  ].filter(Boolean).join(' ')
+  await recordCommandUsage(slashPath)
   // /gpt voice … is a subcommand group; route it to the voice handler.
   if (interaction.options.getSubcommandGroup(false) === 'voice') {
     await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '', persona, toolRegistry)
     return
   }
-  await executeGptCommand(interaction, access, persona, ADMIN_USER_ID, { summarizer })
+  await executeGptCommand(interaction, access, ADMIN_USER_ID)
 })
 
 // Core message-handling pipeline. Reused by:

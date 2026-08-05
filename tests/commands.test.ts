@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fmtCacheTelemetry, fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, fmtSettingChange, gptCommand } from '../src/commands.ts'
+import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, fmtSettingChange, gptCommand } from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 
@@ -73,6 +73,17 @@ test('/gpt poll is not registered', () => {
   assert.equal(poll, undefined)
 })
 
+test('/gpt command menu excludes redundant maintenance controls', () => {
+  const names = gptCommand.toJSON().options?.map((option: any) => option.name) ?? []
+
+  for (const removed of ['persona', 'history', 'compact', 'cache', 'preset']) {
+    assert.doesNotMatch(names.join(' '), new RegExp(`(^| )${removed}( |$)`))
+  }
+  for (const retained of ['channel', 'stop', 'clear', 'session', 'doctor', 'stats', 'limits', 'settings']) {
+    assert.match(names.join(' '), new RegExp(`(^| )${retained}( |$)`))
+  }
+})
+
 test('/gpt effort labels xhigh without an extra descriptor', () => {
   const json = gptCommand.toJSON()
   const effort: any = json.options?.find((option: any) => option.name === 'effort')
@@ -109,25 +120,6 @@ test('/gpt model choices use durable tier labels', () => {
     'gpt-5.6-terra - balanced',
     'gpt-5.6-luna - high-throughput',
   ])
-})
-
-test('cache telemetry reports observed usage without inventing one billing rate', () => {
-  const message = fmtCacheTelemetry('123', {
-    turns: 4,
-    oldestTs: 1_000,
-    newestTs: 61_000,
-    inputTokens: 10_000,
-    outputTokens: 2_000,
-    cachedInputTokens: 8_000,
-    reasoningTokens: 500,
-    cacheHitRate: 0.8,
-    models: ['gpt-5.6-sol', 'gpt-5.6-terra'],
-  })
-
-  assert.match(message, /8\.0k cached/)
-  assert.match(message, /reasoning:\s+500 tokens/)
-  assert.match(message, /billing depends on engine and model/)
-  assert.doesNotMatch(message, /50% rate|billed separately/i)
 })
 
 test('setting acknowledgements include the previous value only when changed', () => {

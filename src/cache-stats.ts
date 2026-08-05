@@ -4,8 +4,8 @@
  * OpenAI's automatic prompt-prefix caching has no manual surface — you can't
  * create / inspect / flush a cache from the API. Cached hits show up after
  * the fact in `usage.prompt_tokens_details.cached_tokens`. To give operators
- * visibility, we keep a small ring buffer of recent turns per channel and
- * compute hit-rate + averages on demand via /gpt cache.
+ * visibility, we keep a small ring buffer of recent turns per channel while
+ * also persisting cumulative totals for /gpt stats.
  *
  * Bounded memory: WINDOW_SIZE turns per channel, no eviction (per-channel
  * Map grows with active channels, which is fine — squad has <20 channels).
