@@ -7,6 +7,8 @@ import {
   RestartCoordinator,
   ShutdownGate,
   rewriteEnvVar,
+  waitForIdleOrDeadline,
+  GRACEFUL_SHUTDOWN_DEADLINE_MS,
   RESTART_DRAIN_DEADLINE_MS,
 } from '../src/restart.ts'
 
@@ -227,6 +229,22 @@ describe('RestartCoordinator drain deadline', () => {
     coordinator.request()
     await tick(30)
     assert.equal(launches, 1)
+  })
+})
+
+describe('graceful shutdown deadline', () => {
+  test('is short enough that a wedged child cannot leave Discord offline', () => {
+    assert.ok(GRACEFUL_SHUTDOWN_DEADLINE_MS > 0)
+    assert.ok(GRACEFUL_SHUTDOWN_DEADLINE_MS <= 30_000)
+  })
+
+  test('reports idle when active work settles before the deadline', async () => {
+    assert.equal(await waitForIdleOrDeadline(Promise.resolve(), 30), 'idle')
+  })
+
+  test('reports timeout when active work never settles', async () => {
+    const result = await waitForIdleOrDeadline(new Promise<void>(() => {}), 5)
+    assert.equal(result, 'timeout')
   })
 })
 

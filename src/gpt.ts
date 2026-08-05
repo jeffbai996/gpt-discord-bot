@@ -45,7 +45,13 @@ import { ChannelTurnRunner } from './channel-turns.ts'
 import { FAST_FORWARD_REACTION, LatestQueueMarker } from './queue-marker.ts'
 import { renderSteeredMessage } from './steering.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
-import { RestartCoordinator, ShutdownGate, scheduleSelfRestart } from './restart.ts'
+import {
+  GRACEFUL_SHUTDOWN_DEADLINE_MS,
+  RestartCoordinator,
+  ShutdownGate,
+  scheduleSelfRestart,
+  waitForIdleOrDeadline,
+} from './restart.ts'
 import { isValidOutboundReactEmoji } from './reactions/vocabulary.ts'
 import { recordTurn as recordCacheTurn, initGlobalStats } from './cache-stats.ts'
 import { initLiveUsage } from './live-usage.ts'
@@ -525,22 +531,20 @@ function requestGracefulRestart(): void {
 }
 
 function installGracefulShutdown(): void {
-  const timeoutMs = Number(process.env.GPT_GRACEFUL_SHUTDOWN_MS) || 30 * 60_000
+  const configuredTimeoutMs = Number(process.env.GPT_GRACEFUL_SHUTDOWN_MS)
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+    ? configuredTimeoutMs
+    : GRACEFUL_SHUTDOWN_DEADLINE_MS
   const shutdown = (signal: string) => {
     if (!shutdownGate.beginExit()) return
     console.error(`[shutdown] ${signal} received; waiting for active turns to finish`)
-    const timer = new Promise<'timeout'>(resolve => {
-      const t = setTimeout(() => resolve('timeout'), timeoutMs)
-      t.unref?.()
-    })
     logTurnLifecycle({ event: 'shutdown_requested', signal, restartPhase: 'draining' })
     const idle = Promise.all([
       shutdownGate.waitForIdle(),
       activeTurns.waitForIdle(),
       channelTurns.waitForIdle(),
     ])
-      .then(() => 'idle' as const)
-    Promise.race([idle, timer])
+    waitForIdleOrDeadline(idle, timeoutMs)
       .then(reason => {
         console.error(`[shutdown] exiting after ${reason}`)
         client.destroy()

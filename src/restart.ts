@@ -30,6 +30,31 @@ type RestartLauncher = () => void
  */
 export const RESTART_DRAIN_DEADLINE_MS = 10 * 60_000
 
+/**
+ * Once systemd has delivered SIGTERM, the restart is already committed.
+ * Give in-flight cleanup a brief chance to finish, then exit so a wedged
+ * Codex child cannot hold the entire Discord bot in "restarting" state.
+ */
+export const GRACEFUL_SHUTDOWN_DEADLINE_MS = 15_000
+
+export async function waitForIdleOrDeadline(
+  idle: Promise<unknown>,
+  deadlineMs: number = GRACEFUL_SHUTDOWN_DEADLINE_MS,
+): Promise<'idle' | 'timeout'> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'timeout'>(resolve => {
+    timer = setTimeout(() => resolve('timeout'), deadlineMs)
+  })
+  try {
+    return await Promise.race([
+      idle.then(() => 'idle' as const),
+      timeout,
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 interface RestartCoordinatorOptions {
   deadlineMs?: number
   /** Called when the drain overruns, so the overrun lands in the turn log. */
