@@ -10,7 +10,7 @@ import { formatTurnOutcome, type TurnOutcome } from './turn-log.ts'
 import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 import { CodexAgentRegistry, type CodexAgentSnapshot } from './codex-agents.ts'
-import { beginTurn, noteRoundtrip } from './live-usage.ts'
+import { beginTurn, noteRoundtrip, type LiveUsageDelta } from './live-usage.ts'
 
 // Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
 // surface an explicit 'interrupted' indicator instead of failing silently.
@@ -487,6 +487,23 @@ export function rolloutOutputDelta(ev: any): number | null {
   return typeof out === 'number' && Number.isFinite(out) ? out : null
 }
 
+/** Full billable delta for one Codex model roundtrip. Reasoning is a subset of
+ * output, retained for display but never added to output again when priced. */
+export function rolloutUsageDelta(ev: any): LiveUsageDelta | null {
+  if (ev?.type !== 'event_msg' || ev.payload?.type !== 'token_count') return null
+  const usage = ev.payload?.info?.last_token_usage
+  if (!usage || typeof usage !== 'object') return null
+  const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value) : 0
+  const delta = {
+    input: number(usage.input_tokens),
+    cachedInput: number(usage.cached_input_tokens),
+    output: number(usage.output_tokens),
+    reasoning: number(usage.reasoning_output_tokens),
+  }
+  return delta.input || delta.output ? delta : null
+}
+
 export function reasoningProgress(ev: any): string | null {
   // Only render reasoning text Codex explicitly places on the public JSONL
   // protocol. Encrypted/internal thought state is intentionally ignored.
@@ -515,6 +532,7 @@ async function findRolloutPath(threadId: string): Promise<string | null> {
 function watchRolloutActivity(
   threadId: string,
   startedAtMs: number,
+  modelUsed: string,
   onText: (text: string) => void,
   onAgents: (agents: CodexAgentSnapshot[]) => void,
 ): { stop: () => Promise<void>; snapshot: () => CodexAgentSnapshot[] } {
@@ -554,10 +572,11 @@ function watchRolloutActivity(
         const timestamp = Date.parse(String(event?.timestamp ?? ''))
         if (Number.isFinite(timestamp) && timestamp < startedAtMs) continue
         if (agentRegistry.consumeRoot(event)) publishAgents()
-        // Live needle: publish each roundtrip's output as codex reports it, so
-        // the fleet tachometer sees a turn happening instead of one lump after.
-        const delta = rolloutOutputDelta(event)
-        if (delta !== null) noteRoundtrip(threadId, delta)
+        // Live needle + dollars: publish every reported token class. Higher
+        // effort is represented by the reasoning tokens Codex actually burned,
+        // not by an invented effort multiplier.
+        const delta = rolloutUsageDelta(event)
+        if (delta !== null) noteRoundtrip(threadId, delta, modelUsed)
         const text = reasoningProgress(event)
         if (text && text !== lastText) {
           lastText = text
@@ -1089,6 +1108,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
           rolloutWatchers.push(watchRolloutActivity(
             threadId,
             t0,
+            effort ? `${model} ${effort}` : model,
             text => {
               supervisor.markActivity()
               input.onEvent?.({ type: 'reasoning_progress', text })

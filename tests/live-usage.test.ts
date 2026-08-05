@@ -6,7 +6,7 @@ import path from 'node:path'
 import {
   initLiveUsage, noteRoundtrip, clearTurn, beginTurn, liveSnapshot, _reset,
 } from '../src/live-usage.ts'
-import { rolloutOutputDelta } from '../src/codex-chat.ts'
+import { rolloutOutputDelta, rolloutUsageDelta } from '../src/codex-chat.ts'
 
 async function tmpFile(): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'gpt-live-'))
@@ -26,6 +26,30 @@ test('rolloutOutputDelta reads the per-roundtrip delta, not the running total', 
     },
   }
   assert.equal(rolloutOutputDelta(ev), 61)
+})
+
+test('rolloutUsageDelta preserves every billable token class', () => {
+  const ev = {
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: { input_tokens: 999_999, output_tokens: 99_999 },
+        last_token_usage: {
+          input_tokens: 34_128,
+          cached_input_tokens: 29_440,
+          output_tokens: 355,
+          reasoning_output_tokens: 123,
+        },
+      },
+    },
+  }
+  assert.deepEqual(rolloutUsageDelta(ev), {
+    input: 34_128,
+    cachedInput: 29_440,
+    output: 355,
+    reasoning: 123,
+  })
 })
 
 test('rolloutOutputDelta ignores rows that are not token counts', () => {
@@ -53,6 +77,28 @@ test('concurrent turns are counted separately and summed', async () => {
   assert.equal(liveSnapshot().output, 40)
 })
 
+test('concurrent turns retain full usage and model for live pricing', async () => {
+  _reset()
+  initLiveUsage(await tmpFile())
+  noteRoundtrip('thread-a', {
+    input: 10_000, cachedInput: 8_000, output: 300, reasoning: 120,
+  }, 'gpt-5.6-sol high')
+  noteRoundtrip('thread-b', {
+    input: 20_000, cachedInput: 15_000, output: 500, reasoning: 300,
+  }, 'gpt-5.6-sol low')
+  noteRoundtrip('thread-a', {
+    input: 5_000, cachedInput: 4_000, output: 200, reasoning: 80,
+  }, 'gpt-5.6-sol high')
+
+  assert.deepEqual(liveSnapshot(), {
+    input: 35_000,
+    cachedInput: 27_000,
+    output: 1_000,
+    reasoning: 500,
+    turns: 2,
+  })
+})
+
 test('clearing a turn it never knew about is a no-op', async () => {
   _reset()
   initLiveUsage(await tmpFile())
@@ -74,6 +120,24 @@ test('in-flight totals reach disk for the fleet sampler to read', async () => {
   clearTurn('thread-a')
   const after = JSON.parse(await readFile(file, 'utf8'))
   assert.deepEqual(after.turns, {})
+})
+
+test('full in-flight usage reaches disk for dollar accounting', async () => {
+  _reset()
+  const file = await tmpFile()
+  initLiveUsage(file)
+  noteRoundtrip('thread-a', {
+    input: 34_128, cachedInput: 29_440, output: 355, reasoning: 123,
+  }, 'gpt-5.6-sol medium')
+  const written = JSON.parse(await readFile(file, 'utf8'))
+  assert.deepEqual(written.turns['thread-a'], {
+    input: 34_128,
+    cachedInput: 29_440,
+    output: 355,
+    reasoning: 123,
+    model: 'gpt-5.6-sol medium',
+    ts: written.turns['thread-a'].ts,
+  })
 })
 
 test('a zero or junk delta never moves the needle', async () => {
