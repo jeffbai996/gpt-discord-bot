@@ -34,7 +34,11 @@ const EMOJI = {
 
   searching:  '🌐',
   tooling:    '🔧',
-  replied:    '✅',
+  // was ✅ — dropped 2026-08-05 (Jeff): a visible reply already means the turn
+  // finished, so the checkmark was redundant. Empty string keeps 'replied' a
+  // real terminal state (still sweeps transients in applyLifecycle) while
+  // stamping nothing.
+  replied:    '',
   truncated:  '✂️',
   blocked:    '🛑',
   errored:    '❌',
