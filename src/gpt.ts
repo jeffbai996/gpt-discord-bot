@@ -461,7 +461,7 @@ const shutdownGate = new ShutdownGate()
 const plans = new PlanModeStore()
 const queueMarker = new LatestQueueMarker(() => client.user?.id)
 const activeAgentViews = new Map<string, (agents: CodexAgentSnapshot[]) => Promise<void>>()
-const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 1_000
+const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 0
 interface QueuedChannelTurn {
   message: Message
   target: Message | null
@@ -476,7 +476,7 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
       const pinText = formatPinContext(await resolvePinContext(item.message))
       return [replyText, pinText, item.message.content].filter(Boolean).join('\n\n')
     }))).filter(Boolean).join('\n')
-    await queueMarker.clear(channelId)
+    void queueMarker.clear(channelId)
     logTurnLifecycle({
       event: 'channel_batch_started',
       channelId,
@@ -1694,14 +1694,18 @@ async function handleUserMessage(
       isRegeneration: !!targetMessage,
       hasLiveState: transientThinking && willThinking,
     })
-    if (lingerCompletedThinking && mergedMsg) {
-      if (LIVE_END_LINGER_MS > 0) {
-        await new Promise<void>(resolve => { setTimeout(resolve, LIVE_END_LINGER_MS) })
+    if (lingerCompletedThinking && mergedMsg && !planArm) {
+      const settledMessage = mergedMsg
+      const settleThinking = () => {
+        void settledMessage.edit(`${thoughtLine}\n${parts[0] ?? ''}`).catch(() => {})
       }
-      try { await mergedMsg.edit(`${thoughtLine}\n${parts[0] ?? ''}`) } catch {}
+      if (LIVE_END_LINGER_MS > 0) {
+        const timer = setTimeout(settleThinking, LIVE_END_LINGER_MS)
+        timer.unref?.()
+      } else {
+        settleThinking()
+      }
     }
-    // Settle the plan card only after the live-thinking linger. Otherwise a
-    // late linger edit can overwrite the user's approved/revise/cancel outcome.
     // Plan cards stay stable instead of receiving the normal deferred strip.
     if (planArm && mergedMsg) {
       await mergedMsg.edit(parts[0] ?? '').catch(() => {})
@@ -1987,7 +1991,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
       && reaction.message.author?.id === user.id
       && queueMarker.isLatest(reaction.message.channelId, reaction.message.id)) {
     activeTurns.stopFor(reaction.message.channelId, { clearQueue: false })
-    await queueMarker.clear(reaction.message.channelId)
     return
   }
   const planAction = emoji === '✅' ? 'execute'

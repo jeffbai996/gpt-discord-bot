@@ -72,9 +72,11 @@ test('restart waits for runner cleanup and queued batches, without API fallback'
   assert.equal(apiCalls, 0)
 })
 
-test('a failed batch drops queued work and releases idle waiters', async () => {
+test('a failed active batch preserves and drains queued work before rejecting', async () => {
   const gate = deferred()
+  const seen: string[][] = []
   const runner = new ChannelTurnRunner<string>(async (_channelId, batch) => {
+    seen.push(batch)
     if (batch[0] === 'A') {
       await gate.promise
       throw new Error('fake codex failure')
@@ -87,6 +89,7 @@ test('a failed batch drops queued work and releases idle waiters', async () => {
   gate.resolve()
   await assert.rejects(leader, /fake codex failure/)
   await idle
+  assert.deepEqual(seen, [['A'], ['B']])
   assert.equal(runner.isIdle(), true)
   assert.equal(runner.queueDepth('channel'), 0)
 })

@@ -29,8 +29,13 @@ export class ChannelTurnRunner<T> {
     const state: ChannelState<T> = existing ?? { running: false, queue: [] }
     state.running = true
     this.states.set(channelId, state)
+    let firstError: unknown
     try {
-      await this.processBatch(channelId, [item])
+      try {
+        await this.processBatch(channelId, [item])
+      } catch (error) {
+        firstError = error
+      }
       if (this.shouldClearQueue(channelId)) state.queue.length = 0
       while (state.queue.length) {
         await this.waitForQuietQueue(state)
@@ -39,13 +44,15 @@ export class ChannelTurnRunner<T> {
           break
         }
         const batch = state.queue.splice(0, state.queue.length)
-        await this.processBatch(channelId, batch)
+        try {
+          await this.processBatch(channelId, batch)
+        } catch (error) {
+          firstError ??= error
+        }
         if (this.shouldClearQueue(channelId)) state.queue.length = 0
       }
+      if (firstError !== undefined) throw firstError
       return 'drained'
-    } catch (error) {
-      state.queue.length = 0
-      throw error
     } finally {
       state.running = false
       if (!state.queue.length) this.states.delete(channelId)
