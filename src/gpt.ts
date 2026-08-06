@@ -649,7 +649,7 @@ client.on('interactionCreate', async interaction => {
     await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '', persona, toolRegistry)
     return
   }
-  await executeGptCommand(interaction, access, ADMIN_USER_ID)
+  await executeGptCommand(interaction, access, ADMIN_USER_ID, { summarizer })
 })
 
 // Core message-handling pipeline. Reused by:

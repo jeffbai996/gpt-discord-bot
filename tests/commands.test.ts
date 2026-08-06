@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { fmtClearAcknowledgement, fmtContextPressureLine, fmtLimitLines, fmtSettingChange, gptCommand } from '../src/commands.ts'
+import {
+  compactChannel,
+  fmtClearAcknowledgement,
+  fmtContextPressureLine,
+  fmtLimitLines,
+  fmtSettingChange,
+  gptCommand,
+} from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 
@@ -76,12 +83,57 @@ test('/gpt poll is not registered', () => {
 test('/gpt command menu excludes redundant maintenance controls', () => {
   const names = gptCommand.toJSON().options?.map((option: any) => option.name) ?? []
 
-  for (const removed of ['persona', 'history', 'compact', 'cache', 'preset']) {
+  for (const removed of ['persona', 'history', 'cache', 'preset']) {
     assert.doesNotMatch(names.join(' '), new RegExp(`(^| )${removed}( |$)`))
   }
-  for (const retained of ['channel', 'stop', 'clear', 'session', 'doctor', 'stats', 'limits', 'settings']) {
+  for (const retained of ['channel', 'stop', 'clear', 'compact', 'session', 'doctor', 'stats', 'limits', 'settings']) {
     assert.match(names.join(' '), new RegExp(`(^| )${retained}( |$)`))
   }
+})
+
+test('/gpt compact summarizes before dropping only the active Codex session', async () => {
+  const events: string[] = []
+  const result = await compactChannel('channel-1', {
+    summarizer: {
+      runForChannel: async channelId => {
+        events.push(`summarize:${channelId}`)
+        return { messageCount: 42 }
+      },
+    },
+    isTurnActive: () => false,
+    dropSession: channelId => {
+      events.push(`drop:${channelId}`)
+      return true
+    },
+  })
+
+  assert.deepEqual(events, ['summarize:channel-1', 'drop:channel-1'])
+  assert.deepEqual(result, { status: 'compacted', messageCount: 42, droppedSession: true })
+})
+
+test('/gpt compact keeps the session when summarization fails', async () => {
+  let dropped = false
+  await assert.rejects(
+    () => compactChannel('channel-1', {
+      summarizer: { runForChannel: async () => { throw new Error('ollama unavailable') } },
+      isTurnActive: () => false,
+      dropSession: () => { dropped = true; return true },
+    }),
+    /ollama unavailable/,
+  )
+  assert.equal(dropped, false)
+})
+
+test('/gpt compact refuses to race an active turn', async () => {
+  let summarized = false
+  const result = await compactChannel('channel-1', {
+    summarizer: { runForChannel: async () => { summarized = true; return null } },
+    isTurnActive: () => true,
+    dropSession: () => true,
+  })
+
+  assert.deepEqual(result, { status: 'busy' })
+  assert.equal(summarized, false)
 })
 
 test('/gpt effort labels xhigh without an extra descriptor', () => {

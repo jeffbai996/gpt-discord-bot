@@ -179,6 +179,11 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Reset this channel')
   )
   .addSubcommand(s => s
+    .setName('compact')
+    .setDescription('Summarize this channel and start a fresh Codex session')
+    .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
+  )
+  .addSubcommand(s => s
     .setName('session')
     .setDescription('Show this channel’s current Codex session usage')
   )
@@ -294,10 +299,42 @@ export const gptCommand = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
 
+export interface CompactCommandDeps {
+  summarizer: { runForChannel(channelId: string): Promise<{ messageCount: number } | null> } | null
+  isTurnActive?: (channelId: string) => boolean
+  dropSession?: (channelId: string) => boolean
+}
+
+export type CompactResult =
+  | { status: 'busy' }
+  | { status: 'unavailable' }
+  | { status: 'compacted'; messageCount: number; droppedSession: boolean }
+
+/** Preserve channel history in the rolling summary, then discard the bloated
+ * Codex process context. Unlike /gpt clear, this never stamps a history cutoff. */
+export async function compactChannel(
+  channelId: string,
+  deps: CompactCommandDeps,
+): Promise<CompactResult> {
+  const isTurnActive = deps.isTurnActive ?? (id => activeTurns.isActive(id))
+  if (isTurnActive(channelId)) return { status: 'busy' }
+  if (!deps.summarizer) return { status: 'unavailable' }
+
+  const summary = await deps.summarizer.runForChannel(channelId)
+  const dropSession = deps.dropSession ?? (id => channelSessions.dropSession(id))
+  const droppedSession = dropSession(channelId)
+  return {
+    status: 'compacted',
+    messageCount: summary?.messageCount ?? 0,
+    droppedSession,
+  }
+}
+
 export async function executeGptCommand(
   interaction: ChatInputCommandInteraction,
   access: AccessManager,
   adminUserId: string | undefined,
+  deps: CompactCommandDeps = { summarizer: null },
 ) {
   if (adminUserId && interaction.user.id !== adminUserId) {
     return interaction.reply({ content: 'Unauthorized. You are not the designated bot admin.', ephemeral: true })
@@ -387,6 +424,45 @@ export async function executeGptCommand(
         content: fmtClearAcknowledgement(interaction.channelId),
         ephemeral: true,
       })
+    }
+
+    if (subcommand === 'compact') {
+      const channel = interaction.options.getChannel('channel') ?? interaction.channel
+      if (!channel) {
+        return interaction.reply({ content: '❌ No channel resolved.', ephemeral: true })
+      }
+      if (activeTurns.isActive(channel.id)) {
+        return interaction.reply({
+          content: `⚠️ <#${channel.id}> has a turn running. Compact it after that finishes.`,
+          ephemeral: true,
+        })
+      }
+      if (!deps.summarizer) {
+        return interaction.reply({
+          content: '⚠️ Summarization is unavailable on this runtime, so I left the session intact.',
+          ephemeral: true,
+        })
+      }
+
+      await interaction.deferReply({ ephemeral: true })
+      try {
+        const result = await compactChannel(channel.id, deps)
+        if (result.status === 'busy') {
+          return interaction.editReply(`⚠️ <#${channel.id}> started a turn before compaction could run. Try again when it finishes.`)
+        }
+        if (result.status === 'unavailable') {
+          return interaction.editReply('⚠️ Summarization became unavailable, so I left the session intact.')
+        }
+        const summarized = result.messageCount > 0
+          ? `summarized ${result.messageCount} new messages`
+          : 'rolling summary already current'
+        const session = result.droppedSession
+          ? 'fresh Codex session starts next turn'
+          : 'no active Codex session needed dropping'
+        return interaction.editReply(`🧹 <#${channel.id}> compacted — ${summarized}; ${session}.`)
+      } catch (e: any) {
+        return interaction.editReply(`❌ compact failed; existing session preserved: ${e?.message ?? String(e)}`)
+      }
     }
 
     if (subcommand === 'model') {
