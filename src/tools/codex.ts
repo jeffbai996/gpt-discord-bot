@@ -4,6 +4,7 @@ import { rm } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import type { Tool } from './registry.ts'
+import { SQUAD_STORE_IDENTITY } from '../codex-chat.ts'
 
 const execFileAsync = promisify(execFile)
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
@@ -69,7 +70,9 @@ async function runCodexHelper(input: CodexRunInput): Promise<string> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [HELPER_BIN], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      // The helper runs its own codex, which can reach the store CLI, so it
+      // needs the same identity the chat path carries (see codex-chat.ts).
+      env: { ...process.env, SQUAD_STORE_BOT: SQUAD_STORE_IDENTITY },
     })
     let stdout = ''
     let stderr = ''

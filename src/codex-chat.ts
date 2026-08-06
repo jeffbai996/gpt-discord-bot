@@ -52,8 +52,21 @@ const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v2
 // which would silently break future GPT_* knobs.
 const SECRETS_NEVER_PASSED_TO_CODEX = ['DISCORD_BOT_TOKEN', 'GEMINI_API_KEY'] as const
 
-const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
-  const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+// The store CLI works out who is writing from the environment:
+// CLAUDE_CONFIG_DIR for a Claude-based bot, otherwise SQUAD_STORE_BOT. codex
+// has neither, so every write it made through the shell was stamped with
+// whoever owns the box's default config. That misattribution pointed a card's
+// relay at a bot which was not in the channel, so tapping it delivered nothing
+// and left a raw marker in the message (2026-08-05).
+//
+// A systemd drop-in sets this on the running service, but a drop-in is host
+// state: a rebuilt box, a restore or a regenerated unit loses it silently.
+// Declaring the default here means the identity ships with the repo, and the
+// env still wins so a one-off run can override it.
+export const SQUAD_STORE_IDENTITY = process.env.SQUAD_STORE_BOT || 'gpt'
+
+export const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...process.env, SQUAD_STORE_BOT: SQUAD_STORE_IDENTITY, ...extra }
   for (const k of SECRETS_NEVER_PASSED_TO_CODEX) delete env[k]
   return env
 }
