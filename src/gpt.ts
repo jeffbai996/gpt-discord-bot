@@ -44,6 +44,7 @@ import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
 import { FAST_FORWARD_REACTION, LatestQueueMarker } from './queue-marker.ts'
 import { renderSteeredMessage } from './steering.ts'
+import { frameSteeredMessages } from './steer-context.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
 import {
   GRACEFUL_SHUTDOWN_DEADLINE_MS,
@@ -469,18 +470,22 @@ interface QueuedChannelTurn {
   message: Message
   target: Message | null
   contentOverride?: string
+  steered: boolean
 }
 const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
   async (channelId, batch) => {
     const carrier = batch[batch.length - 1]
-    const combined = (await Promise.all(batch.map(async item => {
+    const messages = (await Promise.all(batch.map(async item => {
       if (item.contentOverride !== undefined) return item.contentOverride
       const replyText = formatReplyContext(await resolveReplyContext(item.message))
       const pinText = formatPinContext(await resolvePinContext(item.message))
       const threadText = formatThreadContext(await resolveThreadContext(item.message))
       const richText = formatRichContext(item.message)
       return threadText || [replyText, pinText, richText, item.message.content].filter(Boolean).join('\n\n')
-    }))).filter(Boolean).join('\n')
+    }))).filter(Boolean)
+    const combined = batch.some(item => item.steered)
+      ? frameSteeredMessages(messages)
+      : messages.join('\n')
     void queueMarker.clear(channelId)
     logTurnLifecycle({
       event: 'channel_batch_started',
@@ -744,7 +749,9 @@ async function handleUserMessage(
 
   await applyLifecycle(message, 'received')
 
-  const uploadedAttachments = [...message.attachments.values(), ...extractRichMedia(message)]
+  const directAttachments = [...message.attachments.values()]
+  const richAttachments = extractRichMedia(message)
+  const uploadedAttachments = [...directAttachments, ...richAttachments]
   const repliedAttachments = uploadedAttachments.length === 0
     ? replyContext?.attachments ?? pinContext?.message?.attachments ?? threadContext?.source?.attachments ?? []
     : []
@@ -849,6 +856,20 @@ async function handleUserMessage(
     }
     liveUiClosed = true
     await stopThinkingAnim()
+  }
+  let interruptionRendered = false
+  const renderInterruptedTurn = async () => {
+    if (interruptionRendered) return
+    interruptionRendered = true
+    const content = `${INTERRUPTED_MARKER}\n${RETRY_PROMPT}`
+    let tombstone: Message | null = workMessage
+    if (tombstone) {
+      await tombstone.edit(content).catch(() => {})
+    } else if (message.channel.isSendable()) {
+      tombstone = await message.channel.send(content).catch(() => null)
+    }
+    if (tombstone) await tombstone.react('🔁').catch(() => {})
+    try { await message.react('✗') } catch {}
   }
   const throwIfStopped = () => {
     if (stopController.signal.aborted) throw new CodexStoppedError(0)
@@ -1376,8 +1397,7 @@ async function handleUserMessage(
               renderSteeredMessage(workMessage.content, steeredAfter),
             ).catch(() => {})
           } else {
-            if (workMessage) await workMessage.edit(INTERRUPTED_MARKER).catch(() => {})
-            try { await message.react('✗') } catch {}
+            await renderInterruptedTurn()
           }
           return
         }
@@ -1465,7 +1485,7 @@ async function handleUserMessage(
     await settleLiveUi(true)
     if (stopController.signal.aborted) throw new CodexStoppedError(result.durationMs)
     temporaryResultFiles = result.temporaryFiles ?? []
-    // Stash usage in the rolling per-channel telemetry buffer for `/gpt cache info`.
+    // Record completed usage for the cumulative stats ledger and live handoff.
     recordCacheTurn(channelId, result)
     result.reply = stripToolTraceCard(result.reply ?? '')
 
@@ -1753,10 +1773,8 @@ async function handleUserMessage(
           if (workMessage) await workMessage.edit(
             renderSteeredMessage(workMessage.content, steeredAfter),
           )
-        } else if (workMessage) {
-          await workMessage.edit(INTERRUPTED_MARKER)
         } else {
-          await message.react('✗')
+          await renderInterruptedTurn()
         }
       } catch {}
       return
@@ -1829,7 +1847,8 @@ async function runChannelTurn(
   contentOverride?: string,
 ): Promise<void> {
   const cid = message.channel.id
-  const outcome = await channelTurns.submit(cid, { message, target, contentOverride })
+  const steered = channelTurns.isRunning(cid)
+  const outcome = await channelTurns.submit(cid, { message, target, contentOverride, steered })
   if (outcome === 'queued') {
     void queueMarker.mark(cid, message)
     logTurnLifecycle({
@@ -1923,12 +1942,7 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
   // Lone ❌ / X message: hard-kill the in-flight turn before queue/barge logic.
   if (isHardStopMessage(message.content)) {
     message.delete().catch(() => {})
-    const killed = activeTurns.stop(channelId)
-    if (killed) {
-      const m = await (message.channel as any).send?.(`${INTERRUPTED_MARKER}\n${RETRY_PROMPT}`)
-        .catch(() => null)
-      if (m) m.react?.('🔁').catch(() => {})
-    }
+    activeTurns.stop(channelId)
     return
   }
 
@@ -1943,7 +1957,7 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     }
     if (channelTurns.isRunning(channelId) && activeTurns.canRequestBarge(channelId)) {
       activeTurns.deferStopFor(channelId, { clearQueue: false })
-      const queueDepth = channelTurns.enqueue(channelId, { message, target: null })
+      const queueDepth = channelTurns.enqueue(channelId, { message, target: null, steered: true })
       logTurnLifecycle({
         event: 'barge_queued', channelId, queueDepth, stopReason: 'deferred_barge',
       })
