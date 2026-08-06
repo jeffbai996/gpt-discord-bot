@@ -26,3 +26,20 @@ test('samples an animated GIF into a PNG contact sheet', async () => {
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('samples a one-frame GIF instead of returning a missing sheet path', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'animation-test-'))
+  try {
+    const gif = path.join(dir, 'input.gif')
+    await execFileAsync(process.env.FFMPEG_PATH || 'ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-f', 'lavfi', '-i', 'color=c=white:size=64x64', '-frames:v', '1', gif,
+    ])
+    const sampled = await animationContactSheet(await readFile(gif), '.gif')
+    assert.ok(sampled.bytes.subarray(1, 4).equals(Buffer.from('PNG')))
+    assert.ok(sampled.bytes.length > 100)
+    await rm(sampled.directory, { recursive: true, force: true })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

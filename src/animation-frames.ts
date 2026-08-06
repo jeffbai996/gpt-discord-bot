@@ -17,7 +17,9 @@ export async function animationContactSheet(
   const output = path.join(dir, 'animation-contact-sheet.png')
   await writeFile(input, bytes, { mode: 0o600 })
   await execFileAsync(process.env.FFMPEG_PATH || 'ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-y', '-i', input,
+    // tile does not flush an incomplete grid at EOF. Loop short inputs and cap
+    // decoding at two seconds so even a one-frame GIF fills the six-frame grid.
+    '-hide_banner', '-loglevel', 'error', '-y', '-stream_loop', '-1', '-i', input, '-t', '2',
     '-vf', 'fps=3,scale=320:320:force_original_aspect_ratio=decrease,pad=320:320:(ow-iw)/2:(oh-ih)/2:color=white@0,tile=3x2:padding=4:margin=4',
     '-frames:v', '1', output,
   ], { timeout: 20_000, maxBuffer: 1_000_000 })
