@@ -14,8 +14,11 @@ test('usage counter aligns telemetry in two equal-width inline-code pills', () =
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑  66,889      output ↓ 5,169    ◷ 145.8 s `',
-    '-# ` cache ↑ 958,376   reasoning ↓ 1,000    » 35.5 t/s`',
+    // The speed figures are right-aligned in a shared column, so 145.8 and
+    // 35.5 end in the same place (Jeff 2026-08-07). That costs one character,
+    // which tips this row past the mobile ceiling into the tight column gaps.
+    '-# ` input ↑  66,889    output ↓ 5,169  ◷ 145.8 s  `',
+    '-# ` cache ↑ 958,376 reasoning ↓ 1,000  »  35.5 t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -70,7 +73,8 @@ test('usage counter tightens column gaps before compacting readable values', () 
 
   const rows = footer.split('\n').slice(2)
   assert.match(rows[0], /input ↑\s+100,275\s+output ↓ 13,192\s+◷ 614\.1 s/)
-  assert.match(rows[1], /cache ↑ 2,783,232\s+reasoning ↓\s+5,978\s+» 21\.5 t\/s/)
+  // 21.5 is right-aligned under the wider 614.1, so it carries a leading pad.
+  assert.match(rows[1], /cache ↑ 2,783,232\s+reasoning ↓\s+5,978\s+»\s+21\.5 t\/s/)
   assert.ok(rows[0].length <= 55)
   assert.equal(rows[0].length, rows[1].length)
 })

@@ -41,8 +41,14 @@ export function formatUsageCounter(
     const secondBottom = usage.reasoningTokens > 0
       ? `reasoning ↓ ${right(usage.reasoningTokens, outputWidth)}`
       : ''.padEnd(secondTop.length)
-    const duration = seconds.toFixed(wholeSpeeds ? 0 : 1)
-    const throughput = rate.toFixed(wholeSpeeds ? 0 : 1).padStart(wholeSpeeds ? 2 : 4)
+    // Both speed figures sit in the same column of two stacked pills, so they
+    // share one width. Padding only the throughput left the duration a
+    // character to its left and the numbers visibly out of line.
+    const durationRaw = seconds.toFixed(wholeSpeeds ? 0 : 1)
+    const throughputRaw = rate.toFixed(wholeSpeeds ? 0 : 1)
+    const speedWidth = Math.max(wholeSpeeds ? 2 : 4, durationRaw.length, throughputRaw.length)
+    const duration = durationRaw.padStart(speedWidth)
+    const throughput = throughputRaw.padStart(speedWidth)
     const columnGap = tight ? ' ' : '   '
     const speedGap = tight ? '  ' : '    '
     return {
