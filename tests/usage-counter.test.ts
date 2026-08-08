@@ -17,8 +17,8 @@ test('usage counter aligns telemetry in two equal-width inline-code pills', () =
     // The speed figures are right-aligned in a shared column, so 145.8 and
     // 35.5 end in the same place (Jeff 2026-08-07). That costs one character,
     // which tips this row past the mobile ceiling into the tight column gaps.
-    '-# ` input ↑  66,889    output ↓ 5,169  ◷ 145.8 s  `',
-    '-# ` cache ↑ 958,376 reasoning ↓ 1,000  »  35.5 t/s`',
+    '-# ` input ↑  66,889    output ↓ 5,169  ◷ 145.8s  `',
+    '-# ` cache ↑ 958,376 reasoning ↓ 1,000  »  35.5t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -37,8 +37,8 @@ test('usage counter blanks zero reasoning while preserving aligned columns', () 
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑ 2,469,135    output ↓   19  ◷ 19.0 s  `',
-    '-# ` cache ↑ 9,876,543                   »  1.0 t/s`',
+    '-# ` input ↑ 2,469,135    output ↓   19  ◷ 19.0s  `',
+    '-# ` cache ↑ 9,876,543                   »  1.0t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -72,9 +72,9 @@ test('usage counter tightens column gaps before compacting readable values', () 
   }, 614_100)
 
   const rows = footer.split('\n').slice(2)
-  assert.match(rows[0], /input ↑\s+100,275\s+output ↓ 13,192\s+◷ 614\.1 s/)
-  // 21.5 is right-aligned under the wider 614.1, so it carries a leading pad.
-  assert.match(rows[1], /cache ↑ 2,783,232\s+reasoning ↓\s+5,978\s+»\s+21\.5 t\/s/)
+  assert.match(rows[0], /input ↑\s+100,275\s+output ↓ 13,192\s+◷ 614s/)
+  // Whole speeds keep the exact token values inside the narrower mobile row.
+  assert.match(rows[1], /cache ↑ 2,783,232\s+reasoning ↓\s+5,978\s+»\s+21t\/s/)
   assert.ok(rows[0].length <= 55)
   assert.equal(rows[0].length, rows[1].length)
 })
@@ -90,8 +90,8 @@ test('usage counter blanks zero cache while preserving aligned columns', () => {
   assert.equal(footer, [
     '',
     '',
-    '-# ` input ↑  37,219      output ↓  335    ◷ 25.2 s  `',
-    '-# `                   reasoning ↓  274    » 13.3 t/s`',
+    '-# ` input ↑  37,219    output ↓  335  ◷ 25.2s  `',
+    '-# `                 reasoning ↓  274  » 13.3t/s`',
   ].join('\n'))
 
   const rows = footer.split('\n').slice(2)
@@ -108,7 +108,7 @@ test('usage counter drops the second row when cache and reasoning are zero', () 
     reasoningTokens: 0,
   }, 12_340)
 
-  assert.equal(footer, '\n\n-# ` input ↑     100      output ↓   20    ◷ 12.3 s `')
+  assert.equal(footer, '\n\n-# ` input ↑     100    output ↓   20  ◷ 12.3s `')
 })
 
 test('usage counter keeps readable values exact while the mobile pill still fits', () => {
@@ -144,6 +144,23 @@ test('usage counter drops speed decimals when compact numbers still exceed the m
   assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
 })
 
+test('usage counter keeps mobile rows and speed units intact for the reported footer', () => {
+  const footer = formatUsageCounter('both', {
+    inputTokens: 220_626,
+    outputTokens: 1_498,
+    cachedInputTokens: 154_880,
+    reasoningTokens: 790,
+  }, 54_100)
+
+  const rows = footer.split('\n').slice(2)
+  const pills = rows.map((row) => row.replace(/^-# `/, '').replace(/`$/, ''))
+  assert.ok(pills.every((pill) => pill.length <= 47), rows.join('\n'))
+  assert.doesNotMatch(footer, /\d (?:s|t\/s)/)
+  assert.match(rows[0], /◷\s+54\.1s/)
+  assert.match(rows[1], /»\s+27\.7t\/s/)
+  assert.equal(rows[0].indexOf('◷'), rows[1].indexOf('»'))
+})
+
 test('usage counter shows duration without a wall label', () => {
   const footer = formatUsageCounter('token', {
     inputTokens: 100,
@@ -152,7 +169,7 @@ test('usage counter shows duration without a wall label', () => {
     reasoningTokens: 0,
   }, 12_340)
 
-  assert.match(footer, /◷ 12\.3 s/)
+  assert.match(footer, /◷ 12\.3s/)
   assert.match(footer, /-# ` input ↑/)
   assert.doesNotMatch(footer, /```/)
   assert.doesNotMatch(footer, /wall/)

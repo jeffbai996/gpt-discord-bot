@@ -31,7 +31,7 @@ test('speed markers and digits share one column across both rows', () => {
   assert.equal(clock, arrow, 'markers start in the same column')
   // The figures are right-aligned in a shared column, so it is the END of each
   // number that must line up, not the first digit.
-  assert.equal(top.indexOf(' s', clock), bottom.indexOf(' t/s', arrow),
+  assert.equal(top.indexOf('s', clock), bottom.indexOf('t/s', arrow),
     'both figures end in the same column')
 })
 
@@ -47,5 +47,5 @@ test('alignment holds when the duration is wider than the throughput', () => {
   const clock = top.indexOf('◷')
   const arrow = bottom.indexOf('»')
   assert.equal(clock, arrow)
-  assert.equal(top.indexOf(' s', clock), bottom.indexOf(' t/s', arrow))
+  assert.equal(top.indexOf('s', clock), bottom.indexOf('t/s', arrow))
 })

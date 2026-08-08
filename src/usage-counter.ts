@@ -5,7 +5,9 @@ export interface CounterUsage {
   reasoningTokens: number
 }
 
-const MOBILE_ROW_CEILING = 50
+// Discord's iPhone message gutter wraps this monospace pill before 50 visible
+// columns once the subtext prefix and bubble padding are included.
+const MOBILE_ROW_CEILING = 47
 const COMPACT_SPEED_ROW_CEILING = 47
 
 function compactNumber(value: number): string {
@@ -52,8 +54,11 @@ export function formatUsageCounter(
     const columnGap = tight ? ' ' : '   '
     const speedGap = tight ? '  ' : '    '
     return {
-      top: `${firstTop}${columnGap}${secondTop}${speedGap}◷ ${duration} s`,
-      bottom: `${firstBottom}${columnGap}${secondBottom}${speedGap}» ${throughput} t/s`,
+      // Keep the unit attached to its value. Discord wraps inline-code pills at
+      // ordinary spaces on narrow mobile bubbles; the old `54.1 s` / `27.7 t/s`
+      // could strand the final unit on a tiny second-line pill.
+      top: `${firstTop}${columnGap}${secondTop}${speedGap}◷ ${duration}s`,
+      bottom: `${firstBottom}${columnGap}${secondBottom}${speedGap}» ${throughput}t/s`,
     }
   }
 
