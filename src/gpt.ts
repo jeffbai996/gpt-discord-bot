@@ -24,7 +24,7 @@ import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/comman
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent, RespondInput, RespondResult, ToolCall } from './openai.ts'
 import {
-  CodexBudgetExceededError,
+  CodexProgressLoopError,
   CodexInterruptedError,
   CodexProcessDiedError,
   CodexStoppedError,
@@ -1411,14 +1411,13 @@ async function handleUserMessage(
         }
         setEnginePresence(false)
       } catch (e) {
-        if (e instanceof CodexBudgetExceededError) {
+        if (e instanceof CodexProgressLoopError) {
           channelSessions.dropSession(channelId)
           await settleLiveUi()
           await deleteLiveTrace()
           void applyLifecycle(message, 'interrupted')
-          const { kind, used, limit } = e.budget
           if (workMessage) await workMessage.edit(
-            `🛑 **turn budget reached — stopped at ${used.toLocaleString()} ${kind} (limit ${limit.toLocaleString()})**`,
+            `🛑 **progress loop stopped — repeated the same ${e.loop.cycleLength}-action cycle ${e.loop.repetitions} times**`,
           ).catch(() => {})
           return
         }
