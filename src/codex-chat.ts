@@ -38,76 +38,6 @@ export class CodexStoppedError extends Error {
   }
 }
 
-export type ProgressLoop = {
-  cycleLength: number
-  repetitions: number
-  actions: string[]
-}
-
-export class CodexProgressLoopError extends Error {
-  constructor(
-    public readonly afterMs: number,
-    public readonly loop: ProgressLoop,
-  ) {
-    super(`codex repeated the same ${loop.cycleLength}-action cycle ${loop.repetitions} times`)
-    this.name = 'CodexProgressLoopError'
-  }
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([key, child]) => `${JSON.stringify(key)}:${stableJson(child)}`)
-      .join(',')}}`
-  }
-  return JSON.stringify(value) ?? String(value)
-}
-
-function actionSignature(item: any): string | null {
-  if (!item || typeof item !== 'object') return null
-  if (item.type === 'file_change') return '__progress__'
-  const call = toolCallsFromCompletedItem(item)[0]
-  if (!call) return null
-  const args = call.name === 'shell'
-    ? String(call.args.command ?? '').trim().replace(/\s+/g, ' ')
-    : stableJson(call.args)
-  return `${call.name}:${args}`
-}
-
-export class ProgressLoopGuard {
-  private actions: string[] = []
-
-  constructor(
-    private readonly repetitions = 3,
-    private readonly maxCycleLength = 4,
-  ) {}
-
-  observe(item: unknown): ProgressLoop | null {
-    const signature = actionSignature(item)
-    if (!signature) return null
-    if (signature === '__progress__') {
-      this.actions = []
-      return null
-    }
-    this.actions.push(signature)
-    const keep = this.repetitions * this.maxCycleLength
-    if (this.actions.length > keep) this.actions.splice(0, this.actions.length - keep)
-
-    for (let cycleLength = 1; cycleLength <= this.maxCycleLength; cycleLength++) {
-      const needed = cycleLength * this.repetitions
-      if (this.actions.length < needed) continue
-      const tail = this.actions.slice(-needed)
-      const cycle = tail.slice(0, cycleLength)
-      if (tail.every((action, index) => action === cycle[index % cycleLength])) {
-        return { cycleLength, repetitions: this.repetitions, actions: cycle }
-      }
-    }
-    return null
-  }
-}
-
 // Same binary the codex *tool* uses — Codex (OpenAI GPT-5.6) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
 
@@ -146,8 +76,6 @@ export const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.Proces
 // a final runaway fuse so a broken process cannot live forever.
 const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 30 * 60_000
 const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 2 * 60 * 60_000
-const DEFAULT_LOOP_REPETITIONS = Number(process.env.GPT_CODEX_LOOP_REPETITIONS) || 3
-const DEFAULT_LOOP_MAX_CYCLE = Number(process.env.GPT_CODEX_LOOP_MAX_CYCLE) || 4
 // Five seconds keeps the live row visibly animated while remaining far below
 // Discord's REST edit pressure. discord.js still owns bucket-level throttling.
 const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 5_000
@@ -1144,8 +1072,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     else input.signal.addEventListener('abort', stopRunningTurn, { once: true })
   }
   const lines: string[] = []
-  const loopGuard = new ProgressLoopGuard(DEFAULT_LOOP_REPETITIONS, DEFAULT_LOOP_MAX_CYCLE)
-  let progressLoop: ProgressLoop | null = null
   let threadId = ''
   const rolloutWatchers: Array<ReturnType<typeof watchRolloutActivity>> = []
   let stderrTail = ''
@@ -1159,10 +1085,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     lines.push(line)
     try {
       const obj = JSON.parse(line)
-      if (!progressLoop && obj?.type === 'item.completed' && obj.item) {
-        progressLoop = loopGuard.observe(obj.item)
-        if (progressLoop) supervisor.stop('user')
-      }
       if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
       if (obj?.type === 'thread.started' && obj.thread_id) {
         threadId = String(obj.thread_id)
@@ -1288,13 +1210,6 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     }))
   }
 
-  // Assigned from the readline callback; preserve the runtime value across the
-  // async process wait even though TypeScript cannot see that callback mutation.
-  const loop = progressLoop as ProgressLoop | null
-  if (loop) {
-    logOutcome('stopped', `progress loop: ${loop.actions.join(' -> ')}`)
-    throw new CodexProgressLoopError(Date.now() - t0, loop)
-  }
   if (stoppedByUser || processResult?.stopReason === 'user') {
     logOutcome('stopped')
     throw new CodexStoppedError(Date.now() - t0)

@@ -1,36 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, ProgressLoopGuard, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
-
-test('progress loop guard trips only on repeated action cycles', () => {
-  const guard = new ProgressLoopGuard(3, 4)
-  const shell = (command: string) => ({ type: 'command_execution', command })
-
-  assert.equal(guard.observe(shell('check qdrant')), null)
-  assert.equal(guard.observe(shell('inspect collections')), null)
-  assert.equal(guard.observe(shell('check qdrant')), null)
-  assert.equal(guard.observe(shell('inspect collections')), null)
-  assert.equal(guard.observe(shell('check qdrant')), null)
-  assert.deepEqual(guard.observe(shell('inspect collections')), {
-    cycleLength: 2,
-    repetitions: 3,
-    actions: ['shell:check qdrant', 'shell:inspect collections'],
-  })
-})
-
-test('progress loop guard allows long work that keeps taking new actions', () => {
-  const guard = new ProgressLoopGuard(3, 4)
-  for (let i = 0; i < 100; i++) {
-    assert.equal(guard.observe({ type: 'command_execution', command: `process shard ${i}` }), null)
-  }
-})
-
-test('progress loop guard ignores reasoning and agent messages', () => {
-  const guard = new ProgressLoopGuard(3, 4)
-  for (let i = 0; i < 20; i++) {
-    assert.equal(guard.observe({ type: 'reasoning', text: 'still thinking' }), null)
-  }
-})
+import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
