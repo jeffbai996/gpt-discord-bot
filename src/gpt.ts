@@ -32,6 +32,12 @@ import {
   respondViaCodex,
 } from './codex-chat.ts'
 import {
+  completionContinuationPrompt,
+  isNonTerminalActionReply,
+  MAX_COMPLETION_CONTINUATIONS,
+  NonTerminalCompletionError,
+} from './completion-gate.ts'
+import {
   buildCodexFailurePostmortemRequest,
   codexFallbackWaitMs,
   isCodexFailurePostmortemEligible,
@@ -1340,7 +1346,7 @@ async function handleUserMessage(
           throwIfStopped()
           resumeSessionId = undefined
         }
-        result = await respondViaCodex({
+        const codexInput = {
           systemPrompt,
           history,
           userMessage: userText,
@@ -1354,7 +1360,44 @@ async function handleUserMessage(
           resumeSessionId,
           signal: stopController.signal,
           onEvent,
-        })
+        }
+        result = await respondViaCodex(codexInput)
+
+        // Codex CLI's exit status only proves the child finished. If its
+        // authoritative final still declares ongoing work, resume the exact
+        // session instead of publishing a progress update as task completion.
+        let completionContinuations = 0
+        let totalDurationMs = result.durationMs
+        const allToolCalls = [...result.toolCalls]
+        const allFiles = [...(result.files ?? [])]
+        const allTemporaryFiles = [...(result.temporaryFiles ?? [])]
+        while (isNonTerminalActionReply(result.reply ?? '')) {
+          if (!result.threadId || completionContinuations >= MAX_COMPLETION_CONTINUATIONS) {
+            throw new NonTerminalCompletionError(completionContinuations)
+          }
+          completionContinuations++
+          console.error(
+            `[completion-gate] continuing non-terminal final in channel ${channelId} ` +
+            `(${completionContinuations}/${MAX_COMPLETION_CONTINUATIONS})`,
+          )
+          const retry = await respondViaCodex({
+            ...codexInput,
+            history: [],
+            userMessage: completionContinuationPrompt(completionContinuations),
+            extraText: undefined,
+            imagePaths: undefined,
+            resumeSessionId: result.threadId,
+          })
+          totalDurationMs += retry.durationMs
+          allToolCalls.push(...retry.toolCalls)
+          allFiles.push(...(retry.files ?? []))
+          allTemporaryFiles.push(...(retry.temporaryFiles ?? []))
+          retry.durationMs = totalDurationMs
+          retry.toolCalls = [...allToolCalls]
+          retry.files = [...new Set(allFiles)]
+          retry.temporaryFiles = [...new Set(allTemporaryFiles)]
+          result = retry
+        }
         if (result.threadId) channelSessions.set(channelId, result.threadId)
         // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
         // on a RESUMED session is the running session CUMULATIVE, so showing it
@@ -1387,6 +1430,15 @@ async function handleUserMessage(
         }
         setEnginePresence(false)
       } catch (e) {
+        if (e instanceof NonTerminalCompletionError) {
+          await settleLiveUi()
+          await deleteLiveTrace()
+          void applyLifecycle(message, 'errored')
+          if (workMessage) await workMessage.edit(
+            `⚠️ **completion gate stopped ${e.attempts} repeated progress-only finals; the task did not complete**`,
+          ).catch(() => {})
+          return
+        }
         if (e instanceof CodexStoppedError) {
           // A deferred barge and an explicit /gpt stop both abort the Codex
           // child, but only the explicit stop should leave an Interrupted
