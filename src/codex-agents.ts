@@ -14,6 +14,9 @@ export interface CodexAgentSnapshot {
 
 interface MutableAgent extends CodexAgentSnapshot {
   spawnCallId?: string
+  latestUsageTotal: number
+  usageBaseline: number
+  usageBaselineLocked: boolean
 }
 
 function objectFromJson(raw: unknown): Record<string, unknown> {
@@ -39,9 +42,13 @@ function pathLabel(path: string): string {
   return parts.at(-1) || 'agent'
 }
 
-function totalTokens(event: any): number | null {
+function cumulativeTokens(event: any): number | null {
   const total = Number(event?.payload?.info?.total_token_usage?.total_tokens)
   if (Number.isFinite(total)) return Math.max(0, total)
+  return null
+}
+
+function directUsageTokens(event: any): number | null {
   const usage = event?.usage ?? event?.payload?.usage
   const input = Number(usage?.input_tokens)
   const output = Number(usage?.output_tokens)
@@ -83,7 +90,12 @@ export class CodexAgentRegistry {
       const taskName = String(args.task_name ?? 'agent').replace(/^\/+/, '') || 'agent'
       const path = taskName.startsWith('root/') ? `/${taskName}` : `/root/${taskName}`
       const id = callId ? `spawn:${callId}` : `spawn:${path}:${this.agents.size}`
-      if (!this.agents.has(id)) {
+      const existing = [...this.agents.values()].find(row =>
+        (callId && row.spawnCallId === callId) || row.path === path)
+      if (existing) {
+        if (callId) existing.spawnCallId = callId
+        if (!existing.model && args.model) existing.model = String(args.model)
+      } else if (!this.agents.has(id)) {
         this.agents.set(id, {
           id,
           path,
@@ -94,6 +106,9 @@ export class CodexAgentRegistry {
           startedAt: eventMs(event, this.fallbackStartedAt),
           tokens: 0,
           spawnCallId: callId || undefined,
+          latestUsageTotal: 0,
+          usageBaseline: 0,
+          usageBaselineLocked: false,
         })
       }
       if (callId) this.spawnPaths.set(callId, path)
@@ -106,8 +121,15 @@ export class CodexAgentRegistry {
       const path = String(output.task_name ?? this.spawnPaths.get(callId) ?? '')
       const agent = [...this.agents.values()].find(row => row.spawnCallId === callId)
       if (!agent || !path) return false
-      agent.path = path
-      agent.label = pathLabel(path)
+      const canonical = [...this.agents.values()].find(row => row !== agent && row.path === path)
+      if (canonical) {
+        canonical.spawnCallId = callId
+        if (!canonical.model) canonical.model = agent.model
+        this.agents.delete(agent.id)
+      }
+      const resolved = canonical ?? agent
+      resolved.path = path
+      resolved.label = pathLabel(path)
       this.spawnPaths.set(callId, path)
       return true
     }
@@ -142,8 +164,12 @@ export class CodexAgentRegistry {
         startedAt: existing?.startedAt ?? eventMs(event, this.fallbackStartedAt),
         endedAt: existing?.endedAt,
         tokens: existing?.tokens ?? 0,
+        spawnCallId: existing?.spawnCallId,
+        latestUsageTotal: existing?.latestUsageTotal ?? 0,
+        usageBaseline: existing?.usageBaseline ?? 0,
+        usageBaselineLocked: existing?.usageBaselineLocked ?? false,
       }
-      if (existingEntry) this.agents.delete(existingEntry[0])
+      if (existingEntry && existingEntry[0] !== threadId) this.agents.delete(existingEntry[0])
       this.agents.set(threadId, agent)
       return true
     }
@@ -151,6 +177,20 @@ export class CodexAgentRegistry {
     const agent = this.agents.get(threadId)
     if (!agent) return false
     let changed = false
+    const payloadType = String(event?.payload?.type ?? '')
+    if (event?.type === 'event_msg' && payloadType === 'task_started') {
+      agent.status = 'running'
+      agent.endedAt = undefined
+      if (!agent.usageBaselineLocked) {
+        agent.usageBaseline = agent.latestUsageTotal
+        agent.tokens = 0
+      }
+      changed = true
+    }
+    if (event?.type === 'inter_agent_communication_metadata' && !agent.usageBaselineLocked) {
+      agent.usageBaselineLocked = true
+      changed = true
+    }
     if (event?.type === 'turn_context') {
       const model = String(event?.payload?.model ?? '')
       if (model && model !== agent.model) {
@@ -158,12 +198,21 @@ export class CodexAgentRegistry {
         changed = true
       }
     }
-    const tokens = totalTokens(event)
-    if (tokens !== null && tokens !== agent.tokens) {
-      agent.tokens = tokens
-      changed = true
+    const total = cumulativeTokens(event)
+    if (total !== null) {
+      agent.latestUsageTotal = total
+      const tokens = Math.max(0, total - agent.usageBaseline)
+      if (tokens !== agent.tokens) {
+        agent.tokens = tokens
+        changed = true
+      }
+    } else {
+      const tokens = directUsageTokens(event)
+      if (tokens !== null && tokens !== agent.tokens) {
+        agent.tokens = tokens
+        changed = true
+      }
     }
-    const payloadType = String(event?.payload?.type ?? '')
     if (event?.type === 'turn.failed' || payloadType === 'task_failed' || payloadType === 'turn_aborted') {
       agent.status = 'failed'
       agent.endedAt = eventMs(event, Date.now())
@@ -179,7 +228,13 @@ export class CodexAgentRegistry {
   }
 
   snapshot(): CodexAgentSnapshot[] {
-    return [...this.agents.values()].map(({ spawnCallId: _spawnCallId, ...agent }) => ({ ...agent }))
+    return [...this.agents.values()].map(({
+      spawnCallId: _spawnCallId,
+      latestUsageTotal: _latestUsageTotal,
+      usageBaseline: _usageBaseline,
+      usageBaselineLocked: _usageBaselineLocked,
+      ...agent
+    }) => ({ ...agent }))
   }
 }
 

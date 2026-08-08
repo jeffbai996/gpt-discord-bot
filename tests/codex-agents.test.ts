@@ -122,6 +122,99 @@ test('turn completion records both final usage and terminal state', () => {
   assert.equal(registry.snapshot()[0].tokens, 1_234)
 })
 
+test('reconciles child-first registration with delayed and replayed spawn events', () => {
+  const registry = new CodexAgentRegistry('root-thread', 1_000)
+  registry.consumeChild('child-1', {
+    timestamp: '2026-08-02T21:51:12.700Z',
+    type: 'session_meta',
+    payload: {
+      id: 'child-1',
+      parent_thread_id: 'root-thread',
+      agent_path: '/root/todo_audit',
+    },
+  })
+
+  const spawn = {
+    timestamp: '2026-08-02T21:51:12.589Z',
+    type: 'response_item',
+    payload: {
+      type: 'function_call',
+      namespace: 'collaboration',
+      name: 'spawn_agent',
+      call_id: 'spawn-1',
+      arguments: JSON.stringify({ task_name: 'todo_audit', model: 'gpt-5.6-terra' }),
+    },
+  }
+  registry.consumeRoot(spawn)
+  registry.consumeRoot(spawn)
+  registry.consumeRoot({
+    type: 'response_item',
+    payload: {
+      type: 'function_call_output',
+      call_id: 'spawn-1',
+      output: JSON.stringify({ task_name: '/root/todo_audit' }),
+    },
+  })
+
+  assert.equal(registry.snapshot().length, 1)
+  assert.deepEqual(registry.snapshot()[0], {
+    id: 'child-1',
+    path: '/root/todo_audit',
+    label: 'todo_audit',
+    nickname: '',
+    model: 'gpt-5.6-terra',
+    status: 'running',
+    startedAt: Date.parse('2026-08-02T21:51:12.700Z'),
+    endedAt: undefined,
+    tokens: 0,
+  })
+})
+
+test('subtracts inherited fork history from child token usage', () => {
+  const registry = new CodexAgentRegistry('root-thread', 1_000)
+  registry.consumeChild('child-1', {
+    type: 'session_meta',
+    payload: {
+      id: 'child-1',
+      parent_thread_id: 'root-thread',
+      agent_path: '/root/todo_audit',
+    },
+  })
+
+  // Forked rollouts replay prior turns before starting the child's real task.
+  registry.consumeChild('child-1', { type: 'event_msg', payload: { type: 'task_started' } })
+  registry.consumeChild('child-1', {
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 37_225 } } },
+  })
+  registry.consumeChild('child-1', { type: 'event_msg', payload: { type: 'task_complete' } })
+  registry.consumeChild('child-1', { type: 'event_msg', payload: { type: 'task_started' } })
+  registry.consumeChild('child-1', {
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 78_831 } } },
+  })
+
+  // The final task_started is the child's own turn, so 78,831 is its baseline.
+  registry.consumeChild('child-1', { type: 'event_msg', payload: { type: 'task_started' } })
+  registry.consumeChild('child-1', { type: 'inter_agent_communication_metadata' })
+  registry.consumeChild('child-1', {
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 630_951 } } },
+  })
+
+  assert.equal(registry.snapshot()[0].status, 'running')
+  assert.equal(registry.snapshot()[0].tokens, 552_120)
+
+  // A later follow-up remains part of this child's lifetime usage.
+  registry.consumeChild('child-1', { type: 'event_msg', payload: { type: 'task_complete' } })
+  registry.consumeChild('child-1', { type: 'event_msg', payload: { type: 'task_started' } })
+  registry.consumeChild('child-1', {
+    type: 'event_msg',
+    payload: { type: 'token_count', info: { total_token_usage: { total_tokens: 1_500_000 } } },
+  })
+  assert.equal(registry.snapshot()[0].tokens, 1_421_169)
+})
+
 test('renders a compact blinking Discord code-block panel', () => {
   const panel = renderAgentsPanel([
     {
