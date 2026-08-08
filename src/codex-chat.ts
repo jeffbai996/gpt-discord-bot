@@ -38,6 +38,46 @@ export class CodexStoppedError extends Error {
   }
 }
 
+export type TurnBudgetExceeded = {
+  kind: 'tokens' | 'roundtrips'
+  used: number
+  limit: number
+}
+
+export class CodexBudgetExceededError extends Error {
+  constructor(
+    public readonly afterMs: number,
+    public readonly budget: TurnBudgetExceeded,
+  ) {
+    super(`codex turn stopped at ${budget.used} ${budget.kind} (limit ${budget.limit})`)
+    this.name = 'CodexBudgetExceededError'
+  }
+}
+
+export class TurnBudget {
+  private tokens = 0
+  private roundtrips = 0
+
+  constructor(
+    private readonly maxTokens: number,
+    private readonly maxRoundtrips: number,
+  ) {}
+
+  observe(usage: Record<string, unknown>): TurnBudgetExceeded | null {
+    const n = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+      ? Math.max(0, value) : 0
+    this.tokens += n(usage.input_tokens) + n(usage.output_tokens)
+    this.roundtrips++
+    if (this.maxTokens > 0 && this.tokens >= this.maxTokens) {
+      return { kind: 'tokens', used: this.tokens, limit: this.maxTokens }
+    }
+    if (this.maxRoundtrips > 0 && this.roundtrips > this.maxRoundtrips) {
+      return { kind: 'roundtrips', used: this.roundtrips, limit: this.maxRoundtrips }
+    }
+    return null
+  }
+}
+
 // Same binary the codex *tool* uses — Codex (OpenAI GPT-5.6) under nvm v22.
 const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
 
@@ -76,6 +116,8 @@ export const codexSpawnEnv = (extra: Record<string, string> = {}): NodeJS.Proces
 // a final runaway fuse so a broken process cannot live forever.
 const DEFAULT_TASK_IDLE_TIMEOUT_MS = Number(process.env.GPT_CODEX_IDLE_TIMEOUT_MS) || 30 * 60_000
 const DEFAULT_TASK_HARD_TIMEOUT_MS = Number(process.env.GPT_CODEX_CHAT_TIMEOUT_MS) || 2 * 60 * 60_000
+const DEFAULT_MAX_TURN_TOKENS = Number(process.env.GPT_CODEX_MAX_TURN_TOKENS) || 2_000_000
+const DEFAULT_MAX_TURN_ROUNDTRIPS = Number(process.env.GPT_CODEX_MAX_TURN_ROUNDTRIPS) || 48
 // Five seconds keeps the live row visibly animated while remaining far below
 // Discord's REST edit pressure. discord.js still owns bucket-level throttling.
 const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 5_000
@@ -1072,6 +1114,8 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     else input.signal.addEventListener('abort', stopRunningTurn, { once: true })
   }
   const lines: string[] = []
+  const turnBudget = new TurnBudget(DEFAULT_MAX_TURN_TOKENS, DEFAULT_MAX_TURN_ROUNDTRIPS)
+  let budgetExceeded: TurnBudgetExceeded | null = null
   let threadId = ''
   const rolloutWatchers: Array<ReturnType<typeof watchRolloutActivity>> = []
   let stderrTail = ''
@@ -1085,6 +1129,13 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     lines.push(line)
     try {
       const obj = JSON.parse(line)
+      if (!budgetExceeded && obj?.type === 'event_msg' && obj.payload?.type === 'token_count') {
+        const usage = obj.payload?.info?.last_token_usage
+        if (usage && typeof usage === 'object') {
+          budgetExceeded = turnBudget.observe(usage)
+          if (budgetExceeded) supervisor.stop('user')
+        }
+      }
       if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
       if (obj?.type === 'thread.started' && obj.thread_id) {
         threadId = String(obj.thread_id)
@@ -1210,6 +1261,13 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     }))
   }
 
+  // Assigned from the readline callback; preserve the runtime value across the
+  // async process wait even though TypeScript cannot see that callback mutation.
+  const exceeded = budgetExceeded as TurnBudgetExceeded | null
+  if (exceeded) {
+    logOutcome('stopped', `turn budget exceeded: ${exceeded.used}/${exceeded.limit} ${exceeded.kind}`)
+    throw new CodexBudgetExceededError(Date.now() - t0, exceeded)
+  }
   if (stoppedByUser || processResult?.stopReason === 'user') {
     logOutcome('stopped')
     throw new CodexStoppedError(Date.now() - t0)

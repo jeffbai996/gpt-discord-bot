@@ -24,6 +24,7 @@ import { addVoiceGroup, executeVoiceCommand, VoiceManager } from './voice/comman
 import { OpenAIClient, OpenAIRequestRejected } from './openai.ts'
 import type { LifecycleEvent, RespondInput, RespondResult, ToolCall } from './openai.ts'
 import {
+  CodexBudgetExceededError,
   CodexInterruptedError,
   CodexProcessDiedError,
   CodexStoppedError,
@@ -31,6 +32,7 @@ import {
   isInFlightStatusPing,
   respondViaCodex,
 } from './codex-chat.ts'
+import { COMPLETION_RETRY_PROMPT, isBareActionPromise } from './completion-gate.ts'
 import {
   buildCodexFailurePostmortemRequest,
   codexFallbackWaitMs,
@@ -1340,7 +1342,7 @@ async function handleUserMessage(
           throwIfStopped()
           resumeSessionId = undefined
         }
-        result = await respondViaCodex({
+        const codexInput = {
           systemPrompt,
           history,
           userMessage: userText,
@@ -1354,7 +1356,29 @@ async function handleUserMessage(
           resumeSessionId,
           signal: stopController.signal,
           onEvent,
-        })
+        }
+        result = await respondViaCodex(codexInput)
+
+        // A progress-only promise is not a completed turn. Resume the exact
+        // session once and force execution; if it still produces no work, emit
+        // a truthful gate failure rather than publishing another fake "on it".
+        if (isBareActionPromise(result.reply ?? '', result.toolCalls)) {
+          console.error(`[completion-gate] rejected bare action promise in channel ${channelId}; resuming once`)
+          const firstDurationMs = result.durationMs
+          const retry = await respondViaCodex({
+            ...codexInput,
+            history: [],
+            userMessage: COMPLETION_RETRY_PROMPT,
+            extraText: undefined,
+            imagePaths: undefined,
+            resumeSessionId: result.threadId,
+          })
+          retry.durationMs += firstDurationMs
+          if (isBareActionPromise(retry.reply ?? '', retry.toolCalls)) {
+            retry.reply = '⚠️ completion gate stopped this turn: Codex twice promised action without executing any tools.'
+          }
+          result = retry
+        }
         if (result.threadId) channelSessions.set(channelId, result.threadId)
         // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
         // on a RESUMED session is the running session CUMULATIVE, so showing it
@@ -1387,6 +1411,17 @@ async function handleUserMessage(
         }
         setEnginePresence(false)
       } catch (e) {
+        if (e instanceof CodexBudgetExceededError) {
+          channelSessions.dropSession(channelId)
+          await settleLiveUi()
+          await deleteLiveTrace()
+          void applyLifecycle(message, 'interrupted')
+          const { kind, used, limit } = e.budget
+          if (workMessage) await workMessage.edit(
+            `🛑 **turn budget reached — stopped at ${used.toLocaleString()} ${kind} (limit ${limit.toLocaleString()})**`,
+          ).catch(() => {})
+          return
+        }
         if (e instanceof CodexStoppedError) {
           // A deferred barge and an explicit /gpt stop both abort the Codex
           // child, but only the explicit stop should leave an Interrupted

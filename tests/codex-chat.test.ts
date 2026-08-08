@@ -1,6 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
+import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem, TurnBudget } from '../src/codex-chat.ts'
+
+test('turn budget trips on cumulative tokens or model round-trips', () => {
+  const byTokens = new TurnBudget(2_000_000, 48)
+  assert.equal(byTokens.observe({ input_tokens: 1_500_000, output_tokens: 20_000 }), null)
+  assert.deepEqual(byTokens.observe({ input_tokens: 500_000, output_tokens: 1 }), {
+    kind: 'tokens', used: 2_020_001, limit: 2_000_000,
+  })
+
+  const byRounds = new TurnBudget(99_000_000, 2)
+  assert.equal(byRounds.observe({ input_tokens: 1 }), null)
+  assert.equal(byRounds.observe({ input_tokens: 1 }), null)
+  assert.deepEqual(byRounds.observe({ input_tokens: 1 }), {
+    kind: 'roundtrips', used: 3, limit: 2,
+  })
+})
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
