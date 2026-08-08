@@ -62,12 +62,13 @@ interface RestartCoordinatorOptions {
 
 /**
  * Tracks two distinct shutdown phases:
- * - draining stops new Discord work as soon as a restart is requested;
+ * - draining stops new Discord work during the restart cutover;
  * - exiting lets the later systemd SIGTERM run cleanup exactly once.
  *
- * Accepted handlers hold a lease. New arrivals are durably deferred while a
- * pending restart waits for those leases to drain, preventing fresh work from
- * extending the drain forever.
+ * Accepted handlers hold a lease. A pending restart continues accepting work
+ * until the bot naturally reaches idle; intake then closes atomically before
+ * systemd is asked to restart. This avoids turning a long healthy turn into a
+ * fleet-wide admission embargo.
  */
 export class ShutdownGate {
   private draining = false
@@ -139,7 +140,6 @@ export class RestartCoordinator {
   request(): boolean {
     if (this.pending) return false
     this.pending = true
-    this.closeIntake()
 
     // Report an overrun, but never turn it into a service-wide kill switch.
     // Genuine stuck turns are bounded by the Codex supervisor; healthy long
@@ -166,6 +166,7 @@ export class RestartCoordinator {
   private fire(): void {
     if (this.launched) return
     this.launched = true
+    this.closeIntake()
     this.launch()
   }
 }

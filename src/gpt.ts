@@ -538,7 +538,7 @@ function requestGracefulRestart(): void {
     restartPhase: 'pending',
     queueDepth: channelTurns.totalQueueDepth(),
   })
-  console.error('[restart] requested; deferring new work until active turns are idle')
+  console.error('[restart] requested; waiting for a natural idle window before cutover')
 }
 
 function installGracefulShutdown(): void {

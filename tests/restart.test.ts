@@ -115,7 +115,7 @@ describe('RestartCoordinator', () => {
     assert.equal(launches, 1)
   })
 
-  test('closes intake immediately while active work drains', async () => {
+  test('keeps intake open while active work drains', async () => {
     let resolveIdle!: () => void
     const idle = new Promise<void>(resolve => { resolveIdle = resolve })
     const gate = new ShutdownGate()
@@ -126,14 +126,14 @@ describe('RestartCoordinator', () => {
     )
 
     coordinator.request()
-    assert.equal(gate.isDraining(), true, 'restart pending must defer new turns')
+    assert.equal(gate.isDraining(), false, 'a pending restart must not embargo unrelated turns')
     resolveIdle()
     await idle
     await Promise.resolve()
-    assert.equal(gate.isDraining(), true)
+    assert.equal(gate.isDraining(), true, 'intake closes only for the restart cutover')
   })
 
-  test('a cross-channel arrival while restart is pending is deferred', async () => {
+  test('a cross-channel arrival while restart is pending can run', async () => {
     const gate = new ShutdownGate()
     const firstDone = gate.enter()
     assert.ok(firstDone)
@@ -146,8 +146,11 @@ describe('RestartCoordinator', () => {
 
     coordinator.request()
     const secondDone = gate.enter()
-    assert.equal(secondDone, null, 'pending restart must not extend its own drain')
+    assert.ok(secondDone, 'pending restart must not block unrelated work')
     firstDone()
+    await Promise.resolve()
+    assert.equal(launches, 0, 'restart still waits for the newly accepted work')
+    secondDone()
     await Promise.resolve()
     assert.equal(launches, 1)
     assert.equal(gate.enter(), null)
@@ -178,7 +181,7 @@ describe('RestartCoordinator drain deadline', () => {
     assert.equal(launches, 0, 'healthy long work must not be killed by the coordinator')
   })
 
-  test('keeps intake closed after a deadline warning', async () => {
+  test('keeps intake open after a deadline warning', async () => {
     const gate = new ShutdownGate()
     const coordinator = new RestartCoordinator(
       () => new Promise<void>(() => {}),
@@ -188,9 +191,9 @@ describe('RestartCoordinator drain deadline', () => {
     )
 
     coordinator.request()
-    assert.equal(gate.isDraining(), true)
+    assert.equal(gate.isDraining(), false)
     await tick(30)
-    assert.equal(gate.isDraining(), true)
+    assert.equal(gate.isDraining(), false)
   })
 
   test('launches once work becomes idle after a deadline warning', async () => {
