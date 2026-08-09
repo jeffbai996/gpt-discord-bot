@@ -39,6 +39,7 @@ const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy'
 
 export interface VoiceSessionOptions {
   apiKey: string
+  model?: string
   instructions?: string
   voice?: string
   tools?: RealtimeTool[]
@@ -84,6 +85,7 @@ export class VoiceSession {
     // Connect the realtime brain.
     this.realtime = new RealtimeSession({
       apiKey: this.opts.apiKey,
+      model: this.opts.model,
       instructions: this.opts.instructions,
       voice: this.opts.voice,
       tools: this.opts.tools,

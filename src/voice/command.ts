@@ -3,6 +3,7 @@
  *
  * /gpt voice join         — bot joins YOUR voice channel, starts realtime v2v
  * /gpt voice type <voice> — persist the Realtime voice used by future calls
+ * /gpt voice model <model> — persist the Realtime model used by future calls
  * /gpt voice leave        — bot leaves and tears the session down
  * /gpt voice speak <text> — say a specific line verbatim (text -> voice-back)
  *
@@ -25,6 +26,12 @@ import {
   resolveRealtimeVoice,
   setVoicePref,
 } from './voices.ts'
+import {
+  getRealtimeModelPref,
+  REALTIME_MODEL_CHOICES,
+  resolveRealtimeModel,
+  setRealtimeModelPref,
+} from './models.ts'
 
 // Appended to the bot's real persona for a live call. Mirrors gemma's voice
 // override: the text persona's "stay silent / opt out" etiquette is a bug on a
@@ -65,6 +72,14 @@ export function addVoiceGroup(cmd: SlashCommandSubcommandsOnlyBuilder): void {
             name: voice.label,
             value: voice.value,
           })))))
+      .addSubcommand(s => s.setName('model').setDescription('Pick the Realtime model (applies to the next call)')
+        .addStringOption(o => o.setName('model')
+          .setDescription('Which OpenAI Realtime model runs the call')
+          .setRequired(true)
+          .addChoices(...REALTIME_MODEL_CHOICES.map(model => ({
+            name: model.label,
+            value: model.value,
+          })))))
       .addSubcommand(s => s.setName('leave').setDescription('Leave the voice channel'))
       .addSubcommand(s => s.setName('speak').setDescription('Say a specific line out loud')
         .addStringOption(o => o.setName('text').setDescription('What to say').setRequired(true))))
@@ -89,6 +104,7 @@ export function buildVoiceInstructions(personaInstructions: string, recentConver
 export interface VoiceManagerOptions {
   apiKey: string
   adminUserId: string
+  model?: string
   instructions?: string
   voice?: string
   tools?: RealtimeTool[]
@@ -111,11 +127,12 @@ export class VoiceManager {
     // Per-join overrides — the live persona + tools + dispatch are built at
     // join time (they depend on the channel/guild), overriding any constructor
     // defaults. Falls back to the constructor opts when not supplied.
-    overrides?: Pick<VoiceManagerOptions, 'instructions' | 'voice' | 'tools' | 'onToolCall'>,
+    overrides?: Pick<VoiceManagerOptions, 'instructions' | 'model' | 'voice' | 'tools' | 'onToolCall'>,
   ): Promise<void> {
     if (this.sessions.has(guildId)) this.leave(guildId)
     const session = new VoiceSession({
       apiKey: this.opts.apiKey,
+      model: resolveRealtimeModel(overrides?.model, this.opts.model),
       instructions: overrides?.instructions ?? this.opts.instructions,
       voice: resolveRealtimeVoice(overrides?.voice, this.opts.voice),
       tools: overrides?.tools ?? this.opts.tools,
@@ -161,6 +178,8 @@ export async function executeVoiceCommand(
   voicePreference: {
     getVoice?: () => string
     setVoice?: (voice: string) => void
+    getModel?: () => string
+    setModel?: (model: string) => void
   } = {},
 ): Promise<void> {
   if (interaction.user.id !== adminUserId) {
@@ -187,6 +206,24 @@ export async function executeVoiceCommand(
     }
     await interaction.reply({
       content: `🎚️ voice → **${voice}**${previous === voice ? '' : ` (was **${previous}**)`}${choice ? ` · ${choice.blurb}` : ''} · next call`,
+      ephemeral: true,
+    })
+    return
+  }
+
+  if (sub === 'model') {
+    const model = interaction.options.getString('model', true)
+    const choice = REALTIME_MODEL_CHOICES.find(candidate => candidate.value === model)
+    const previous = (voicePreference.getModel ?? getRealtimeModelPref)()
+    try {
+      const saveModel = voicePreference.setModel ?? setRealtimeModelPref
+      saveModel(model)
+    } catch (e) {
+      await interaction.reply({ content: `❌ couldn't set voice model: ${(e as Error).message}`, ephemeral: true })
+      return
+    }
+    await interaction.reply({
+      content: `🧠 model → **${model}**${previous === model ? '' : ` (was **${previous}**)`}${choice ? ` · ${choice.blurb}` : ''} · next call`,
       ephemeral: true,
     })
     return
@@ -223,6 +260,7 @@ export async function executeVoiceCommand(
   // and a dispatch closure that runs tool calls through the same registry the text
   // bot uses. This is what makes voice-gpt speak as gpt and use gpt's tools.
   const voice = (voicePreference.getVoice ?? getVoicePref)()
+  const model = (voicePreference.getModel ?? getRealtimeModelPref)()
   const personaInstructions =
     `${persona.buildSystemPrompt(interaction.channelId, interaction.guildId)}\n\n---\n\n${VOICE_OVERRIDE}`
   let recentConversation = ''
@@ -252,9 +290,9 @@ export async function executeVoiceCommand(
     return await toolRegistry.dispatch(call.name, args, { ...ctx, defer })
   }
   try {
-    await manager.join(interaction.guildId, channel, { instructions, voice, tools, onToolCall })
+    await manager.join(interaction.guildId, channel, { instructions, model, voice, tools, onToolCall })
     await interaction.editReply(
-      `🎙️ In **${channel.name}** with **${voice}** — talk to me. \`/gpt voice leave\` to stop.`,
+      `🎙️ In **${channel.name}** with **${voice}** on **${model}** — talk to me. \`/gpt voice leave\` to stop.`,
     )
   } catch (e) {
     manager.leave(interaction.guildId)

@@ -18,8 +18,9 @@
 import { EventEmitter } from 'node:events'
 import WebSocket from 'ws'
 import { BUILTIN_DEFAULT_REALTIME_VOICE } from './voices.ts'
+import { BUILTIN_DEFAULT_REALTIME_MODEL } from './models.ts'
 
-const DEFAULT_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime'
+const DEFAULT_MODEL = process.env.OPENAI_REALTIME_MODEL || BUILTIN_DEFAULT_REALTIME_MODEL
 const DEFAULT_VOICE = process.env.OPENAI_REALTIME_VOICE || BUILTIN_DEFAULT_REALTIME_VOICE
 
 export interface RealtimeTool {
