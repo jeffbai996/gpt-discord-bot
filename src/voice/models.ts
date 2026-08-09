@@ -7,7 +7,7 @@ export const BUILTIN_DEFAULT_REALTIME_MODEL = 'gpt-realtime-2.1-mini'
 export const REALTIME_MODEL_CHOICES = [
   {
     value: 'gpt-realtime-2.1-mini',
-    label: 'Realtime 2.1 Mini — fast + cheap (default)',
+    label: 'Realtime 2.1 Mini — fast',
     blurb: 'fast, lower-cost voice reasoning',
   },
   {

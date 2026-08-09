@@ -52,6 +52,15 @@ test('voice model defaults to Realtime 2.1 mini unless config or persisted prefe
   assert.throws(() => setRealtimeModelPref('gpt-realtime-potato', stateDir), /unknown realtime model/)
 })
 
+test('voice model picker describes the default as fast without cost copy', () => {
+  const defaultChoice = REALTIME_MODEL_CHOICES.find(
+    choice => choice.value === BUILTIN_DEFAULT_REALTIME_MODEL,
+  )
+
+  assert.equal(defaultChoice?.label, 'Realtime 2.1 Mini — fast')
+  assert.doesNotMatch(defaultChoice?.label ?? '', /cheap|default/i)
+})
+
 test('/gpt voice type exposes the same dedicated picker shape as /gemini voice type', () => {
   const command = new SlashCommandBuilder().setName('gpt').setDescription('test')
   addVoiceGroup(command as any)
