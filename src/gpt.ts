@@ -138,6 +138,14 @@ function isBadReplyReference(err: unknown): boolean {
   )
 }
 
+function isNewerDiscordMessage(candidateId: string, anchorId: string): boolean {
+  try {
+    return BigInt(candidateId) > BigInt(anchorId)
+  } catch {
+    return candidateId > anchorId
+  }
+}
+
 async function replyOrSend(message: Message, content: string): Promise<Message | null> {
   try {
     return await message.reply({ content, allowedMentions: { repliedUser: false } })
@@ -1071,6 +1079,7 @@ async function handleUserMessage(
   let liveTraceDirty = false
   let liveTraceClosed = false
   let liveWorkRehomeTask: Promise<void> | null = null
+  let liveTraceRehomeTask: Promise<void> | null = null
   // Failsafe cleanup for collapse mode: the normal linger delete is only scheduled
   // at END of turn. If the process dies mid-turn, DeferredActions.rearm() still
   // removes the orphan after a restart. The lease must outlive the turn watchdog:
@@ -1116,6 +1125,40 @@ async function handleUserMessage(
     await task
     if (liveWorkRehomeTask === task) liveWorkRehomeTask = null
   }
+  const rehomeLiveTraceAtBottom = async (
+    traceChannel: TextChannel | DMChannel | ThreadChannel,
+    below: Message | null,
+  ): Promise<void> => {
+    if (flags.trace !== 'live' || liveTraceClosed || !below || !liveTraceMsgs.length) return
+    if (liveTraceRehomeTask) {
+      await liveTraceRehomeTask
+      return rehomeLiveTraceAtBottom(traceChannel, below)
+    }
+    const anchor = liveTraceMsgs.at(-1)
+    if (!anchor || !isNewerDiscordMessage(below.id, anchor.id)) return
+    const task = (async () => {
+      const previousTraceMessages = [...liveTraceMsgs]
+      const replacements: Message[] = []
+      for (const current of previousTraceMessages) {
+        const replacement = await traceChannel.send(current.content).catch(() => null)
+        if (!replacement) {
+          for (const sent of replacements) await sent.delete().catch(() => {})
+          return
+        }
+        replacements.push(replacement)
+      }
+      if (liveTraceClosed) {
+        for (const sent of replacements) await sent.delete().catch(() => {})
+        return
+      }
+      liveTraceMsgs = replacements
+      for (const replacement of replacements) armTraceFailsafe(replacement)
+      for (const previous of previousTraceMessages) await previous.delete().catch(() => {})
+    })()
+    liveTraceRehomeTask = task
+    await task
+    if (liveTraceRehomeTask === task) liveTraceRehomeTask = null
+  }
   const flushLiveTrace = () => {
     if (liveTraceClosed || liveTracePending
         || (!liveToolRows.length && !liveAgents.length)
@@ -1149,7 +1192,7 @@ async function handleUserMessage(
         await stale.delete().catch(() => {})
       }
       liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)
-      if (appendedTraceCard) await rehomeLiveWorkBelowTrace(traceChannel)
+      if (flags.trace === 'collapse' && appendedTraceCard) await rehomeLiveWorkBelowTrace(traceChannel)
     })().catch(() => {
       // Trace display is diagnostic only; never fail the user turn over Discord.
     }).finally(() => {
@@ -1757,6 +1800,7 @@ async function handleUserMessage(
     const parts = chunk(body, firstChunkLimit)
     const firstWithThought = `${completedThinking}\n${parts[0] ?? ''}`
     let mergedMsg: Message | null = null
+    let bottomContentMessage: Message | null = null
     // Tool cards belong above the reply. Thinking no longer gets stranded in its
     // own card: its final brain line stays directly under "thought for" in this
     // merged reply until the short live linger expires.
@@ -1773,8 +1817,9 @@ async function handleUserMessage(
         } else {
           mergedMsg = await replyOrSend(message, firstWithThought)
         }
+        bottomContentMessage = mergedMsg
       } else if (message.channel.isSendable()) {
-        await message.channel.send(parts[i])
+        bottomContentMessage = await message.channel.send(parts[i])
       }
     }
     // `live` and `collapse` keep the completed brain line(s) attached to the
@@ -1803,10 +1848,16 @@ async function handleUserMessage(
     // and so the visual lands right under the text. Discord caps 10 files/msg.
     if (result.files?.length && message.channel.isSendable()) {
       try {
-        await message.channel.send({ files: result.files.slice(0, 10) })
+        bottomContentMessage = await message.channel.send({ files: result.files.slice(0, 10) })
       } catch (e) {
         console.error('screenshot attach failed:', e instanceof Error ? e.message : e)
       }
+    }
+    if (message.channel.isSendable()) {
+      await rehomeLiveTraceAtBottom(
+        message.channel as TextChannel | DMChannel | ThreadChannel,
+        bottomContentMessage,
+      )
     }
     // Transient thought line: after the linger, strip just the thought prefix from
     // the merged message, leaving the reply body intact.

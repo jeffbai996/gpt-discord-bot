@@ -57,7 +57,7 @@ test('thinking on and collapse accumulate while live uses the latest thought', a
   assert.match(source, /reasoningTrace: accumulatesReasoning \? liveReasoningTrace : \[\]/)
 })
 
-test('live narration is reposted beneath the complete tool trace stack', async () => {
+test('collapse narration stays beneath its paginated trace stack', async () => {
   const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
   const rehomeStart = source.indexOf('const rehomeLiveWorkBelowTrace')
   const rehomeEnd = source.indexOf('\n  const flushLiveTrace', rehomeStart)
@@ -69,12 +69,30 @@ test('live narration is reposted beneath the complete tool trace stack', async (
   assert.ok(rehomeStart >= 0)
   assert.match(rehome, /traceChannel\.send\(content\)/)
   assert.match(rehome, /previous\.delete\(\)/)
+  assert.match(flush, /flags\.trace === 'collapse' && appendedTraceCard/)
   assert.match(flush, /await rehomeLiveWorkBelowTrace\(traceChannel\)/)
   assert.match(flush, /liveTraceMsgs\[i\]\.content !== cards\[i\]/)
   assert.ok(
     flush.indexOf('await rehomeLiveWorkBelowTrace(traceChannel)')
       > flush.indexOf('liveTraceMsgs = liveTraceMsgs.slice(0, cards.length)'),
   )
+})
+
+test('rolling live trace is reposted beneath newer bot output without duplicates', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('const rehomeLiveTraceAtBottom')
+  const end = source.indexOf('\n  const flushLiveTrace', start)
+  const helper = source.slice(start, end)
+  const finalStart = source.indexOf('let mergedMsg: Message | null = null')
+  const finalEnd = source.indexOf('\n    // Transient thought line', finalStart)
+  const finalRender = source.slice(finalStart, finalEnd)
+
+  assert.ok(start >= 0)
+  assert.match(helper, /flags\.trace !== 'live'/)
+  assert.match(helper, /isNewerDiscordMessage\(below\.id, anchor\.id\)/)
+  assert.match(helper, /traceChannel\.send\(current\.content\)/)
+  assert.ok(helper.indexOf('traceChannel.send(current.content)') < helper.indexOf('previous.delete()'))
+  assert.match(finalRender, /await rehomeLiveTraceAtBottom\(/)
 })
 
 test('collapse narration accumulates and survives reasoning redraws until turn end', async () => {
