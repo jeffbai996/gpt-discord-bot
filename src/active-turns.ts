@@ -9,6 +9,7 @@
 // lifecycle boundary. That avoids killing the model mid-thought/output while still
 // stopping before the next tool action, where the queued replacement can run.
 type Killer = () => void
+type Steerer = (text: string) => Promise<boolean>
 type BusyTool = 'shell' | 'edit' | null
 type PendingStop = {
   clearQueue: boolean
@@ -27,6 +28,7 @@ export const BARGE_BUSY_RECOVERY_MS = 120_000
 
 class ActiveTurns {
   private killers = new Map<string, Killer>()
+  private steerers = new Map<string, Steerer>()
   private stopped = new Set<string>()
   private steeredAfter = new Map<string, number>()
   private startedAt = new Map<string, number>()
@@ -37,12 +39,14 @@ class ActiveTurns {
   private idleWaiters = new Set<() => void>()
 
   /** respondViaCodex: record how to kill this channel's running turn. */
-  register(channelId: string, kill: Killer): number {
+  register(channelId: string, kill: Killer, steer?: Steerer): number {
     this.clearPendingStop(channelId)
     this.busyTool.delete(channelId)
     const generation = this.nextGeneration++
     this.generations.set(channelId, generation)
     this.killers.set(channelId, kill)
+    if (steer) this.steerers.set(channelId, steer)
+    else this.steerers.delete(channelId)
     this.startedAt.set(channelId, Date.now())
     return generation
   }
@@ -51,6 +55,7 @@ class ActiveTurns {
   done(channelId: string, generation?: number): void {
     if (generation !== undefined && this.generations.get(channelId) !== generation) return
     this.killers.delete(channelId)
+    this.steerers.delete(channelId)
     this.generations.delete(channelId)
     this.startedAt.delete(channelId)
     this.busyTool.delete(channelId)
@@ -169,6 +174,11 @@ class ActiveTurns {
 
   isActive(channelId: string): boolean {
     return this.killers.has(channelId)
+  }
+
+  async steer(channelId: string, text: string): Promise<boolean> {
+    const steer = this.steerers.get(channelId)
+    return steer ? steer(text).catch(() => false) : false
   }
 
   isIdle(): boolean {

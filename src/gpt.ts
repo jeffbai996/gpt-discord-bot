@@ -51,6 +51,7 @@ import { ChannelTurnRunner } from './channel-turns.ts'
 import { FAST_FORWARD_REACTION, LatestQueueMarker } from './queue-marker.ts'
 import { renderSteeredMessage } from './steering.ts'
 import { frameSteeredMessages } from './steer-context.ts'
+import { SteeringInbox } from './steering-inbox.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
 import {
   GRACEFUL_SHUTDOWN_DEADLINE_MS,
@@ -716,7 +717,14 @@ async function handleUserMessage(
   const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
   const selfId = client.user?.id ?? ''
   const stopController = new AbortController()
-  const turnGeneration = activeTurns.register(channelId, () => stopController.abort())
+  const steeringInbox = flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0'
+    ? new SteeringInbox()
+    : null
+  const turnGeneration = activeTurns.register(
+    channelId,
+    () => stopController.abort(),
+    steeringInbox ? text => steeringInbox.submit(text) : undefined,
+  )
   const agentWorkflowId = `${message.id}:${turnGeneration}`
   logTurnLifecycle({
     event: 'turn_registered',
@@ -1360,6 +1368,7 @@ async function handleUserMessage(
           resumeSessionId,
           signal: stopController.signal,
           onEvent,
+          steering: steeringInbox ?? undefined,
         }
         result = await respondViaCodex(codexInput)
 
@@ -1887,6 +1896,7 @@ async function handleUserMessage(
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     await settleLiveUi()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
+    steeringInbox?.close()
     activeTurns.done(channelId, turnGeneration)
     logTurnLifecycle({
       event: 'turn_finished',
@@ -1908,6 +1918,21 @@ async function runChannelTurn(
   contentOverride?: string,
 ): Promise<void> {
   const cid = message.channel.id
+  if (channelTurns.isRunning(cid) && activeTurns.isActive(cid)) {
+    const replyText = formatReplyContext(await resolveReplyContext(message))
+    const pinText = formatPinContext(await resolvePinContext(message))
+    const threadText = formatThreadContext(await resolveThreadContext(message))
+    const richText = formatRichContext(message)
+    const text = contentOverride ?? [replyText, pinText, threadText, richText, message.content]
+      .filter(Boolean).join('\n\n')
+    if (await activeTurns.steer(cid, `[${message.author.username}] ${text}`)) {
+      void queueMarker.clear(cid)
+      logTurnLifecycle({
+        event: 'turn_steered', channelId: cid, queueDepth: channelTurns.queueDepth(cid),
+      })
+      return
+    }
+  }
   const steered = channelTurns.isRunning(cid)
   const outcome = await channelTurns.submit(cid, { message, target, contentOverride, steered })
   if (outcome === 'queued') {

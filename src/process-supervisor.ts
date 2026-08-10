@@ -1,7 +1,6 @@
-import { spawn, type ChildProcessByStdio, type SpawnOptionsWithoutStdio } from 'node:child_process'
-import type { Readable } from 'node:stream'
+import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from 'node:child_process'
 
-type SupervisedChild = ChildProcessByStdio<null, Readable, Readable>
+type SupervisedChild = ChildProcess
 
 export type ProcessStopReason = 'idle' | 'hard' | 'user'
 
@@ -28,6 +27,7 @@ export interface ProcessSupervisorResult {
 export interface ProcessSupervisorHooks {
   kill?: (child: SupervisedChild) => void
   onHeartbeat?: (heartbeat: ProcessHeartbeat) => void
+  stdin?: 'ignore' | 'pipe'
 }
 
 export interface SupervisedProcess {
@@ -59,7 +59,7 @@ export function spawnSupervisedProcess(
   // is indistinguishable from a hung model in a headless Discord service.
   const child = spawn(command, args, {
     ...options,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [hooks.stdin ?? 'ignore', 'pipe', 'pipe'],
   })
 
   let finish!: (result: ProcessSupervisorResult) => void

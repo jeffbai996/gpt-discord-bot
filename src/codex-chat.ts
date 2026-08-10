@@ -1,8 +1,6 @@
-import { createInterface } from 'node:readline'
 import { mkdtemp, open, rm, readFile, readdir, stat, writeFile, type FileHandle } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
 import { activeTurns } from './active-turns.ts'
 import { killProcessTree } from './kill-tree.ts'
 import { spawnSupervisedProcess, type ProcessSupervisorResult } from './process-supervisor.ts'
@@ -11,6 +9,8 @@ import type OpenAI from 'openai'
 import type { RespondResult, ToolCall, LifecycleEvent } from './openai.ts'
 import { CodexAgentRegistry, type CodexAgentSnapshot } from './codex-agents.ts'
 import { beginTurn, noteRoundtrip, type LiveUsageDelta } from './live-usage.ts'
+import { CodexAppServerClient } from './codex-app-server.ts'
+import type { SteeringInbox } from './steering-inbox.ts'
 
 // Thrown when the runaway-process backstop SIGKILLs codex, so the caller can
 // surface an explicit 'interrupted' indicator instead of failing silently.
@@ -111,6 +111,7 @@ export interface CodexChatInput {
   resumeSessionId?: string
   signal?: AbortSignal
   onEvent?: (event: LifecycleEvent) => void
+  steering?: SteeringInbox
 }
 
 // Discord's reasoning flag → Codex's config knob.
@@ -322,7 +323,7 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
     let ev: any
     try { ev = JSON.parse(s) } catch { continue }
 
-    if (ev.type === 'turn.completed' && ev.usage) {
+    if ((ev.type === 'turn.completed' || ev.type === 'usage.updated') && ev.usage) {
       const u = ev.usage
       const input = u.input_tokens ?? 0
       const output = u.output_tokens ?? 0
@@ -378,6 +379,66 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
     reasoning: [...reasoningParts, ...publicProgress].join('\n\n'),
     usage,
     lastAgentMessage,
+  }
+}
+
+export function normalizeAppServerNotification(message: any): any | null {
+  const method = String(message?.method ?? '')
+  const params = message?.params ?? {}
+  if (method === 'turn/started') return { type: 'turn.started' }
+  if (method === 'turn/completed') {
+    return {
+      type: 'turn.completed',
+      status: params.turn?.status,
+      error: params.turn?.error,
+    }
+  }
+  if (method === 'thread/tokenUsage/updated') {
+    const usage = params.tokenUsage?.last ?? {}
+    return {
+      type: 'usage.updated',
+      usage: {
+        input_tokens: usage.inputTokens ?? 0,
+        cached_input_tokens: usage.cachedInputTokens ?? 0,
+        output_tokens: usage.outputTokens ?? 0,
+        reasoning_output_tokens: usage.reasoningOutputTokens ?? 0,
+      },
+    }
+  }
+  if (method !== 'item/started' && method !== 'item/completed') return null
+  const item = params.item
+  if (!item || typeof item !== 'object') return null
+  const normalized: any = { ...item }
+  switch (item.type) {
+    case 'agentMessage':
+      normalized.type = 'agent_message'
+      break
+    case 'commandExecution':
+      normalized.type = 'command_execution'
+      normalized.aggregated_output = item.aggregatedOutput
+      normalized.exit_code = item.exitCode
+      break
+    case 'fileChange':
+      normalized.type = 'file_change'
+      break
+    case 'webSearch':
+      normalized.type = 'web_search'
+      break
+    case 'mcpToolCall':
+      normalized.type = 'mcp_tool_call'
+      normalized.arguments = item.arguments
+      normalized.result = item.result
+      break
+    case 'reasoning':
+      normalized.type = 'reasoning'
+      normalized.text = [...(item.summary ?? []), ...(item.content ?? [])].join('\n')
+      break
+    default:
+      return null
+  }
+  return {
+    type: method === 'item/started' ? 'item.started' : 'item.completed',
+    item: normalized,
   }
 }
 
@@ -1027,24 +1088,13 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   // history every turn would bloat the session. Fresh turns get the full prompt.
   const prompt = resuming ? buildResumePrompt(input) : buildPrompt(input)
   const effort = mapEffort(input.reasoningEffort)
-  const outfile = `/tmp/gpt_codexchat_${randomBytes(6).toString('hex')}.txt`
   const watchdog = codexWatchdogPolicy(input)
   const model = input.codexModel || 'gpt-5.6-sol'
 
-  // Spawn Codex directly: no bash, shell interpolation, inherited stdin, stderr
-  // temp file, or intermediate process whose exit can race the real child. Resume
-  // still carries only the flags it accepts and inherits sandbox/dirs from the
-  // original session. The bypass flag is required for non-interactive MCP calls.
-  const args = buildCodexArgs({
-    prompt,
-    model,
-    effort,
-    outfile,
-    resumeSessionId: input.resumeSessionId,
-    imagePaths: input.imagePaths,
-    readOnly: input.readOnly,
-  })
-  const supervisor = spawnSupervisedProcess(CODEX_BIN, args, {
+  // app-server is the same Codex runtime as `exec`, but it keeps stdin open and
+  // exposes turn/steer. That lets an in-flight Discord message join the active
+  // turn instead of aborting it or waiting for an entirely separate turn.
+  const supervisor = spawnSupervisedProcess(CODEX_BIN, ['app-server', '--stdio'], {
     cwd: '/tmp',
     detached: true,
     env: codexSpawnEnv({ SQUAD_STORE_URL: process.env.SQUAD_STORE_URL || 'http://127.0.0.1:5005' }),
@@ -1063,6 +1113,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       }
     },
     onHeartbeat: beat => input.onEvent?.({ type: 'heartbeat', ...beat }),
+    stdin: 'pipe',
   })
   const child = supervisor.child
   let stoppedByUser = false
@@ -1073,38 +1124,29 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   }
   const lines: string[] = []
   let threadId = ''
+  let turnId = ''
+  let finalReply = ''
+  let completedNormally = false
+  let steeringAttached = false
+  let completeTurn!: () => void
+  const turnCompleted = new Promise<void>(resolve => { completeTurn = resolve })
   const rolloutWatchers: Array<ReturnType<typeof watchRolloutActivity>> = []
   let stderrTail = ''
-  child.stderr.setEncoding('utf8')
-  child.stderr.on('data', (chunk: string) => {
+  child.stderr!.setEncoding('utf8')
+  child.stderr!.on('data', (chunk: string) => {
     stderrTail = (stderrTail + chunk).slice(-MAX_STDERR_CHARS)
   })
-  const rl = createInterface({ input: child.stdout! })
-  rl.on('line', (line) => {
-    if (!line.trim()) return
-    lines.push(line)
+  const client = new CodexAppServerClient(child.stdout!, child.stdin!, message => {
+    if (!steeringAttached && turnId && message?.method === 'item/started'
+        && message?.params?.item?.type === 'userMessage') {
+      steeringAttached = true
+      input.steering?.attach(text => client.steer(threadId, turnId, text))
+    }
+    const obj = normalizeAppServerNotification(message)
+    if (!obj) return
+    lines.push(JSON.stringify(obj))
     try {
-      const obj = JSON.parse(line)
       if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
-      if (obj?.type === 'thread.started' && obj.thread_id) {
-        threadId = String(obj.thread_id)
-        if (!rolloutWatchers.length) {
-          beginTurn(threadId)
-          rolloutWatchers.push(watchRolloutActivity(
-            threadId,
-            t0,
-            effort ? `${model} ${effort}` : model,
-            text => {
-              supervisor.markActivity()
-              input.onEvent?.({ type: 'reasoning_progress', text })
-            },
-            agents => {
-              supervisor.markActivity()
-              input.onEvent?.({ type: 'agents', agents })
-            },
-          ))
-        }
-      }
       // Barge-safety: track whether codex is mid a DESTRUCTIVE tool (shell/file-edit)
       // so canBarge() blocks a barge that would SIGKILL a half-written file. Set on
       // the item.started, cleared on the matching item.completed. web_search/reasoning
@@ -1136,6 +1178,9 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       const reasoning = reasoningProgress(obj)
       if (reasoning) input.onEvent?.({ type: 'reasoning_progress', text: reasoning })
       if (obj?.type === 'item.completed' && obj.item) {
+        if (obj.item.type === 'agent_message' && obj.item.phase === 'final_answer') {
+          finalReply = String(obj.item.text ?? '')
+        }
         const completed = toolCallsFromCompletedItem(obj.item)
         for (const call of completed) input.onEvent?.({ type: 'tool_end', ...call })
         // Codex only exposes edit hunks in the rollout file. The write is close
@@ -1156,6 +1201,10 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
           }, 250)
         }
       }
+      if (obj?.type === 'turn.completed') {
+        completedNormally = obj.status === 'completed'
+        completeTurn()
+      }
     } catch { /* non-JSON line */ }
   })
   let replyFromFile = ''
@@ -1164,17 +1213,80 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
   let timeoutKind: 'idle' | 'hard' | null = null
   let processResult: Awaited<ReturnType<typeof supervisor.wait>> | null = null
   try {
+    await client.request('initialize', {
+      clientInfo: { name: 'gpt-bot', title: 'gpt-bot', version: '0.12.0' },
+      capabilities: { experimentalApi: true, requestAttestation: false },
+    })
+    client.notify('initialized')
+    const thread = resuming
+      ? await client.request('thread/resume', {
+          threadId: input.resumeSessionId,
+          model,
+          cwd: '/tmp',
+          approvalPolicy: 'never',
+          sandbox: input.readOnly ? 'read-only' : 'danger-full-access',
+        })
+      : await client.request('thread/start', {
+          model,
+          cwd: '/tmp',
+          approvalPolicy: 'never',
+          sandbox: input.readOnly ? 'read-only' : 'danger-full-access',
+        })
+    threadId = String(thread?.thread?.id ?? input.resumeSessionId ?? '')
+    if (!threadId) throw new Error('app-server did not return a thread id')
+    beginTurn(threadId)
+    rolloutWatchers.push(watchRolloutActivity(
+      threadId,
+      t0,
+      effort ? `${model} ${effort}` : model,
+      text => {
+        supervisor.markActivity()
+        input.onEvent?.({ type: 'reasoning_progress', text })
+      },
+      agents => {
+        supervisor.markActivity()
+        input.onEvent?.({ type: 'agents', agents })
+      },
+    ))
+    const turn = await client.request('turn/start', {
+      threadId,
+      input: [
+        { type: 'text', text: prompt },
+        ...(input.imagePaths ?? []).map(imagePath => ({ type: 'localImage', path: imagePath })),
+      ],
+      model,
+      effort,
+      summary: 'detailed',
+      approvalPolicy: 'never',
+      sandboxPolicy: input.readOnly ? { type: 'readOnly' } : { type: 'dangerFullAccess' },
+    })
+    turnId = String(turn?.turn?.id ?? '')
+    if (!turnId) throw new Error('app-server did not return a turn id')
+    await Promise.race([
+      turnCompleted,
+      supervisor.wait().then(() => { throw new Error('codex app-server exited before turn completion') }),
+    ])
+    client.close()
+    child.kill('SIGTERM')
     processResult = await supervisor.wait()
+    if (completedNormally) processResult = { ...processResult, code: 0, signal: null }
     await Promise.all(rolloutWatchers.map(watcher => watcher.stop()))
     timedOut = processResult.stopReason === 'idle' || processResult.stopReason === 'hard'
     timeoutKind = timedOut ? processResult.stopReason as 'idle' | 'hard' : null
-    replyFromFile = await readFile(outfile, 'utf8').catch(() => '')
+    replyFromFile = finalReply
     codexStderr = stderrTail.trim()
+  } catch (error) {
+    supervisor.stop('user')
+    processResult = await supervisor.wait()
+    codexStderr = stderrTail.trim()
+    if (!stoppedByUser && !input.signal?.aborted) {
+      throw new CodexProcessDiedError(Date.now() - t0, (error as Error).message, { cause: error })
+    }
   } finally {
+    input.steering?.detach()
+    client.close()
     await Promise.all(rolloutWatchers.map(watcher => watcher.stop()))
     if (input.signal) input.signal.removeEventListener('abort', stopRunningTurn)
-    rl.close()
-    await rm(outfile, { force: true }).catch(() => {})
   }
 
   const parsed = parseCodexEvents(lines.join('\n'))
@@ -1223,7 +1335,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     logOutcome('error', processResult.error.message)
     throw new CodexProcessDiedError(Date.now() - t0, processResult.error.message, { cause: processResult.error })
   }
-  if (processResult && processResult.code !== 0) {
+  if (!completedNormally && processResult && processResult.code !== 0) {
     const detail = `codex exited code=${processResult.code} signal=${processResult.signal ?? 'none'}`
     logOutcome('error', detail)
     throw new CodexProcessDiedError(Date.now() - t0, detail)
