@@ -16,10 +16,20 @@ test('ordinary in-flight messages queue without aborting the active Codex turn',
   assert.match(inbound, /await runChannelTurn\(message, target\)/)
 })
 
-test('fast-forward remains the explicit way to interrupt queued work', async () => {
+test('ordinary steering has no queue or fast-forward reaction UI', async () => {
   const source = await readFile(SOURCE, 'utf8')
-  const reactions = source.slice(source.indexOf("client.on('messageReactionAdd'"))
 
-  assert.match(reactions, /FAST_FORWARD_REACTION/)
-  assert.match(reactions, /activeTurns\.stopFor\(reaction\.message\.channelId, \{ clearQueue: false \}\)/)
+  assert.doesNotMatch(source, /LatestQueueMarker/)
+  assert.doesNotMatch(source, /FAST_FORWARD_REACTION/)
+  assert.doesNotMatch(source, /queueMarker\.(?:mark|clear)/)
+})
+
+test('native steering frames the message as additive same-turn guidance', async () => {
+  const source = await readFile(SOURCE, 'utf8')
+  const runner = source.slice(
+    source.indexOf('async function runChannelTurn'),
+    source.indexOf('async function dispatchInboundMessage'),
+  )
+
+  assert.match(runner, /activeTurns\.steer\([\s\S]*?frameLiveSteerMessage\(/)
 })

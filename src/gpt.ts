@@ -48,9 +48,8 @@ import { extractRichMedia, formatRichContext } from './discord-rich-input.ts'
 import { applyLifecycle } from './reactions/lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
-import { FAST_FORWARD_REACTION, LatestQueueMarker } from './queue-marker.ts'
 import { renderSteeredMessage } from './steering.ts'
-import { frameSteeredMessages } from './steer-context.ts'
+import { frameLiveSteerMessage, frameSteeredMessages } from './steer-context.ts'
 import { SteeringInbox } from './steering-inbox.ts'
 import { logTurnLifecycle } from './turn-lifecycle.ts'
 import {
@@ -470,7 +469,6 @@ const client = new Client({
 })
 
 const shutdownGate = new ShutdownGate()
-const queueMarker = new LatestQueueMarker(() => client.user?.id)
 const activeAgentViews = new Map<string, (agents: CodexAgentSnapshot[]) => Promise<void>>()
 const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 0
 interface QueuedChannelTurn {
@@ -493,7 +491,6 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
     const combined = batch.some(item => item.steered)
       ? frameSteeredMessages(messages)
       : messages.join('\n')
-    void queueMarker.clear(channelId)
     logTurnLifecycle({
       event: 'channel_batch_started',
       channelId,
@@ -1925,8 +1922,10 @@ async function runChannelTurn(
     const richText = formatRichContext(message)
     const text = contentOverride ?? [replyText, pinText, threadText, richText, message.content]
       .filter(Boolean).join('\n\n')
-    if (await activeTurns.steer(cid, `[${message.author.username}] ${text}`)) {
-      void queueMarker.clear(cid)
+    if (await activeTurns.steer(
+      cid,
+      frameLiveSteerMessage(`[${message.author.username}] ${text}`),
+    )) {
       logTurnLifecycle({
         event: 'turn_steered', channelId: cid, queueDepth: channelTurns.queueDepth(cid),
       })
@@ -1936,7 +1935,6 @@ async function runChannelTurn(
   const steered = channelTurns.isRunning(cid)
   const outcome = await channelTurns.submit(cid, { message, target, contentOverride, steered })
   if (outcome === 'queued') {
-    void queueMarker.mark(cid, message)
     logTurnLifecycle({
       event: 'turn_queued', channelId: cid, queueDepth: channelTurns.queueDepth(cid),
     })
@@ -2032,10 +2030,8 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     return
   }
 
-  // Barge-in is explicit. Ordinary in-flight messages enter the channel queue
-  // without killing the active Codex process, so a note about later work cannot
-  // replace the task already in progress. The ⏩ reaction on the queued message
-  // remains the deliberate fast-forward control when interruption is wanted.
+  // Ordinary in-flight messages steer the active Codex turn. If the transport
+  // cannot accept them, they fall back to the channel queue without UI reactions.
   if (channelTurns.isRunning(channelId) && activeTurns.isActive(channelId)
       && isInFlightStatusPing(message.content)) {
     void replyOrSend(message, 'Still working — progress above')
@@ -2069,13 +2065,6 @@ client.on('messageReactionAdd', async (reaction, user) => {
   }
   if (user.partial) {
     try { await user.fetch() } catch { return }
-  }
-  const emoji = reaction.emoji.name
-  if (emoji === FAST_FORWARD_REACTION && !user.bot
-      && reaction.message.author?.id === user.id
-      && queueMarker.isLatest(reaction.message.channelId, reaction.message.id)) {
-    activeTurns.stopFor(reaction.message.channelId, { clearQueue: false })
-    return
   }
   await handleReaction(reaction, user, {
     client,

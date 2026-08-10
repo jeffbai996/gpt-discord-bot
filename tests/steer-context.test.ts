@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { frameSteeredMessages } from '../src/steer-context.ts'
+import { frameLiveSteerMessage, frameSteeredMessages } from '../src/steer-context.ts'
+
+test('live steering tells Codex to merge the new ask into the active result', () => {
+  const framed = frameLiveSteerMessage('[alice] also verify the live service')
+
+  assert.match(framed, /same active turn/)
+  assert.match(framed, /Continue the original objective/)
+  assert.match(framed, /final response covers both/)
+  assert.match(framed, /Do not emit a steering, queue, or timing receipt/)
+  assert.match(framed, /\[alice\] also verify the live service$/)
+})
 
 test('steering asks the model to judge now versus later versus replacement', () => {
   const framed = frameSteeredMessages(['also audit the cache later'])
