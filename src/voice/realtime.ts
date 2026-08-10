@@ -62,7 +62,13 @@ export function buildSessionUpdate(o: {
           format: { type: 'audio/pcm', rate: 24000 },
           // Server VAD: OpenAI detects speech start/stop, drives turn-taking +
           // barge-in (speech_started while the model talks = user interrupted).
-          turn_detection: { type: 'server_vad', create_response: true },
+          turn_detection: {
+            type: 'server_vad',
+            create_response: true,
+            // Server VAD owns cancellation. The local Discord player only has
+            // to discard buffered audio when speech_started arrives.
+            interrupt_response: true,
+          },
         },
         output: {
           format: { type: 'audio/pcm', rate: 24000 },

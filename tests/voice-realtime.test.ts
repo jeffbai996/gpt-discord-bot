@@ -14,6 +14,7 @@ test('buildSessionUpdate uses the GA shape: audio.{input,output} + VAD + voice',
   assert.equal(s.session.audio.input.format.type, 'audio/pcm')
   assert.equal(s.session.audio.output.format.type, 'audio/pcm')
   assert.equal(s.session.audio.input.turn_detection.type, 'server_vad')
+  assert.equal(s.session.audio.input.turn_detection.interrupt_response, true)
   assert.equal(s.session.audio.output.voice, 'marin')
   assert.equal(s.session.instructions, 'be brief')
   assert.equal(s.session.tools, undefined) // no tools key when none given

@@ -25,6 +25,7 @@ import type { VoiceBasedChannel } from 'discord.js'
 
 import { RealtimeSession, type RealtimeTool, type ToolCall } from './realtime.ts'
 import { discordToOpenAI, openAIToDiscord } from './audio-bridge.ts'
+import { resolveMaxMissedFrames } from './playback.ts'
 import type { DeferredToolJob } from '../tools/registry.ts'
 
 const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
@@ -71,7 +72,12 @@ export class VoiceSession {
     await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000)
 
     this.player = createAudioPlayer({
-      behaviors: { noSubscriber: NoSubscriberBehavior.Play },
+      behaviors: {
+        noSubscriber: NoSubscriberBehavior.Play,
+        // Realtime PCM arrives in bursts. discord.js otherwise declares the
+        // raw stream dead after five empty 20ms polls and plays one syllable.
+        maxMissedFrames: resolveMaxMissedFrames(),
+      },
     })
     // Diagnostics: surface playback failures (a bad resource / missing opus
     // encoder fails silently otherwise) and state flips, so a "no audio" report
@@ -93,6 +99,7 @@ export class VoiceSession {
     this.realtime.on('audio', (pcm24: Buffer) => this.playOut(pcm24))
     this.realtime.on('speechStarted', () => this.onBargeIn())
     this.realtime.on('speechStopped', () => this.onComposing())  // model composing
+    this.realtime.on('responseDone', () => this.onResponseDone())
     this.realtime.on('error', (e: Error) => this.log(`realtime error: ${e.message}`))
     this.realtime.on('close', () => this.log('realtime socket closed'))
     // ALWAYS handle tool calls — even with no handler wired. An unanswered tool
@@ -146,9 +153,18 @@ export class VoiceSession {
     if (this.playback) { this.playback.end(); this.playback = undefined }
   }
 
+  /** Close the current response stream after its final queued PCM delta. */
+  private onResponseDone(): void {
+    if (!this.playback) return
+    this.playback.end()
+    this.playback = undefined
+  }
+
   /** User interrupted while the bot was talking — stop playback now. */
   private onBargeIn(): void {
-    this.realtime?.cancelResponse()
+    // With server_vad + interrupt_response, OpenAI already cancels the active
+    // response before emitting speech_started. Sending response.cancel again
+    // produces a noisy "no active response" protocol error.
     if (this.playback) {
       this.playback.end()
       this.playback = undefined

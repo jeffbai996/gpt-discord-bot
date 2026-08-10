@@ -12,7 +12,7 @@ mic in:  Discord opus  → prism OpusDecoder (48k stereo PCM)
 bot out: RealtimeSession 'audio' (24k mono)
                        → audio-bridge.openAIToDiscord (48k stereo)
                        → AudioPlayer (StreamType.Raw)
-barge-in: RealtimeSession 'speechStarted' → cancel response + stop playback
+barge-in: Realtime server VAD cancels response → stop local playback
 ```
 Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 (OpenAI Realtime WS, protocol unit-tested), `session.ts` (the live wiring),
@@ -22,8 +22,9 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 | var | default | notes |
 |-----|---------|-------|
 | `OPENAI_API_KEY` | (required) | already used by the bot |
-| `OPENAI_REALTIME_MODEL` | `gpt-realtime` | the realtime model |
+| `OPENAI_REALTIME_MODEL` | `gpt-realtime-2.1-mini` | fallback before `/gpt voice model` saves a preference |
 | `OPENAI_REALTIME_VOICE` | `ballad` | fallback before `/gpt voice type` saves a preference |
+| `GPT_VOICE_MAX_MISSED_FRAMES` | `250` | 20ms raw-audio polls tolerated between bursty Realtime chunks |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | model for `/gpt voice speak` (verbatim TTS) |
 | `OPENAI_TTS_VOICE` | `alloy` | TTS voice (separate set from the realtime voices) |
 | `DISCORD_ADMIN_USER_ID` | — | only this user may run `/gpt voice` (billed per minute) |
@@ -34,6 +35,7 @@ Files: `src/voice/audio-bridge.ts` (format math, unit-tested), `realtime.ts`
 ## Commands (`/gpt voice …`)
 - `/gpt voice join` — join your VC and start realtime voice-to-voice with the saved voice
 - `/gpt voice type <voice>` — persist the voice for future calls; picker offers British `ballad` (default), `marin`, `cedar`, and `coral`
+- `/gpt voice model <model>` — persist Mini or full Realtime 2.1 for future calls
 - `/gpt voice leave` — leave + tear down
 - `/gpt voice speak <text>` — say a specific line verbatim (text → voice-back, via TTS)
 
