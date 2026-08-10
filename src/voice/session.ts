@@ -23,7 +23,12 @@ import { PassThrough, Readable } from 'node:stream'
 import OpenAI from 'openai'
 import type { VoiceBasedChannel } from 'discord.js'
 
-import { RealtimeSession, type RealtimeTool, type ToolCall } from './realtime.ts'
+import {
+  RealtimeSession,
+  type RealtimeOptions,
+  type RealtimeTool,
+  type ToolCall,
+} from './realtime.ts'
 import { discordToOpenAI, openAIToDiscord } from './audio-bridge.ts'
 import { resolveMaxMissedFrames } from './playback.ts'
 import type { DeferredToolJob } from '../tools/registry.ts'
@@ -49,6 +54,24 @@ export interface VoiceSessionOptions {
   log?: (msg: string) => void
 }
 
+export interface VoiceSessionDependencies {
+  createRealtime: (options: RealtimeOptions) => RealtimeSession
+  joinVoice: typeof joinVoiceChannel
+  waitForVoiceReady: (connection: VoiceConnection) => Promise<void>
+  createPlayer: typeof createAudioPlayer
+  createDecoder: () => prism.opus.Decoder
+}
+
+const DEFAULT_DEPENDENCIES: VoiceSessionDependencies = {
+  createRealtime: options => new RealtimeSession(options),
+  joinVoice: joinVoiceChannel,
+  waitForVoiceReady: async connection => {
+    await entersState(connection, VoiceConnectionStatus.Ready, 20_000)
+  },
+  createPlayer: createAudioPlayer,
+  createDecoder: () => new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 }),
+}
+
 export class VoiceSession {
   private connection?: VoiceConnection
   private player?: AudioPlayer
@@ -56,22 +79,62 @@ export class VoiceSession {
   private playback?: PassThrough
   private readonly subscribed = new Set<string>()
   private readonly log: (msg: string) => void
+  private readonly deps: VoiceSessionDependencies
+  private outputStarted = false
 
-  constructor(private readonly opts: VoiceSessionOptions) {
+  constructor(
+    private readonly opts: VoiceSessionOptions,
+    dependencies: Partial<VoiceSessionDependencies> = {},
+  ) {
     this.log = opts.log ?? (() => {})
+    this.deps = { ...DEFAULT_DEPENDENCIES, ...dependencies }
   }
 
   async join(channel: VoiceBasedChannel): Promise<void> {
-    this.connection = joinVoiceChannel({
+    // Bring up Realtime first. Previously Discord joined before this network
+    // handshake and the speaking listener was installed only afterward, so a
+    // caller's first utterance could fall through a multi-second blind window.
+    this.realtime = this.deps.createRealtime({
+      apiKey: this.opts.apiKey,
+      model: this.opts.model,
+      instructions: this.opts.instructions,
+      voice: this.opts.voice,
+      tools: this.opts.tools,
+    })
+    this.realtime.on('audio', (pcm24: Buffer) => this.playOut(pcm24))
+    this.realtime.on('speechStarted', () => {
+      this.log('realtime detected speech start')
+      this.onBargeIn()
+    })
+    this.realtime.on('speechStopped', () => {
+      this.log('realtime detected speech stop')
+      this.onComposing()
+    })
+    this.realtime.on('responseDone', () => this.onResponseDone())
+    this.realtime.on('error', (e: Error) => this.log(`realtime error: ${e.message}`))
+    this.realtime.on('close', () => this.log('realtime socket closed'))
+    // ALWAYS handle tool calls — even with no handler wired. An unanswered tool
+    // call hangs the turn forever (the model waits for a result it never gets:
+    // "went to search and never came back"). handleToolCall replies either way.
+    this.realtime.on('toolCall', (c: ToolCall) => this.handleToolCall(c))
+    await this.realtime.connect()
+    this.log('realtime session connected')
+
+    this.connection = this.deps.joinVoice({
       channelId: channel.id,
       guildId: channel.guild.id,
       adapterCreator: channel.guild.voiceAdapterCreator,
       selfDeaf: false,   // must hear users
       selfMute: false,
     })
-    await entersState(this.connection, VoiceConnectionStatus.Ready, 20_000)
+    await this.deps.waitForVoiceReady(this.connection)
 
-    this.player = createAudioPlayer({
+    // Install the receive listener immediately when Discord becomes ready,
+    // before doing playback setup. The input path now has no awaited blind spot.
+    const receiver = this.connection.receiver
+    receiver.speaking.on('start', (userId: string) => this.listenTo(userId))
+
+    this.player = this.deps.createPlayer({
       behaviors: {
         noSubscriber: NoSubscriberBehavior.Play,
         // Realtime PCM arrives in bursts. discord.js otherwise declares the
@@ -87,56 +150,51 @@ export class VoiceSession {
       if (o.status !== n.status) this.log(`player ${o.status} -> ${n.status}`)
     })
     this.connection.subscribe(this.player)
-
-    // Connect the realtime brain.
-    this.realtime = new RealtimeSession({
-      apiKey: this.opts.apiKey,
-      model: this.opts.model,
-      instructions: this.opts.instructions,
-      voice: this.opts.voice,
-      tools: this.opts.tools,
-    })
-    this.realtime.on('audio', (pcm24: Buffer) => this.playOut(pcm24))
-    this.realtime.on('speechStarted', () => this.onBargeIn())
-    this.realtime.on('speechStopped', () => this.onComposing())  // model composing
-    this.realtime.on('responseDone', () => this.onResponseDone())
-    this.realtime.on('error', (e: Error) => this.log(`realtime error: ${e.message}`))
-    this.realtime.on('close', () => this.log('realtime socket closed'))
-    // ALWAYS handle tool calls — even with no handler wired. An unanswered tool
-    // call hangs the turn forever (the model waits for a result it never gets:
-    // "went to search and never came back"). handleToolCall replies either way.
-    this.realtime.on('toolCall', (c: ToolCall) => this.handleToolCall(c))
-    await this.realtime.connect()
     this.log('voice session ready')
-
-    // Subscribe to each user as they start speaking (per-user opus streams).
-    const receiver = this.connection.receiver
-    receiver.speaking.on('start', (userId: string) => this.listenTo(userId))
   }
 
   private listenTo(userId: string): void {
     if (!this.connection || this.subscribed.has(userId)) return
     this.subscribed.add(userId)
+    this.log('discord speaker detected; opening mic stream')
     const opus = this.connection.receiver.subscribe(userId, {
       end: { behavior: EndBehaviorType.AfterSilence, duration: 500 },
     })
-    const decoder = new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 })
+    const decoder = this.deps.createDecoder()
     opus.pipe(decoder)
+    let frames = 0
+    let bytes = 0
     decoder.on('data', (pcm48Stereo: Buffer) => {
       try {
+        frames += 1
+        bytes += pcm48Stereo.length
+        if (frames === 1) this.log(`discord mic PCM flowing (${pcm48Stereo.length} byte first frame)`)
         this.realtime?.appendAudio(discordToOpenAI(pcm48Stereo))
       } catch (e) {
         this.log(`mic->realtime convert failed: ${(e as Error).message}`)
       }
     })
-    const cleanup = () => { this.subscribed.delete(userId); decoder.destroy() }
-    opus.on('end', cleanup)
-    opus.on('error', cleanup)
+    let cleaned = false
+    const cleanup = (error?: Error) => {
+      if (cleaned) return
+      cleaned = true
+      this.subscribed.delete(userId)
+      decoder.destroy()
+      if (error) this.log(`discord mic stream failed: ${error.message}`)
+      else this.log(`discord mic stream ended (${frames} frames, ${bytes} bytes)`)
+    }
+    opus.on('end', () => cleanup())
+    opus.on('error', (error: Error) => cleanup(error))
+    decoder.on('error', (error: Error) => cleanup(error))
   }
 
   /** Feed a model audio delta (24k mono) to the player as 48k stereo Raw. */
   private playOut(pcm24Mono: Buffer): void {
     if (!this.player) return
+    if (!this.outputStarted) {
+      this.outputStarted = true
+      this.log(`realtime output audio flowing (${pcm24Mono.length} byte first chunk)`)
+    }
     if (!this.playback) {
       this.playback = new PassThrough()
       const resource = createAudioResource(this.playback, { inputType: StreamType.Raw })
@@ -155,6 +213,7 @@ export class VoiceSession {
 
   /** Close the current response stream after its final queued PCM delta. */
   private onResponseDone(): void {
+    this.outputStarted = false
     if (!this.playback) return
     this.playback.end()
     this.playback = undefined
