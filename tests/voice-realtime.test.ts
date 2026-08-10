@@ -2,9 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildSessionUpdate, buildAudioAppend, buildToolOutput, buildBackgroundResult,
-  parseServerEvent,
+  buildAudioTruncate, parseServerEvent, waitForSessionUpdated,
   RealtimeSession,
 } from '../src/voice/realtime.ts'
+import { EventEmitter } from 'node:events'
 
 test('buildSessionUpdate uses the GA shape: audio.{input,output} + VAD + voice', () => {
   const s = buildSessionUpdate({ voice: 'marin', instructions: 'be brief' }) as any
@@ -14,6 +15,9 @@ test('buildSessionUpdate uses the GA shape: audio.{input,output} + VAD + voice',
   assert.equal(s.session.audio.input.format.type, 'audio/pcm')
   assert.equal(s.session.audio.output.format.type, 'audio/pcm')
   assert.equal(s.session.audio.input.turn_detection.type, 'server_vad')
+  assert.equal(s.session.audio.input.turn_detection.threshold, 0.5)
+  assert.equal(s.session.audio.input.turn_detection.prefix_padding_ms, 300)
+  assert.equal(s.session.audio.input.turn_detection.silence_duration_ms, 500)
   assert.equal(s.session.audio.input.turn_detection.interrupt_response, true)
   assert.equal(s.session.audio.output.voice, 'marin')
   assert.equal(s.session.instructions, 'be brief')
@@ -56,10 +60,24 @@ test('buildBackgroundResult injects a completed job as conversation context', ()
 test('parseServerEvent: audio delta decodes base64', () => {
   const pcm = Buffer.from([9, 8, 7, 6])
   const ev = parseServerEvent(JSON.stringify({
-    type: 'response.audio.delta', delta: pcm.toString('base64'),
+    type: 'response.audio.delta',
+    item_id: 'item_audio',
+    content_index: 2,
+    delta: pcm.toString('base64'),
   }))
   assert.equal(ev?.kind, 'audio')
   assert.deepEqual((ev as any).audio, pcm)
+  assert.equal((ev as any).itemId, 'item_audio')
+  assert.equal((ev as any).contentIndex, 2)
+})
+
+test('buildAudioTruncate records how much response audio was actually heard', () => {
+  assert.deepEqual(buildAudioTruncate('item_audio', 2, 615), {
+    type: 'conversation.item.truncate',
+    item_id: 'item_audio',
+    content_index: 2,
+    audio_end_ms: 615,
+  })
 })
 
 test('parseServerEvent: speech_stopped -> speechStopped (drives the thinking cue)', () => {
@@ -87,6 +105,26 @@ test('parseServerEvent: error + bad json + unknown', () => {
   assert.equal(parseServerEvent('{"type":"error","error":{"message":"boom"}}')?.kind, 'error')
   assert.equal(parseServerEvent('not json')?.kind, 'error')
   assert.equal(parseServerEvent('{"type":"something.else"}'), null)
+})
+
+test('waitForSessionUpdated installs its listener before sending the update', async () => {
+  const socket = new EventEmitter()
+  await waitForSessionUpdated(socket as any, () => {
+    socket.emit('message', Buffer.from('{"type":"session.updated"}'))
+  }, 50)
+})
+
+test('waitForSessionUpdated rejects a protocol error instead of claiming ready', async () => {
+  const socket = new EventEmitter()
+  await assert.rejects(
+    waitForSessionUpdated(socket as any, () => {
+      socket.emit('message', Buffer.from(JSON.stringify({
+        type: 'error',
+        error: { code: 'invalid_value', message: 'bad realtime config' },
+      })))
+    }, 50),
+    /bad realtime config/,
+  )
 })
 
 test('dispatch routes a server frame to the matching emitted event', () => {
@@ -138,4 +176,53 @@ test('background completions serialize instead of creating overlapping responses
   sess.dispatch('{"type":"response.done"}')
   assert.equal(sess.sent.length, 4)
   assert.match(sess.sent[2].item.content[0].text, /job_two/)
+})
+
+test('fast tool output waits for the tool-calling response to finish', () => {
+  class CapturingSession extends RealtimeSession {
+    sent: Record<string, any>[] = []
+    protected override send(obj: Record<string, unknown>): void { this.sent.push(obj) }
+  }
+  const sess = new CapturingSession({ apiKey: 'x' })
+
+  sess.dispatch('{"type":"input_audio_buffer.speech_stopped"}')
+  sess.dispatch(JSON.stringify({
+    type: 'response.function_call_arguments.done',
+    call_id: 'call_fast', name: 'get_time', arguments: '{}',
+  }))
+  sess.sendToolResponse('call_fast', { now: 'soon' })
+
+  assert.equal(sess.sent.length, 1)
+  assert.equal(sess.sent[0].type, 'conversation.item.create')
+
+  sess.dispatch('{"type":"response.done"}')
+  assert.equal(sess.sent.length, 2)
+  assert.equal(sess.sent[1].type, 'response.create')
+})
+
+test('slow and parallel tool outputs create one continuation after all results arrive', () => {
+  class CapturingSession extends RealtimeSession {
+    sent: Record<string, any>[] = []
+    protected override send(obj: Record<string, unknown>): void { this.sent.push(obj) }
+  }
+  const sess = new CapturingSession({ apiKey: 'x' })
+
+  sess.dispatch('{"type":"input_audio_buffer.speech_stopped"}')
+  for (const callId of ['call_one', 'call_two']) {
+    sess.dispatch(JSON.stringify({
+      type: 'response.function_call_arguments.done',
+      call_id: callId, name: 'lookup', arguments: '{}',
+    }))
+  }
+  sess.dispatch('{"type":"response.done"}')
+  assert.equal(sess.sent.length, 0)
+
+  sess.sendToolResponse('call_one', { ok: 1 })
+  assert.equal(sess.sent.length, 1)
+  sess.sendToolResponse('call_two', { ok: 2 })
+
+  assert.equal(sess.sent.length, 3)
+  assert.equal(sess.sent[0].type, 'conversation.item.create')
+  assert.equal(sess.sent[1].type, 'conversation.item.create')
+  assert.equal(sess.sent[2].type, 'response.create')
 })

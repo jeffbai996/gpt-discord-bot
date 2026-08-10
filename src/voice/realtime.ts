@@ -22,6 +22,7 @@ import { BUILTIN_DEFAULT_REALTIME_MODEL } from './models.ts'
 
 const DEFAULT_MODEL = process.env.OPENAI_REALTIME_MODEL || BUILTIN_DEFAULT_REALTIME_MODEL
 const DEFAULT_VOICE = process.env.OPENAI_REALTIME_VOICE || BUILTIN_DEFAULT_REALTIME_VOICE
+const SESSION_UPDATE_TIMEOUT_MS = 10_000
 
 export interface RealtimeTool {
   type: 'function'
@@ -44,6 +45,75 @@ export interface ToolCall {
   argsJson: string
 }
 
+export interface AudioChunkMeta {
+  itemId?: string
+  contentIndex: number
+}
+
+function realtimeErrorMessage(msg: any): string {
+  const message = msg?.error?.message ?? 'realtime error'
+  const code = msg?.error?.code
+  const param = msg?.error?.param
+  const details = [code, param].filter(Boolean).join(' · ')
+  return details ? `${message} (${details})` : message
+}
+
+/**
+ * Send session.update only after the acknowledgement listener is installed,
+ * then wait until the server accepts it. A WebSocket "open" means transport is
+ * up; it does not mean the requested model/audio configuration is valid.
+ */
+export function waitForSessionUpdated(
+  socket: EventEmitter,
+  sendUpdate: () => void,
+  timeoutMs = SESSION_UPDATE_TIMEOUT_MS,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>
+    const cleanup = () => {
+      clearTimeout(timer)
+      socket.off('message', onMessage)
+      socket.off('error', onError)
+      socket.off('close', onClose)
+    }
+    const finish = (error?: Error) => {
+      cleanup()
+      if (error) reject(error)
+      else resolve()
+    }
+    const onMessage = (raw: unknown) => {
+      let msg: any
+      try {
+        const text = typeof raw === 'string'
+          ? raw
+          : Buffer.isBuffer(raw)
+            ? raw.toString('utf8')
+            : Buffer.from(raw as ArrayBuffer).toString('utf8')
+        msg = JSON.parse(text)
+      } catch {
+        return
+      }
+      if (msg.type === 'session.updated') finish()
+      else if (msg.type === 'error') finish(new Error(realtimeErrorMessage(msg)))
+    }
+    const onError = (error: Error) => finish(error)
+    const onClose = () => finish(new Error('realtime socket closed before session setup completed'))
+
+    socket.on('message', onMessage)
+    socket.once('error', onError)
+    socket.once('close', onClose)
+    timer = setTimeout(
+      () => finish(new Error('realtime session setup timed out')),
+      timeoutMs,
+    )
+    try {
+      sendUpdate()
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)))
+    }
+  })
+}
+
 /** Build the session.update payload — GA Realtime shape (the beta shape, with
  *  flat input_audio_format / modalities, is no longer supported). Probe-verified
  *  2026-06-22: this returns `session.updated` against /v1/realtime. */
@@ -64,6 +134,9 @@ export function buildSessionUpdate(o: {
           // barge-in (speech_started while the model talks = user interrupted).
           turn_detection: {
             type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500,
             create_response: true,
             // Server VAD owns cancellation. The local Discord player only has
             // to discard buffered audio when speech_started arrives.
@@ -84,6 +157,19 @@ export function buildSessionUpdate(o: {
 
 export function buildAudioAppend(pcm24Mono: Buffer): Record<string, unknown> {
   return { type: 'input_audio_buffer.append', audio: pcm24Mono.toString('base64') }
+}
+
+export function buildAudioTruncate(
+  itemId: string,
+  contentIndex: number,
+  audioEndMs: number,
+): Record<string, unknown> {
+  return {
+    type: 'conversation.item.truncate',
+    item_id: itemId,
+    content_index: contentIndex,
+    audio_end_ms: Math.max(0, Math.floor(audioEndMs)),
+  }
 }
 
 export function buildToolOutput(callId: string, output: unknown): Record<string, unknown> {
@@ -116,7 +202,7 @@ export function buildBackgroundResult(jobId: string, result: string): Record<str
  * Pure — no emit — so it tests directly. Returns null for events we ignore.
  */
 export function parseServerEvent(raw: string | Buffer):
-  | { kind: 'audio'; audio: Buffer }
+  | { kind: 'audio'; audio: Buffer; itemId?: string; contentIndex: number }
   | { kind: 'speechStarted' }
   | { kind: 'transcript'; text: string }
   | { kind: 'toolCall'; call: ToolCall }
@@ -133,7 +219,12 @@ export function parseServerEvent(raw: string | Buffer):
   switch (msg.type) {
     case 'response.audio.delta':
     case 'response.output_audio.delta':
-      return { kind: 'audio', audio: Buffer.from(msg.delta ?? '', 'base64') }
+      return {
+        kind: 'audio',
+        audio: Buffer.from(msg.delta ?? '', 'base64'),
+        itemId: typeof msg.item_id === 'string' ? msg.item_id : undefined,
+        contentIndex: Number.isInteger(msg.content_index) ? msg.content_index : 0,
+      }
     case 'input_audio_buffer.speech_started':
       return { kind: 'speechStarted' }
     case 'input_audio_buffer.speech_stopped':
@@ -150,7 +241,7 @@ export function parseServerEvent(raw: string | Buffer):
     case 'response.done':
       return { kind: 'responseDone' }
     case 'error':
-      return { kind: 'error', error: new Error(msg.error?.message ?? 'realtime error') }
+      return { kind: 'error', error: new Error(realtimeErrorMessage(msg)) }
     default:
       return null
   }
@@ -160,6 +251,8 @@ export class RealtimeSession extends EventEmitter {
   private ws?: WebSocket
   private userSpeaking = false
   private responseActive = false
+  private pendingToolCalls = 0
+  private toolContinuationNeeded = false
   private readonly backgroundQueue: Array<{ jobId: string; result: string }> = []
   private readonly opts: Required<Omit<RealtimeOptions, 'instructions' | 'tools'>> &
     Pick<RealtimeOptions, 'instructions' | 'tools'>
@@ -188,14 +281,14 @@ export class RealtimeSession extends EventEmitter {
       ws.once('open', () => resolve())
       ws.once('error', reject)
     })
-    this.send(buildSessionUpdate({
-      voice: this.opts.voice,
-      instructions: this.opts.instructions,
-      tools: this.opts.tools,
-    }))
     ws.on('message', (data) => this.dispatch(data as Buffer))
     ws.on('close', () => this.emit('close'))
     ws.on('error', (e) => this.emit('error', e))
+    await waitForSessionUpdated(ws, () => this.send(buildSessionUpdate({
+      voice: this.opts.voice,
+      instructions: this.opts.instructions,
+      tools: this.opts.tools,
+    })))
     this.emit('open')
   }
 
@@ -204,7 +297,12 @@ export class RealtimeSession extends EventEmitter {
     const ev = parseServerEvent(raw)
     if (!ev) return
     switch (ev.kind) {
-      case 'audio': this.emit('audio', ev.audio); break
+      case 'audio':
+        this.emit('audio', ev.audio, {
+          itemId: ev.itemId,
+          contentIndex: ev.contentIndex,
+        } satisfies AudioChunkMeta)
+        break
       case 'speechStarted':
         this.userSpeaking = true
         this.emit('speechStarted')
@@ -215,11 +313,16 @@ export class RealtimeSession extends EventEmitter {
         this.emit('speechStopped')
         break
       case 'transcript': this.emit('transcript', ev.text); break
-      case 'toolCall': this.emit('toolCall', ev.call); break
+      case 'toolCall':
+        this.pendingToolCalls += 1
+        this.emit('toolCall', ev.call)
+        break
       case 'responseDone':
         this.responseActive = false
         this.emit('responseDone')
-        this.flushBackgroundQueue()
+        if (!this.continueAfterTools() && this.pendingToolCalls === 0) {
+          this.flushBackgroundQueue()
+        }
         break
       case 'error': this.emit('error', ev.error); break
     }
@@ -229,10 +332,15 @@ export class RealtimeSession extends EventEmitter {
     this.send(buildAudioAppend(pcm24Mono))
   }
 
+  truncateResponse(itemId: string, contentIndex: number, audioEndMs: number): void {
+    this.send(buildAudioTruncate(itemId, contentIndex, audioEndMs))
+  }
+
   sendToolResponse(callId: string, output: unknown): void {
     this.send(buildToolOutput(callId, output))
-    this.responseActive = true
-    this.send({ type: 'response.create' })
+    if (this.pendingToolCalls > 0) this.pendingToolCalls -= 1
+    this.toolContinuationNeeded = true
+    this.continueAfterTools()
   }
 
   deliverBackgroundResult(jobId: string, result: string): void {
@@ -247,6 +355,19 @@ export class RealtimeSession extends EventEmitter {
     this.send(buildBackgroundResult(next.jobId, next.result))
     this.responseActive = true
     this.send({ type: 'response.create' })
+  }
+
+  /** Function arguments may finish before their containing response does. Wait
+   * for both that response and every parallel tool result before asking for one
+   * continuation response. */
+  private continueAfterTools(): boolean {
+    if (this.responseActive || this.pendingToolCalls > 0 || !this.toolContinuationNeeded) {
+      return false
+    }
+    this.toolContinuationNeeded = false
+    this.responseActive = true
+    this.send({ type: 'response.create' })
+    return true
   }
 
   cancelResponse(): void {

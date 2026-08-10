@@ -16,7 +16,7 @@
 import {
   joinVoiceChannel, createAudioPlayer, createAudioResource, StreamType,
   EndBehaviorType, VoiceConnectionStatus, entersState, NoSubscriberBehavior,
-  type VoiceConnection, type AudioPlayer,
+  AudioPlayerStatus, type VoiceConnection, type AudioPlayer,
 } from '@discordjs/voice'
 import prism from 'prism-media'
 import { PassThrough, Readable } from 'node:stream'
@@ -28,6 +28,7 @@ import {
   type RealtimeOptions,
   type RealtimeTool,
   type ToolCall,
+  type AudioChunkMeta,
 } from './realtime.ts'
 import { discordToOpenAI, openAIToDiscord } from './audio-bridge.ts'
 import { resolveMaxMissedFrames } from './playback.ts'
@@ -37,6 +38,15 @@ const TTS_MODEL = process.env.OPENAI_TTS_MODEL || 'gpt-4o-mini-tts'
 // TTS voice is independent of the realtime voice (the classic TTS voice set
 // differs from the realtime set), so it has its own knob with a safe default.
 const TTS_VOICE = process.env.OPENAI_TTS_VOICE || 'alloy'
+const OPENAI_INPUT_RATE = 24_000
+const PCM16_BYTES_PER_SAMPLE = 2
+const INPUT_SILENCE_TAIL_MS = 800
+const PLAYBACK_WARMUP_MS = 500
+
+function pcmSilence(sampleRate: number, channels: number, durationMs: number): Buffer {
+  const samples = Math.ceil(sampleRate * durationMs / 1000) * channels
+  return Buffer.alloc(samples * PCM16_BYTES_PER_SAMPLE)
+}
 
 // NOTE: the audio "thinking" cue (a blip played while the model composed) was
 // removed 2026-06-23 (Jeff: "just get rid of the thinking sound, we'll figure it
@@ -59,7 +69,9 @@ export interface VoiceSessionDependencies {
   joinVoice: typeof joinVoiceChannel
   waitForVoiceReady: (connection: VoiceConnection) => Promise<void>
   createPlayer: typeof createAudioPlayer
+  createResource: typeof createAudioResource
   createDecoder: () => prism.opus.Decoder
+  now: () => number
 }
 
 const DEFAULT_DEPENDENCIES: VoiceSessionDependencies = {
@@ -69,7 +81,9 @@ const DEFAULT_DEPENDENCIES: VoiceSessionDependencies = {
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000)
   },
   createPlayer: createAudioPlayer,
+  createResource: createAudioResource,
   createDecoder: () => new prism.opus.Decoder({ rate: 48000, channels: 2, frameSize: 960 }),
+  now: () => Date.now(),
 }
 
 export class VoiceSession {
@@ -81,6 +95,10 @@ export class VoiceSession {
   private readonly log: (msg: string) => void
   private readonly deps: VoiceSessionDependencies
   private outputStarted = false
+  private outputItemId?: string
+  private outputContentIndex = 0
+  private outputReceivedMs = 0
+  private playbackStartedAt?: number
 
   constructor(
     private readonly opts: VoiceSessionOptions,
@@ -101,7 +119,7 @@ export class VoiceSession {
       voice: this.opts.voice,
       tools: this.opts.tools,
     })
-    this.realtime.on('audio', (pcm24: Buffer) => this.playOut(pcm24))
+    this.realtime.on('audio', (pcm24: Buffer, meta: AudioChunkMeta) => this.playOut(pcm24, meta))
     this.realtime.on('speechStarted', () => {
       this.log('realtime detected speech start')
       this.onBargeIn()
@@ -148,8 +166,19 @@ export class VoiceSession {
     this.player.on('error', (e) => this.log(`player error: ${e.message}`))
     this.player.on('stateChange', (o, n) => {
       if (o.status !== n.status) this.log(`player ${o.status} -> ${n.status}`)
+      if (n.status === AudioPlayerStatus.Idle && this.outputItemId) {
+        this.resetOutputTracking()
+      }
     })
     this.connection.subscribe(this.player)
+    // Prime Discord's SSRC/Opus send path before the first model reply. Without
+    // this, a short first response can race voice transport setup and vanish.
+    const warmup = pcmSilence(48_000, 2, PLAYBACK_WARMUP_MS)
+    const warmResource = this.deps.createResource(Readable.from([warmup]), {
+      inputType: StreamType.Raw,
+    })
+    this.player.play(warmResource)
+    this.log(`discord playback warmed (${PLAYBACK_WARMUP_MS}ms silence)`)
     this.log('voice session ready')
   }
 
@@ -179,26 +208,45 @@ export class VoiceSession {
       if (cleaned) return
       cleaned = true
       this.subscribed.delete(userId)
+      if (frames > 0) {
+        // Discord stops sending media when its local silence detector closes
+        // the subscription. OpenAI server VAD cannot infer silence from an
+        // absent WebSocket frame, so give it an explicit silent tail long
+        // enough to emit speech_stopped and create the response.
+        const silence = pcmSilence(OPENAI_INPUT_RATE, 1, INPUT_SILENCE_TAIL_MS)
+        this.realtime?.appendAudio(silence)
+        this.log(`realtime silence tail appended (${INPUT_SILENCE_TAIL_MS}ms)`)
+      }
       decoder.destroy()
       if (error) this.log(`discord mic stream failed: ${error.message}`)
       else this.log(`discord mic stream ended (${frames} frames, ${bytes} bytes)`)
     }
-    opus.on('end', () => cleanup())
+    // Wait for the decoder's readable side to end so its final PCM frame is
+    // forwarded before the silence tail. Cleaning up on opus.end() could
+    // destroy the decoder while it still had output buffered.
+    decoder.on('end', () => cleanup())
     opus.on('error', (error: Error) => cleanup(error))
     decoder.on('error', (error: Error) => cleanup(error))
   }
 
   /** Feed a model audio delta (24k mono) to the player as 48k stereo Raw. */
-  private playOut(pcm24Mono: Buffer): void {
+  private playOut(pcm24Mono: Buffer, meta: AudioChunkMeta): void {
     if (!this.player) return
+    if (meta.itemId && meta.itemId !== this.outputItemId) {
+      this.resetOutputTracking()
+      this.outputItemId = meta.itemId
+      this.outputContentIndex = meta.contentIndex
+    }
+    this.outputReceivedMs += pcm24Mono.length / (OPENAI_INPUT_RATE * PCM16_BYTES_PER_SAMPLE) * 1000
     if (!this.outputStarted) {
       this.outputStarted = true
       this.log(`realtime output audio flowing (${pcm24Mono.length} byte first chunk)`)
     }
     if (!this.playback) {
       this.playback = new PassThrough()
-      const resource = createAudioResource(this.playback, { inputType: StreamType.Raw })
+      const resource = this.deps.createResource(this.playback, { inputType: StreamType.Raw })
       this.player.play(resource)
+      this.playbackStartedAt = this.deps.now()
     }
     this.playback.write(openAIToDiscord(pcm24Mono))
   }
@@ -224,11 +272,30 @@ export class VoiceSession {
     // With server_vad + interrupt_response, OpenAI already cancels the active
     // response before emitting speech_started. Sending response.cancel again
     // produces a noisy "no active response" protocol error.
+    if (this.outputItemId && this.playbackStartedAt !== undefined) {
+      const elapsedMs = Math.max(0, this.deps.now() - this.playbackStartedAt)
+      const playedMs = Math.floor(Math.min(this.outputReceivedMs, elapsedMs))
+      this.realtime?.truncateResponse(
+        this.outputItemId,
+        this.outputContentIndex,
+        playedMs,
+      )
+      this.log(`realtime response truncated at ${playedMs}ms`)
+    }
+    this.resetOutputTracking()
     if (this.playback) {
       this.playback.end()
       this.playback = undefined
     }
     this.player?.stop(true)
+  }
+
+  private resetOutputTracking(): void {
+    this.outputStarted = false
+    this.outputItemId = undefined
+    this.outputContentIndex = 0
+    this.outputReceivedMs = 0
+    this.playbackStartedAt = undefined
   }
 
   private async handleToolCall(call: ToolCall): Promise<void> {
@@ -280,7 +347,7 @@ export class VoiceSession {
     // plays the clip start-to-finish then goes idle. Decoupled from realtime
     // playback state so /gpt voice speak works whether or not a turn is live.
     if (this.playback) { this.playback.end(); this.playback = undefined }
-    const resource = createAudioResource(Readable.from(pcm48Stereo), { inputType: StreamType.Raw })
+    const resource = this.deps.createResource(Readable.from([pcm48Stereo]), { inputType: StreamType.Raw })
     this.player.play(resource)
   }
 
@@ -294,6 +361,7 @@ export class VoiceSession {
     this.player = undefined
     this.realtime = undefined
     this.playback = undefined
+    this.resetOutputTracking()
     this.log('voice session left')
   }
 }
