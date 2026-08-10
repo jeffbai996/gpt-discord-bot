@@ -2007,24 +2007,15 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     return
   }
 
-  // Barge-in (Jeff 2026-07-01/03): a new message takes over, but normal messages
-  // defer the stop until Codex reaches the next tool lifecycle boundary. That
-  // prevents mid-output death while still letting the queued message cut in.
-  {
-    if (channelTurns.isRunning(channelId) && activeTurns.isActive(channelId) && isInFlightStatusPing(message.content)) {
-      void replyOrSend(message, 'Still working — progress above')
-        .catch(() => {})
-      return
-    }
-    if (channelTurns.isRunning(channelId) && activeTurns.canRequestBarge(channelId)) {
-      activeTurns.deferStopFor(channelId, { clearQueue: false })
-      const queueDepth = channelTurns.enqueue(channelId, { message, target: null, steered: true })
-      logTurnLifecycle({
-        event: 'barge_queued', channelId, queueDepth, stopReason: 'deferred_barge',
-      })
-      void queueMarker.mark(channelId, message)
-      return
-    }
+  // Barge-in is explicit. Ordinary in-flight messages enter the channel queue
+  // without killing the active Codex process, so a note about later work cannot
+  // replace the task already in progress. The ⏩ reaction on the queued message
+  // remains the deliberate fast-forward control when interruption is wanted.
+  if (channelTurns.isRunning(channelId) && activeTurns.isActive(channelId)
+      && isInFlightStatusPing(message.content)) {
+    void replyOrSend(message, 'Still working — progress above')
+      .catch(() => {})
+    return
   }
 
   // Pending-edit consumer: if a prior bot message in this channel was marked

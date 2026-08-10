@@ -1,6 +1,5 @@
-const STEER_JUDGMENT = `[Steering context: this message arrived while you were already working. Treat it as guidance, not an automatic replacement task. Use judgment:
-- Do it now when the user explicitly asks for immediate action, it is necessary to complete the active task correctly, or delaying it would create avoidable risk.
-- An immediate side task does not cancel the active task. After handling the side task, resume the original task in the same turn and do not give a final response until both are complete or genuinely blocked.
+const STEER_JUDGMENT = `[Queued follow-up context: this message arrived while the prior turn was working. The prior turn was allowed to finish; this is not a reset or replacement task. Use judgment:
+- Use the prior turn's result and tool work as context. Handle an immediate addition or correction now, but do not redo the completed task unless the user asks.
 - Record a concise durable todo using the available project mechanism when it is genuinely separate future work or the user says it should happen later; do not start that work now.
 - Only abandon or replace the original task when the user clearly cancels it or the steer clearly supersedes it. If it corrects or narrows the active request, adjust the active work and preserve already-completed useful progress.
 - If it is merely conversational context, incorporate it without inventing work.
