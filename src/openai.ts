@@ -89,6 +89,10 @@ export interface RespondResult extends ParsedResponse {
     // selected engine/model rather than this usage shape.
     reasoningTokens: number
   } | null
+  // Codex CLI resume historically reported a running-session total, while the
+  // app-server emits one `tokenUsage.last` delta per model roundtrip. Callers
+  // must only subtract a saved channel baseline for the former.
+  usageIsCumulative?: boolean
   // Per-turn MARGINAL token usage (this turn only), for the ↑/↓ counter display.
   // On a resumed codex session usage above is the running session CUMULATIVE, so
   // the counter must show the delta vs last turn instead (Jeff 2026-06-25). Same

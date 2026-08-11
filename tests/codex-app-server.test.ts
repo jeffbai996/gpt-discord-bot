@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import { CodexAppServerClient } from '../src/codex-app-server.ts'
-import { normalizeAppServerNotification } from '../src/codex-chat.ts'
+import { normalizeAppServerNotification, parseCodexEvents } from '../src/codex-chat.ts'
 
 test('sends guarded turn steering and resolves the matching response', async () => {
   const toServer = new PassThrough()
@@ -63,4 +63,56 @@ test('preserves final-answer phase and per-turn token usage from app-server even
     output_tokens: 3,
     reasoning_output_tokens: 2,
   })
+})
+
+test('aggregates every app-server roundtrip into completed-turn usage', () => {
+  const lines = [
+    {
+      type: 'usage.updated',
+      usage: {
+        input_tokens: 100_000,
+        cached_input_tokens: 90_000,
+        output_tokens: 2_000,
+        reasoning_output_tokens: 800,
+      },
+    },
+    {
+      type: 'usage.updated',
+      usage: {
+        input_tokens: 120_000,
+        cached_input_tokens: 110_000,
+        output_tokens: 3_000,
+        reasoning_output_tokens: 1_200,
+      },
+    },
+    { type: 'turn.completed' },
+  ].map(line => JSON.stringify(line)).join('\n')
+
+  const parsed = parseCodexEvents(lines)
+  assert.deepEqual(parsed.usage, {
+    inputTokens: 220_000,
+    cachedInputTokens: 200_000,
+    outputTokens: 5_000,
+    reasoningTokens: 2_000,
+    totalTokens: 225_000,
+  })
+  assert.equal(parsed.usageIsCumulative, false)
+})
+
+test('keeps legacy turn-completed usage cumulative instead of summing snapshots', () => {
+  const lines = [
+    {
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 220_000,
+        cached_input_tokens: 200_000,
+        output_tokens: 5_000,
+        reasoning_output_tokens: 2_000,
+      },
+    },
+  ].map(line => JSON.stringify(line)).join('\n')
+
+  const parsed = parseCodexEvents(lines)
+  assert.equal(parsed.usage?.inputTokens, 220_000)
+  assert.equal(parsed.usageIsCumulative, true)
 })

@@ -1448,20 +1448,19 @@ async function handleUserMessage(
           result = retry
         }
         if (result.threadId) channelSessions.set(channelId, result.threadId)
-        // Per-turn token delta for the ↑/↓ counter. codex's turn.completed.usage
-        // on a RESUMED session is the running session CUMULATIVE, so showing it
-        // raw makes the counter climb every turn (Jeff 2026-06-25). Derive the
-        // marginal usage (this turn = cumulative − last turn's cumulative) and
-        // hand it to the footer. result.usage stays the cumulative — the rollover
-        // check below still keys on it. (Rollover's clear() also resets the usage
-        // baseline so the next fresh turn's delta is computed correctly.)
+        // App-server usage is already the sum of every model roundtrip in this
+        // turn. Only legacy resumed CLI sessions report a cumulative snapshot
+        // that needs subtraction against the saved channel baseline.
         if (result.usage) {
-          const d = channelSessions.usageDelta(channelId, {
+          const current = {
             input: result.usage.inputTokens,
             output: result.usage.outputTokens,
             cachedInput: result.usage.cachedInputTokens,
             reasoning: result.usage.reasoningTokens,
-          })
+          }
+          const d = result.usageIsCumulative
+            ? channelSessions.usageDelta(channelId, current)
+            : current
           result.usageDelta = {
             inputTokens: d.input,
             outputTokens: d.output,

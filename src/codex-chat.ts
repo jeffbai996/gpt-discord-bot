@@ -244,10 +244,11 @@ function buildPrompt(input: CodexChatInput): string {
     .join('\n')
 }
 
-interface ParsedEvents {
+export interface ParsedEvents {
   toolCalls: ToolCall[]
   reasoning: string
   usage: RespondResult['usage']
+  usageIsCumulative: boolean
   lastAgentMessage: string
 }
 
@@ -310,11 +311,19 @@ export function toolCallsFromCompletedItem(it: any): ToolCall[] {
 // 0.x): item.completed{item:{type:'command_execution'|'reasoning'|'agent_message'
 // |'web_search'|'mcp_tool_call', …}} and turn.completed{usage:{input_tokens,
 // cached_input_tokens, output_tokens, reasoning_output_tokens}}.
-function parseCodexEvents(jsonl: string): ParsedEvents {
+export function parseCodexEvents(jsonl: string): ParsedEvents {
   const toolCalls: ToolCall[] = []
   const reasoningParts: string[] = []
   const agentMessages: string[] = []
   let usage: RespondResult['usage'] = null
+  const roundtripUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+  }
+  let usageIsCumulative = false
   let lastAgentMessage = ''
 
   for (const line of jsonl.split('\n')) {
@@ -323,17 +332,35 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
     let ev: any
     try { ev = JSON.parse(s) } catch { continue }
 
-    if ((ev.type === 'turn.completed' || ev.type === 'usage.updated') && ev.usage) {
+    if (ev.type === 'usage.updated' && ev.usage) {
       const u = ev.usage
-      const input = u.input_tokens ?? 0
-      const output = u.output_tokens ?? 0
+      const input = Number(u.input_tokens) || 0
+      const output = Number(u.output_tokens) || 0
+      roundtripUsage.inputTokens += input
+      roundtripUsage.outputTokens += output
+      roundtripUsage.totalTokens += input + output
+      roundtripUsage.cachedInputTokens += Number(u.cached_input_tokens) || 0
+      roundtripUsage.reasoningTokens += Number(u.reasoning_output_tokens) || 0
+      usage = { ...roundtripUsage }
+      usageIsCumulative = false
+      continue
+    }
+
+    // Legacy `codex exec --json` emits one running-session snapshot at turn
+    // completion. Keep that contract distinct from app-server roundtrip deltas
+    // so gpt.ts can apply its saved baseline only where it belongs.
+    if (ev.type === 'turn.completed' && ev.usage) {
+      const u = ev.usage
+      const input = Number(u.input_tokens) || 0
+      const output = Number(u.output_tokens) || 0
       usage = {
         inputTokens: input,
         outputTokens: output,
         totalTokens: input + output,
-        cachedInputTokens: u.cached_input_tokens ?? 0,
-        reasoningTokens: u.reasoning_output_tokens ?? 0,
+        cachedInputTokens: Number(u.cached_input_tokens) || 0,
+        reasoningTokens: Number(u.reasoning_output_tokens) || 0,
       }
+      usageIsCumulative = true
       continue
     }
 
@@ -378,6 +405,7 @@ function parseCodexEvents(jsonl: string): ParsedEvents {
     toolCalls,
     reasoning: [...reasoningParts, ...publicProgress].join('\n\n'),
     usage,
+    usageIsCumulative,
     lastAgentMessage,
   }
 }
@@ -1359,6 +1387,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     react: null,
     reply,
     usage: parsed.usage,
+    usageIsCumulative: parsed.usageIsCumulative,
     finishReason: 'stop',
     durationMs: Date.now() - t0,
     // The REAL model, not a flat 'codex'. Both `model` and `effort` are already
