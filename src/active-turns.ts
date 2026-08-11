@@ -9,7 +9,8 @@
 // lifecycle boundary. That avoids killing the model mid-thought/output while still
 // stopping before the next tool action, where the queued replacement can run.
 type Killer = () => void
-type Steerer = (text: string) => Promise<boolean>
+type SteeringAccepted = () => void | Promise<void>
+type Steerer = (text: string, onAccepted?: SteeringAccepted) => Promise<boolean>
 type BusyTool = 'shell' | 'edit' | null
 type PendingStop = {
   clearQueue: boolean
@@ -176,9 +177,9 @@ class ActiveTurns {
     return this.killers.has(channelId)
   }
 
-  async steer(channelId: string, text: string): Promise<boolean> {
+  async steer(channelId: string, text: string, onAccepted?: SteeringAccepted): Promise<boolean> {
     const steer = this.steerers.get(channelId)
-    return steer ? steer(text).catch(() => false) : false
+    return steer ? steer(text, onAccepted).catch(() => false) : false
   }
 
   isIdle(): boolean {

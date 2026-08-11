@@ -44,6 +44,7 @@ export type LifecycleEvent =
       failed?: boolean
       durationMs?: number
       diff?: string
+      update?: boolean
     }
   | { type: 'searching' }         // web_search in flight (special-cased)
   | { type: 'done' }

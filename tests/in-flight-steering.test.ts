@@ -32,4 +32,5 @@ test('native steering frames the message as additive same-turn guidance', async 
   )
 
   assert.match(runner, /activeTurns\.steer\([\s\S]*?frameLiveSteerMessage\(/)
+  assert.match(runner, /activeLifecycleTrackers\.get\(cid\)\?\.moveTo\(message\)/)
 })

@@ -1,7 +1,9 @@
 type SteeringHandler = (text: string) => Promise<boolean>
+type SteeringAccepted = () => void | Promise<void>
 
 type PendingSteer = {
   text: string
+  onAccepted?: SteeringAccepted
   resolve: (accepted: boolean) => void
 }
 
@@ -10,10 +12,10 @@ export class SteeringInbox {
   private pending: PendingSteer[] = []
   private closed = false
 
-  submit(text: string): Promise<boolean> {
+  submit(text: string, onAccepted?: SteeringAccepted): Promise<boolean> {
     if (this.closed) return Promise.resolve(false)
-    if (this.handler) return this.handler(text)
-    return new Promise(resolve => this.pending.push({ text, resolve }))
+    if (this.handler) return this.deliver(this.handler, text, onAccepted)
+    return new Promise(resolve => this.pending.push({ text, onAccepted, resolve }))
   }
 
   attach(handler: SteeringHandler): void {
@@ -21,7 +23,9 @@ export class SteeringInbox {
     this.handler = handler
     const pending = this.pending.splice(0)
     void (async () => {
-      for (const item of pending) item.resolve(await handler(item.text).catch(() => false))
+      for (const item of pending) {
+        item.resolve(await this.deliver(handler, item.text, item.onAccepted))
+      }
     })()
   }
 
@@ -33,5 +37,16 @@ export class SteeringInbox {
 
   detach(): void {
     if (!this.closed) this.handler = null
+  }
+
+  private async deliver(
+    handler: SteeringHandler,
+    text: string,
+    onAccepted?: SteeringAccepted,
+  ): Promise<boolean> {
+    const accepted = await handler(text).catch(() => false)
+    if (!accepted) return false
+    await Promise.resolve(onAccepted?.()).catch(() => {})
+    return true
   }
 }

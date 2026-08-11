@@ -16,3 +16,21 @@ test('returns false so the caller can fall back to a follow-up turn', async () =
   inbox.attach(async () => false)
   assert.equal(await inbox.submit('cannot steer this turn'), false)
 })
+
+test('notifies the Discord handoff only after the transport accepts the steer', async () => {
+  const inbox = new SteeringInbox()
+  const events: string[] = []
+  inbox.attach(async () => { events.push('accepted'); return true })
+
+  assert.equal(await inbox.submit('cross over now', () => { events.push('consumed') }), true)
+  assert.deepEqual(events, ['accepted', 'consumed'])
+})
+
+test('does not move the Discord reaction target when steering falls back', async () => {
+  const inbox = new SteeringInbox()
+  let consumed = false
+  inbox.attach(async () => false)
+
+  assert.equal(await inbox.submit('queue me instead', () => { consumed = true }), false)
+  assert.equal(consumed, false)
+})

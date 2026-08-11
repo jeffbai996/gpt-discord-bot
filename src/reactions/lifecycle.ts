@@ -9,7 +9,7 @@
  *   👀 received   — message accepted, before any work
  *   📎 ingesting  — processing attachments before generate (v0.5+)
  *   🤔 thinking   — model call in flight
- *   🧠 reasoning  — gpt-5.x reasoning summary / thought signal (v0.4+)
+ *   🤔 reasoning  — gpt-5.x reasoning summary / thought signal (v0.4+)
  *   🌐 searching  — web_search grounding fired this turn (v0.6+)
  *   🔧 tooling    — function-call (fetch_url, search_memory, …) running (v0.6+)
  *
@@ -30,7 +30,7 @@ const EMOJI = {
   received:   '👀',
   ingesting:  '📎',
   thinking:   '🤔',
-  reasoning:  '',   // was 🧠 — collapsed into 🤔 so thinking doesn't show two emojis
+  reasoning:  '🤔', // was 🧠 — collapsed into the same mutually-exclusive thinking phase
 
   searching:  '🌐',
   tooling:    '🔧',
@@ -57,10 +57,10 @@ const ALL_TRANSIENTS: LifecycleState[] = [
 const PREDECESSORS: Record<LifecycleState, LifecycleState[]> = {
   received:   [],
   ingesting:  ['received'],
-  thinking:   ['received', 'ingesting'],
-  reasoning:  ['received', 'ingesting'],
-  searching:  ['received', 'ingesting'],
-  tooling:    ['received', 'ingesting'],
+  thinking:   ['received', 'ingesting', 'reasoning', 'searching', 'tooling'],
+  reasoning:  ['received', 'ingesting', 'thinking', 'searching', 'tooling'],
+  searching:  ['received', 'ingesting', 'thinking', 'reasoning', 'tooling'],
+  tooling:    ['received', 'ingesting', 'thinking', 'reasoning', 'searching'],
   replied:    ALL_TRANSIENTS,
   truncated:  ALL_TRANSIENTS,
   blocked:    ALL_TRANSIENTS,

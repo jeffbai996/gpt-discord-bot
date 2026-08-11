@@ -45,7 +45,7 @@ import {
 import { fetchHistory, formatHistoryForOpenAI, selectPriorImages, type HistoryMessage } from './history.ts'
 import { cleanupAttachmentFiles, processAttachments } from './attachments.ts'
 import { extractRichMedia, formatRichContext } from './discord-rich-input.ts'
-import { applyLifecycle } from './reactions/lifecycle.ts'
+import { TurnLifecycleTracker } from './reactions/turn-lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
 import { renderSteeredMessage } from './steering.ts'
@@ -478,6 +478,7 @@ const client = new Client({
 
 const shutdownGate = new ShutdownGate()
 const activeAgentViews = new Map<string, (agents: CodexAgentSnapshot[]) => Promise<void>>()
+const activeLifecycleTrackers = new Map<string, TurnLifecycleTracker>()
 const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 0
 interface QueuedChannelTurn {
   message: Message
@@ -725,10 +726,12 @@ async function handleUserMessage(
   const steeringInbox = flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0'
     ? new SteeringInbox()
     : null
+  const lifecycle = new TurnLifecycleTracker(message)
+  activeLifecycleTrackers.set(channelId, lifecycle)
   const turnGeneration = activeTurns.register(
     channelId,
     () => stopController.abort(),
-    steeringInbox ? text => steeringInbox.submit(text) : undefined,
+    steeringInbox ? (text, onAccepted) => steeringInbox.submit(text, onAccepted) : undefined,
   )
   const agentWorkflowId = `${message.id}:${turnGeneration}`
   logTurnLifecycle({
@@ -770,7 +773,7 @@ async function handleUserMessage(
     console.error(`[history] FETCH FAILED for ch=${channelId} — replying with NO context:`, e)
   }
 
-  await applyLifecycle(message, 'received')
+  await lifecycle.transition('received')
 
   const directAttachments = [...message.attachments.values()]
   const richAttachments = extractRichMedia(message)
@@ -789,7 +792,7 @@ async function handleUserMessage(
   let temporaryResultFiles: string[] = []
   let extraText = ''
   if (attachments.length > 0) {
-    await applyLifecycle(message, 'ingesting')
+    await lifecycle.transition('ingesting')
     try {
       const processed = await processAttachments(attachments, openaiRaw)
       imageParts = processed.imageParts
@@ -1248,9 +1251,9 @@ async function handleUserMessage(
   }
 
   const onEvent = (event: LifecycleEvent) => {
-    if (event.type === 'thinking_start') { void applyLifecycle(message, 'thinking'); return }
-    if (event.type === 'reasoning_start') { void applyLifecycle(message, 'reasoning'); return }
-    if (event.type === 'searching') { void applyLifecycle(message, 'searching'); return }
+    if (event.type === 'thinking_start') { void lifecycle.reasoning(); return }
+    if (event.type === 'reasoning_start') { void lifecycle.reasoning(); return }
+    if (event.type === 'searching') { void lifecycle.transition('searching'); return }
     if (event.type === 'agents') {
       agentCommands.record(channelId, agentWorkflowId, event.agents)
       if (flags.trace !== 'off') {
@@ -1261,7 +1264,7 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'tool_start') {
-      void applyLifecycle(message, 'tooling')
+      void lifecycle.toolStarted()
       if (flags.trace !== 'off') {
         liveToolRows.push({
           name: event.name,
@@ -1275,6 +1278,7 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'tool_end') {
+      if (!event.update) void lifecycle.toolEnded()
       if (flags.trace !== 'off') {
         const row = findLiveToolRow(event.name, event.args)
         const target = row ?? {
@@ -1308,6 +1312,7 @@ async function handleUserMessage(
       return
     }
     if (event.type === 'reasoning_progress') {
+      void lifecycle.reasoning()
       const reasoningIsVisible = flags.thinking !== 'off'
       if (flags.thinking === 'on' || flags.thinking === 'collapse') {
         if (liveReasoningTrace.at(-1) !== event.text) liveReasoningTrace.push(event.text)
@@ -1481,7 +1486,7 @@ async function handleUserMessage(
         if (e instanceof NonTerminalCompletionError) {
           await settleLiveUi()
           await deleteLiveTrace()
-          void applyLifecycle(message, 'errored')
+          void lifecycle.transition('errored')
           if (workMessage) await workMessage.edit(
             `⚠️ **completion gate stopped ${e.attempts} repeated progress-only finals; the task did not complete**`,
           ).catch(() => {})
@@ -1493,7 +1498,7 @@ async function handleUserMessage(
           // tombstone. Steering silently retires the superseded UI and clears
           // its lifecycle reactions before the queued replacement takes over.
           const steeredAfter = activeTurns.consumeSteered(channelId)
-          await applyLifecycle(message, steeredAfter !== null ? 'silenced' : 'interrupted')
+          await lifecycle.transition(steeredAfter !== null ? 'silenced' : 'interrupted')
           await settleLiveUi()
           await deleteLiveTrace()
           if (steeredAfter !== null) {
@@ -1531,7 +1536,7 @@ async function handleUserMessage(
           console.error('codex failed without a confirmed child-process death; suppressing API postmortem:', e)
           await settleLiveUi()
           await deleteLiveTrace()
-          void applyLifecycle(message, 'errored')
+          void lifecycle.transition('errored')
           if (workMessage) await workMessage.edit('⚠️ **codex hit an error — API postmortem suppressed**').catch(() => {})
           return
         }
@@ -1559,7 +1564,7 @@ async function handleUserMessage(
             engine: 'api', fallbackReason: 'codex_interrupted',
           })
           console.error('codex interrupted by backstop; requesting API postmortem:', e.message)
-          void applyLifecycle(message, 'interrupted')
+          void lifecycle.transition('interrupted')
           codexFailureLifecycle = 'interrupted'
           if (workMessage) { await workMessage.edit('⏳ **codex turn interrupted — API is writing the postmortem…**').catch(() => {}) }
         } else if (e instanceof CodexProcessDiedError) {
@@ -1568,7 +1573,7 @@ async function handleUserMessage(
             engine: 'api', fallbackReason: 'codex_process_died',
           })
           console.error('codex process confirmed dead after fallback grace; requesting API postmortem:', e)
-          void applyLifecycle(message, 'errored')
+          void lifecycle.transition('errored')
           codexFailureLifecycle = 'errored'
           if (workMessage) { await workMessage.edit('⚠️ **codex exited — API is writing the postmortem…**').catch(() => {}) }
         }
@@ -1703,7 +1708,7 @@ async function handleUserMessage(
     const body = degradedNotice + stripToolTraceCard(headingsToBold(replyBody)) + verbose + (verbose ? '\n\u200b' : '')
 
     if (!body.trim() && !result.files?.length) {
-      await applyLifecycle(message, codexFailureLifecycle ?? 'silenced')
+      await lifecycle.transition(codexFailureLifecycle ?? 'silenced')
       if (workMessage && !targetMessage) {
         try { await workMessage.delete() } catch {}
       }
@@ -1717,7 +1722,7 @@ async function handleUserMessage(
       if (message.channel.isSendable()) {
         await message.channel.send({ files: result.files.slice(0, 10) })
       }
-      await applyLifecycle(message, codexFailureLifecycle ?? 'replied')
+      await lifecycle.transition(codexFailureLifecycle ?? 'replied')
       return
     }
 
@@ -1875,14 +1880,14 @@ async function handleUserMessage(
     }
 
     if (result.finishReason === 'length') {
-      await applyLifecycle(message, codexFailureLifecycle ?? 'truncated')
+      await lifecycle.transition(codexFailureLifecycle ?? 'truncated')
     } else {
-      await applyLifecycle(message, codexFailureLifecycle ?? 'replied')
+      await lifecycle.transition(codexFailureLifecycle ?? 'replied')
     }
   } catch (e: any) {
     if (e instanceof CodexStoppedError) {
       const steeredAfter = activeTurns.consumeSteered(channelId)
-      await applyLifecycle(message, steeredAfter !== null ? 'silenced' : 'interrupted')
+      await lifecycle.transition(steeredAfter !== null ? 'silenced' : 'interrupted')
       await settleLiveUi()
       await deleteLiveTrace()
       try {
@@ -1898,11 +1903,11 @@ async function handleUserMessage(
     }
     const isRejected = e instanceof OpenAIRequestRejected
     if (isRejected && e.reason === 'content_policy') {
-      await applyLifecycle(message, 'blocked')
+      await lifecycle.transition('blocked')
     } else if (isRejected) {
-      await applyLifecycle(message, 'denied')
+      await lifecycle.transition('denied')
     } else {
-      await applyLifecycle(message, 'errored')
+      await lifecycle.transition('errored')
     }
     const errMsg = isRejected ? `⚠️ ${e.reason}` : `❌ error: ${e?.message ?? String(e)}`
     await settleLiveUi()
@@ -1931,6 +1936,7 @@ async function handleUserMessage(
     } catch {}
   } finally {
     if (activeAgentViews.get(channelId) === refreshAgentView) activeAgentViews.delete(channelId)
+    if (activeLifecycleTrackers.get(channelId) === lifecycle) activeLifecycleTrackers.delete(channelId)
     await cleanupAttachmentFiles(imagePaths).catch(e => console.error('attachment cleanup failed:', e))
     const temporaryDirs = new Set(temporaryResultFiles.map(file => path.dirname(file)))
     for (const file of temporaryResultFiles) {
@@ -1942,6 +1948,7 @@ async function handleUserMessage(
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (typingInterval) { clearInterval(typingInterval); typingInterval = null }
     await settleLiveUi()
+    await lifecycle.drain()
     if (placeholderId) pendingPlaceholders.untrack(placeholderId)
     steeringInbox?.close()
     activeTurns.done(channelId, turnGeneration)
@@ -1975,6 +1982,7 @@ async function runChannelTurn(
     if (await activeTurns.steer(
       cid,
       frameLiveSteerMessage(`[${message.author.username}] ${text}`),
+      () => activeLifecycleTrackers.get(cid)?.moveTo(message),
     )) {
       logTurnLifecycle({
         event: 'turn_steered', channelId: cid, queueDepth: channelTurns.queueDepth(cid),

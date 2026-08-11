@@ -1222,7 +1222,7 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
                 for (const call of completed.filter(c => c.name === 'edit')) {
                   const p = String(call.args.file_path ?? '')
                   const d = diffs.find(x => x.path === p)
-                  if (d) input.onEvent?.({ type: 'tool_end', ...call, diff: d.diff })
+                  if (d) input.onEvent?.({ type: 'tool_end', ...call, diff: d.diff, update: true })
                 }
               })
               .catch(() => {})
