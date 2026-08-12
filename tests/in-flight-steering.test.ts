@@ -13,7 +13,7 @@ test('ordinary in-flight messages queue without aborting the active Codex turn',
 
   assert.doesNotMatch(inbound, /deferStopFor\(channelId/)
   assert.doesNotMatch(inbound, /stopFor\(channelId/)
-  assert.match(inbound, /await runChannelTurn\(message, target\)/)
+  assert.match(inbound, /await runChannelTurn\(message, target(?:,[^)]*)?\)/)
 })
 
 test('ordinary steering has no queue or fast-forward reaction UI', async () => {

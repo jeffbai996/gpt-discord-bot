@@ -79,6 +79,7 @@ import { SummarizationScheduler } from './summarization/scheduler.ts'
 import { INTERRUPTED_MARKER, RETRY_PROMPT } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
+import { loadRelayConfig, TrustedRelayVerifier, type TrustedRelay } from './trusted-relay.ts'
 import { DEFAULT_OPENAI_MODEL, DEFAULT_SUMMARIZATION_MODEL } from './models.ts'
 import {
   DEFAULT_TOOL_CALL_WIDTH,
@@ -118,6 +119,7 @@ import OpenAI from 'openai'
 
 const STATE_DIR = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord')
 dotenv.config({ path: path.join(STATE_DIR, '.env') })
+const trustedRelays = new TrustedRelayVerifier(() => loadRelayConfig(STATE_DIR))
 
 function failureActions(messageId: string) {
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -146,7 +148,20 @@ function isNewerDiscordMessage(candidateId: string, anchorId: string): boolean {
   }
 }
 
-async function replyOrSend(message: Message, content: string): Promise<Message | null> {
+async function replyOrSend(
+  message: Message,
+  content: string,
+  replyToInbound = true,
+): Promise<Message | null> {
+  if (!replyToInbound) {
+    if (!message.channel.isSendable()) return null
+    try {
+      return await message.channel.send(content)
+    } catch (sendErr) {
+      console.error('[discord] send failed:', sendErr)
+      return null
+    }
+  }
   try {
     return await message.reply({ content, allowedMentions: { repliedUser: false } })
   } catch (err) {
@@ -484,6 +499,7 @@ interface QueuedChannelTurn {
   message: Message
   target: Message | null
   contentOverride?: string
+  actor?: TrustedRelay
   steered: boolean
 }
 const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
@@ -510,6 +526,7 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
       batch.length === 1 ? carrier.target : null,
       false,
       combined || undefined,
+      carrier.actor,
     )
   },
   channelId => activeTurns.consumeStopped(channelId),
@@ -703,10 +720,12 @@ async function handleUserMessage(
   message: Message,
   targetMessage: Message | null,
   expansion: boolean,
-  contentOverride?: string
+  contentOverride?: string,
+  actor?: TrustedRelay,
 ): Promise<void> {
   const channelId = message.channel.id
-  const userId = message.author.id
+  const userId = actor?.userId ?? message.author.id
+  const userName = actor?.userName ?? message.author.username
   // When a batched-queue turn folds several messages together, the combined
   // text comes in via contentOverride; otherwise use the message's own content.
   const userText = contentOverride ?? message.content
@@ -726,7 +745,11 @@ async function handleUserMessage(
   const steeringInbox = flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0'
     ? new SteeringInbox()
     : null
-  const lifecycle = new TurnLifecycleTracker(message)
+  // The signed marker is machine plumbing and gets deleted on admission. It
+  // must not collect user-message lifecycle reactions or noisy 404s.
+  const lifecycle = actor
+    ? new TurnLifecycleTracker(message, async () => {})
+    : new TurnLifecycleTracker(message)
   activeLifecycleTrackers.set(channelId, lifecycle)
   const turnGeneration = activeTurns.register(
     channelId,
@@ -943,7 +966,7 @@ async function handleUserMessage(
     if (placeholderTimer) { clearTimeout(placeholderTimer); placeholderTimer = null }
     if (workMessage) { startSpinner(); return }
     try {
-      const pending = replyOrSend(message, `💭 ✻ **${effortLabel}…**`)
+      const pending = replyOrSend(message, `💭 ✻ **${effortLabel}…**`, !actor)
       let timer: ReturnType<typeof setTimeout> | null = null
       const posted = await Promise.race([
         pending,
@@ -1368,7 +1391,7 @@ async function handleUserMessage(
       systemPrompt,
       history,
       userMessage: userText,
-      userName: message.author.username,
+      userName,
       model,
       reasoningEffort: apiEffort(flags.reasoning),
       imageParts,
@@ -1403,7 +1426,7 @@ async function handleUserMessage(
           systemPrompt,
           history,
           userMessage: userText,
-          userName: message.author.username,
+          userName,
           reasoningEffort: flags.reasoning,
           codexModel: flags.codexModel,
           extraText,
@@ -1819,7 +1842,7 @@ async function handleUserMessage(
           mergedMsg = workMessage
           workMessage = null
         } else {
-          mergedMsg = await replyOrSend(message, firstWithThought)
+          mergedMsg = await replyOrSend(message, firstWithThought, !actor)
         }
         bottomContentMessage = mergedMsg
       } else if (message.channel.isSendable()) {
@@ -1923,7 +1946,7 @@ async function handleUserMessage(
         })
         await errorMessage.edit({ content: errMsg, components: [failureActions(errorMessage.id)] })
       } else {
-        errorMessage = await replyOrSend(message, errMsg)
+        errorMessage = await replyOrSend(message, errMsg, !actor)
         if (errorMessage) {
           failedTurns.set(errorMessage.id, {
             channelId: message.channel.id,
@@ -1970,6 +1993,7 @@ async function runChannelTurn(
   message: Message,
   target: Message | null,
   contentOverride?: string,
+  actor?: TrustedRelay,
 ): Promise<void> {
   const cid = message.channel.id
   if (channelTurns.isRunning(cid) && activeTurns.isActive(cid)) {
@@ -1981,7 +2005,7 @@ async function runChannelTurn(
       .filter(Boolean).join('\n\n')
     if (await activeTurns.steer(
       cid,
-      frameLiveSteerMessage(`[${message.author.username}] ${text}`),
+      frameLiveSteerMessage(`[${actor?.userName ?? message.author.username}] ${text}`),
       () => activeLifecycleTrackers.get(cid)?.moveTo(message),
     )) {
       logTurnLifecycle({
@@ -1991,7 +2015,7 @@ async function runChannelTurn(
     }
   }
   const steered = channelTurns.isRunning(cid)
-  const outcome = await channelTurns.submit(cid, { message, target, contentOverride, steered })
+  const outcome = await channelTurns.submit(cid, { message, target, contentOverride, actor, steered })
   if (outcome === 'queued') {
     logTurnLifecycle({
       event: 'turn_queued', channelId: cid, queueDepth: channelTurns.queueDepth(cid),
@@ -2000,8 +2024,15 @@ async function runChannelTurn(
 }
 
 async function dispatchInboundMessage(message: Message): Promise<void> {
-  if (message.author.bot) return
-  const replyContext = await resolveReplyContext(message)
+  const relayInput = {
+    messageId: message.id,
+    channelId: message.channel.id,
+    authorId: message.author.id,
+    content: message.content,
+  }
+  const relay = message.author.bot ? trustedRelays.verify(relayInput, false) : null
+  if (message.author.bot && !relay) return
+  const replyContext = relay ? null : await resolveReplyContext(message)
   if (client.user && isAddressedToAnotherUser(
     client.user.id,
     message.mentions.users.values(),
@@ -2021,8 +2052,8 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
     const mine = access.canHandle({
       channelId: message.channel.id,
       parentChannelId: message.channel.isThread() ? message.channel.parentId : null,
-      userId: message.author.id,
-      isMention,
+      userId: relay?.userId ?? message.author.id,
+      isMention: relay ? true : isMention,
     })
     if (!mine) return
 
@@ -2039,17 +2070,25 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
     return
   }
   try {
-    await handleInboundMessage(message, replyContext)
+    const acceptedRelay = relay ? trustedRelays.verify(relayInput) ?? undefined : undefined
+    if (relay && !acceptedRelay) return
+    if (acceptedRelay) void message.delete().catch(() => {})
+    await handleInboundMessage(message, replyContext, acceptedRelay)
   } finally {
     release()
   }
 }
 
-async function handleInboundMessage(message: Message, replyContext?: ReplyContext | null): Promise<void> {
+async function handleInboundMessage(
+  message: Message,
+  replyContext?: ReplyContext | null,
+  relay?: TrustedRelay,
+): Promise<void> {
   const channelId = message.channel.id
   const parentChannelId = message.channel.isThread() ? message.channel.parentId : null
-  const userId = message.author.id
-  const isMention = client.user
+  const userId = relay?.userId ?? message.author.id
+  const inboundContent = relay?.payload ?? message.content
+  const isMention = relay ? true : client.user
     ? message.mentions.users.has(client.user.id) || replyContext?.authorId === client.user.id
     : false
   if (client.user && isAddressedToAnotherUser(
@@ -2059,7 +2098,7 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     replyContext ? { id: replyContext.authorId, bot: replyContext.authorIsBot } : null,
   )) return
 
-  if (memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId, parentChannelId)) {
+  if (!relay && memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId, parentChannelId)) {
     void ingestMessage(message)
     // Schedule summarization after ingestion so the message we just stored is
     // counted toward the threshold. Single-flight per channel; no-op if a
@@ -2071,18 +2110,18 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
 
   // Reserved before barge/queue handling: these are gpt's view-only agent
   // controls, never shell commands and never a reason to interrupt live work.
-  const agentCommand = parseAgentCommand(message.content, client.user?.id)
+  const agentCommand = parseAgentCommand(inboundContent, client.user?.id)
   if (agentCommand) {
     const response = runAgentCommand(agentCommands, channelId, agentCommand)
     if (agentCommand.action === 'clear') {
       await activeAgentViews.get(channelId)?.(agentCommands.snapshot(channelId))
     }
-    await replyOrSend(message, response)
+    await replyOrSend(message, response, !relay)
     return
   }
 
   // Lone ❌ / X message: hard-kill the in-flight turn before queue/barge logic.
-  if (isHardStopMessage(message.content)) {
+  if (isHardStopMessage(inboundContent)) {
     message.delete().catch(() => {})
     activeTurns.stop(channelId)
     return
@@ -2091,8 +2130,8 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
   // Ordinary in-flight messages steer the active Codex turn. If the transport
   // cannot accept them, they fall back to the channel queue without UI reactions.
   if (channelTurns.isRunning(channelId) && activeTurns.isActive(channelId)
-      && isInFlightStatusPing(message.content)) {
-    void replyOrSend(message, 'Still working — progress above')
+      && isInFlightStatusPing(inboundContent)) {
+    void replyOrSend(message, 'Still working — progress above', !relay)
       .catch(() => {})
     return
   }
@@ -2112,7 +2151,7 @@ async function handleInboundMessage(message: Message, replyContext?: ReplyContex
     }
   }
 
-  await runChannelTurn(message, target)
+  await runChannelTurn(message, target, relay?.payload, relay)
 }
 
 client.on('messageCreate', dispatchInboundMessage)
