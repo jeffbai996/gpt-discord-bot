@@ -1106,6 +1106,13 @@ async function handleUserMessage(
       + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
       + `dropped session; next turn starts fresh`)
   }
+  let pendingPostTurnRolloverUsage: number | undefined
+  const finishPostTurnRollover = async (): Promise<void> => {
+    const rolloverUsage = pendingPostTurnRolloverUsage
+    if (rolloverUsage === undefined) return
+    pendingPostTurnRolloverUsage = undefined
+    await compactAndDropCodexSession('post-turn', rolloverUsage)
+  }
 
   // Live tool trace: start a row as soon as a tool fires, then enrich that same
   // row with output/failure/diff when the tool completes. The final render still
@@ -1119,6 +1126,7 @@ async function handleUserMessage(
   let liveTraceClosed = false
   let liveWorkRehomeTask: Promise<void> | null = null
   let liveTraceRehomeTask: Promise<void> | null = null
+  const transientTraceCleanupArmed = new Set<string>()
   // Failsafe cleanup for collapse mode: the normal linger delete is only scheduled
   // at END of turn. If the process dies mid-turn, DeferredActions.rearm() still
   // removes the orphan after a restart. The lease must outlive the turn watchdog:
@@ -1258,6 +1266,20 @@ async function handleUserMessage(
     liveTraceMsgs = []
     liveTraceDirty = false
     for (const m of msgs) await m.delete().catch(() => {})
+  }
+  const scheduleTransientTraceCleanup = (msgs: Message[]): void => {
+    if (!transientTrace || !msgs.length) return
+    const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
+    for (const m of msgs) {
+      if (transientTraceCleanupArmed.has(m.id)) continue
+      transientTraceCleanupArmed.add(m.id)
+      deferredActions.schedule(client, {
+        channelId: m.channelId,
+        messageId: m.id,
+        action: 'delete',
+        dueAt: Date.now() + lingerMs,
+      })
+    }
   }
   const refreshAgentView = async (agents: CodexAgentSnapshot[]) => {
     liveAgents = agents
@@ -1511,11 +1533,11 @@ async function handleUserMessage(
         }
         // Post-turn rollover still matters for the first turn that crosses the
         // cap: we cannot know that until Codex reports usage, so compact/drop
-        // immediately after the answer and the following turn starts fresh.
+        // after the visible answer and trace-cleanup lease are committed. Session
+        // housekeeping must never hold the reply UI hostage.
         if (CODEX_SESSION_MAX_INPUT_TOKENS > 0
             && (result.usage?.inputTokens ?? 0) >= CODEX_SESSION_MAX_INPUT_TOKENS) {
-          await compactAndDropCodexSession('post-turn', result.usage?.inputTokens)
-          throwIfStopped()
+          pendingPostTurnRolloverUsage = result.usage!.inputTokens
         }
         setEnginePresence(false)
       } catch (e) {
@@ -1748,6 +1770,8 @@ async function handleUserMessage(
       if (workMessage && !targetMessage) {
         try { await workMessage.delete() } catch {}
       }
+      scheduleTransientTraceCleanup(liveTraceMsgs)
+      await finishPostTurnRollover()
       return
     }
     if (!body.trim() && result.files?.length) {
@@ -1759,6 +1783,8 @@ async function handleUserMessage(
         await message.channel.send({ files: result.files.slice(0, 10) })
       }
       await lifecycle.transition(codexFailureLifecycle ?? 'replied')
+      scheduleTransientTraceCleanup(liveTraceMsgs)
+      await finishPostTurnRollover()
       return
     }
 
@@ -1910,10 +1936,9 @@ async function handleUserMessage(
     // every page; live keeps one rolling window.
     const toDelete: Message[] = [...transientTraceMsgs]
     if (transientTrace && liveTraceMsgs.length) toDelete.push(...liveTraceMsgs)
-    if (toDelete.length) {
-      const lingerMs = Number(process.env.GPT_THOUGHT_LINGER_MS) || 60_000
-      for (const m of toDelete) deferredActions.schedule(client, { channelId: m.channelId, messageId: m.id, action: 'delete', dueAt: Date.now() + lingerMs })
-    }
+    scheduleTransientTraceCleanup(toDelete)
+
+    await finishPostTurnRollover()
 
     if (result.finishReason === 'length') {
       await lifecycle.transition(codexFailureLifecycle ?? 'truncated')
@@ -1971,6 +1996,7 @@ async function handleUserMessage(
       }
     } catch {}
   } finally {
+    await finishPostTurnRollover()
     if (activeAgentViews.get(channelId) === refreshAgentView) activeAgentViews.delete(channelId)
     if (activeLifecycleTrackers.get(channelId) === lifecycle) activeLifecycleTrackers.delete(channelId)
     await cleanupAttachmentFiles(imagePaths).catch(e => console.error('attachment cleanup failed:', e))

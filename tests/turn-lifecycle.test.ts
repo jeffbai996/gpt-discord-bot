@@ -145,3 +145,33 @@ test('session rollover cannot block final trace collapse indefinitely', async ()
   assert.match(rollover, /SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS/)
   assert.match(rollover, /channelSessions\.dropSession\(channelId\)/)
 })
+
+test('post-turn rollover runs only after the reply and trace cleanup are armed', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const resultStart = source.indexOf('// Post-turn rollover still matters')
+  const renderStart = source.indexOf('// Result is in hand', resultStart)
+  const cleanupStart = source.indexOf('const toDelete: Message[]', renderStart)
+  const cleanupEnd = source.indexOf('await finishPostTurnRollover()', cleanupStart)
+
+  assert.ok(resultStart >= 0)
+  assert.ok(renderStart > resultStart)
+  assert.ok(cleanupStart > renderStart)
+  assert.ok(cleanupEnd > cleanupStart)
+  assert.doesNotMatch(source.slice(resultStart, renderStart), /await compactAndDropCodexSession/)
+  assert.match(source.slice(resultStart, renderStart), /pendingPostTurnRolloverUsage\s*=/)
+  assert.match(source.slice(cleanupStart, cleanupEnd), /scheduleTransientTraceCleanup/)
+})
+
+test('silent and file-only completions also arm transient trace cleanup', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const silentStart = source.indexOf("if (!body.trim() && !result.files?.length)")
+  const fileOnlyStart = source.indexOf("if (!body.trim() && result.files?.length)", silentStart)
+  const normalStart = source.indexOf("const willThinking", fileOnlyStart)
+  const silentBranch = source.slice(silentStart, fileOnlyStart)
+  const fileOnlyBranch = source.slice(fileOnlyStart, normalStart)
+
+  assert.ok(silentStart >= 0)
+  assert.ok(fileOnlyStart > silentStart)
+  assert.match(silentBranch, /scheduleTransientTraceCleanup\(liveTraceMsgs\)/)
+  assert.match(fileOnlyBranch, /scheduleTransientTraceCleanup\(liveTraceMsgs\)/)
+})
