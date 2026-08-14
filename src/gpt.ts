@@ -76,6 +76,7 @@ import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
+import { settleWithin } from './promise-deadline.ts'
 import { INTERRUPTED_MARKER, RETRY_PROMPT } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
@@ -238,6 +239,9 @@ const CODEX_SESSION_MAX_INPUT_TOKENS = Number(
   process.env.GPT_CODEX_MAX_SESSION_INPUT_TOKENS
   ?? process.env.GPT_SESSION_ROLLOVER_TOKENS
   ?? 750_000
+)
+const SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS = Number(
+  process.env.GPT_SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS ?? 30_000
 )
 const CODEX_FALLBACK_MIN_ELAPSED_MS = Number(process.env.GPT_CODEX_FALLBACK_MIN_ELAPSED_MS) || 90_000
 // Keep tool-call headers and stdout/result previews narrow enough that Discord's
@@ -1081,8 +1085,17 @@ async function handleUserMessage(
   const compactAndDropCodexSession = async (reason: string, inputTokens?: number) => {
     let compacted = false
     try {
-      const summaryResult = await summarizer?.runForChannel(channelId)
-      compacted = !!summaryResult
+      if (summarizer) {
+        const summaryRun = await settleWithin(
+          summarizer.runForChannel(channelId),
+          SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS,
+        )
+        if (summaryRun.status === 'fulfilled') compacted = !!summaryRun.value
+        else console.error(
+          `[session-rollover] summarization timed out for ${channelId} after `
+          + `${SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS}ms; continuing final render`,
+        )
+      }
     } catch (e) {
       console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
     }

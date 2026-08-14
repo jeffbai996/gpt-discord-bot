@@ -133,3 +133,15 @@ test('both rolling-live and full-collapse traces are transient', async () => {
   assert.match(source, /const transientTrace = flags\.trace === 'live' \|\| flags\.trace === 'collapse'/)
   assert.match(source, /if \(transientTrace && liveTraceMsgs\.length\)/)
 })
+
+test('session rollover cannot block final trace collapse indefinitely', async () => {
+  const source = await readFile(new URL('../src/gpt.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('const compactAndDropCodexSession')
+  const end = source.indexOf('\n  // Live tool trace:', start)
+  const rollover = source.slice(start, end)
+
+  assert.ok(start >= 0)
+  assert.match(rollover, /settleWithin\(/)
+  assert.match(rollover, /SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS/)
+  assert.match(rollover, /channelSessions\.dropSession\(channelId\)/)
+})
