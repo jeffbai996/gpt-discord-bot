@@ -2111,7 +2111,10 @@ async function dispatchInboundMessage(message: Message): Promise<void> {
   try {
     const acceptedRelay = relay ? trustedRelays.verify(relayInput) ?? undefined : undefined
     if (relay && !acceptedRelay) return
-    if (acceptedRelay) void message.delete().catch(() => {})
+    // The helper that authored a relay reaps its own transport post after
+    // gateway delivery. gpt cannot delete another bot's message without broad
+    // Manage Messages permission, and silently swallowing that 403 left hex in
+    // the channel while pretending cleanup happened.
     await handleInboundMessage(message, replyContext, acceptedRelay)
   } finally {
     release()

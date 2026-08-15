@@ -91,4 +91,9 @@ test('Discord ingress verifies bot messages instead of dropping them wholesale',
   assert.doesNotMatch(inbound, /if \(message\.author\.bot\) return/)
   assert.match(inbound, /message\.author\.bot \? trustedRelays\.verify\(relayInput, false\)/)
   assert.match(inbound, /await handleInboundMessage\(message, replyContext, acceptedRelay\)/)
+  assert.doesNotMatch(
+    inbound,
+    /if \(acceptedRelay\) void message\.delete\(\)/,
+    'the helper owns and reaps relay posts; gpt lacks cross-bot delete permission',
+  )
 })
