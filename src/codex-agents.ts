@@ -271,10 +271,16 @@ export function renderAgentsPanel(
 ): string {
   if (!agents.length) return ''
   const running = agents.filter(agent => agent.status === 'running').length
-  const done = agents.length - running
+  // `done` was `agents.length - running`, so a failed run was reported as a
+  // success. Its only trace was the ✗ on its own row, which is exactly what a
+  // trimmed panel drops first (Jeff 2026-08-18).
+  const failed = agents.filter(agent => agent.status === 'failed').length
+  const done = agents.length - running - failed
   const total = agents.reduce((sum, agent) => sum + agent.tokens, 0)
   const spinner = final || running === 0 ? '●' : SPINNER[spinnerFrame % SPINNER.length]
-  const header = `${spinner} agents · gpt · ${running} running · ${done} done · ${fmtTokens(total)} tok`
+  // Omitted at zero: a permanent "0 failed" trains the eye to skip it.
+  const failedPart = failed ? ` · ${failed} failed` : ''
+  const header = `${spinner} agents · gpt · ${running} running · ${done} done${failedPart} · ${fmtTokens(total)} tok`
   const cells = agents.map(agent => {
     const glyph = agent.status === 'running'
       ? RUN_BLINK[spinnerFrame % RUN_BLINK.length]

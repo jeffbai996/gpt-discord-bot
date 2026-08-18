@@ -258,3 +258,39 @@ test('uses a standalone card when a combined Discord message would overflow', ()
   assert.match(cards[1], /^```\n◐ agents/)
   assert.ok(cards.every(card => card.length <= 2_000))
 })
+
+test('counts failed runs separately instead of calling them done', () => {
+  const panel = renderAgentsPanel([
+    {
+      id: 'one', path: '/root/inspect', label: 'inspect event stream', nickname: '',
+      model: 'gpt-5.6-terra', status: 'running', startedAt: 1_000, tokens: 8_200,
+    },
+    {
+      id: 'two', path: '/root/tests', label: 'review tests', nickname: '',
+      model: 'gpt-5.6-sol', status: 'done', startedAt: 1_000, endedAt: 25_000,
+      tokens: 17_100,
+    },
+    {
+      id: 'three', path: '/root/build', label: 'build docs', nickname: '',
+      model: 'gpt-5.6-sol', status: 'failed', startedAt: 1_000, endedAt: 25_000,
+      tokens: 700,
+    },
+  ], 31_000, 1)
+
+  // `done` was `agents.length - running`, so a failed run was reported as a
+  // success. Its only trace was the ✗ on its own row (Jeff 2026-08-18).
+  assert.match(panel, /1 running · 1 done · 1 failed · 26\.0k tok/)
+})
+
+test('omits the failed segment when nothing failed', () => {
+  const panel = renderAgentsPanel([
+    {
+      id: 'one', path: '/root/tests', label: 'review tests', nickname: '',
+      model: 'gpt-5.6-sol', status: 'done', startedAt: 1_000, endedAt: 25_000,
+      tokens: 17_100,
+    },
+  ], 31_000, 1)
+
+  assert.ok(!panel.includes('failed'), 'a permanent "0 failed" trains the eye to skip it')
+  assert.match(panel, /0 running · 1 done · 17\.1k tok/)
+})
