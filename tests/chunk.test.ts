@@ -32,3 +32,19 @@ test('chunk: re-opens code fence across the split', () => {
   const reopened = out.slice(1).some(c => c.startsWith('```' + lang))
   assert.ok(reopened, 'expected at least one chunk to reopen the code fence')
 })
+
+test('chunk: keeps a long fenced document fenced across every page', () => {
+  const code = Array.from(
+    { length: 260 },
+    (_, i) => `section ${String(i + 1).padStart(3, '0')} ${'x'.repeat(28)}`,
+  ).join('\n')
+  const text = `\`\`\`text\n${code}\n\`\`\``
+  const out = chunk(text, 500)
+
+  assert.ok(out.length >= 5, 'expected a genuinely multi-page document')
+  assert.ok(out.every(page => page.length <= 500), 'every page must fit Discord')
+  assert.ok(out.every(page => (page.match(/\`\`\`/g) ?? []).length % 2 === 0),
+    'every page must be independently fenced')
+  assert.ok(out.slice(1).every(page => page.startsWith('```text\n')),
+    'every continuation page must reopen the original language')
+})
