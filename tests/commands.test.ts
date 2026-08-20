@@ -171,6 +171,7 @@ test('/gpt model choices use durable tier labels', () => {
     'gpt-5.6-sol - frontier coding',
     'gpt-5.6-terra - balanced',
     'gpt-5.6-luna - high-throughput',
+    'Daybreak Blue - defensive cyber',
   ])
 })
 

@@ -10,6 +10,7 @@ export const OPENAI_MODELS = [
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',
+  'gpt-daybreak-blue-latest',
 ] as const
 
 export type OpenAIModel = typeof OPENAI_MODELS[number]

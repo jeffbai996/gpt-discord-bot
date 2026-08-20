@@ -213,6 +213,7 @@ export const gptCommand = new SlashCommandBuilder()
         { name: 'gpt-5.6-sol - frontier coding', value: 'gpt-5.6-sol' },
         { name: 'gpt-5.6-terra - balanced', value: 'gpt-5.6-terra' },
         { name: 'gpt-5.6-luna - high-throughput', value: 'gpt-5.6-luna' },
+        { name: 'Daybreak Blue - defensive cyber', value: 'gpt-daybreak-blue-latest' },
       ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
