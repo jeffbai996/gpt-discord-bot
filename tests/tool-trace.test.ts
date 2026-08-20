@@ -102,3 +102,33 @@ test('live traces keep one rolling code-block window with the newest rows', () =
   assert.doesNotMatch(cards[0], /command-0-/)
   assert.ok(cards[0].length <= 2000)
 })
+
+test('tool traces preserve long technical identifiers', () => {
+  const commit = '4e1b5741661d7854bd1bf8435d3f5f4e67da9012'
+  const cards = renderTraceCards([
+    `  ${commit} refs/heads/main`,
+    '  userdata-5f52326e8f5b4f799ce388bc5d84d310.json.bak',
+  ], 'on')
+  const rendered = cards.join('\n')
+
+  assert.match(rendered, new RegExp(commit))
+  assert.match(rendered, /refs\/heads\/main/)
+  assert.match(rendered, /userdata-5f52326e8f5b4f799ce388bc5d84d310/)
+  assert.doesNotMatch(rendered, /<REDACTED>/)
+})
+
+test('tool traces redact PII and explicitly labelled credentials', () => {
+  const ssn = ['123', '45', '6789'].join('-')
+  const credential = ['sk', 'test_abcdefghijklmnopqrstuvwxyz123456'].join('-')
+  const cards = renderTraceCards([
+    '  contact user@example.com or 202-555-0147',
+    `  ssn ${ssn}`,
+    `  token=${credential}`,
+  ], 'on')
+  const rendered = cards.join('\n')
+
+  assert.doesNotMatch(rendered, /user@example\.com|202-555-0147/)
+  assert.ok(!rendered.includes(ssn))
+  assert.ok(!rendered.includes(credential))
+  assert.equal(rendered.match(/<REDACTED>/g)?.length, 4)
+})

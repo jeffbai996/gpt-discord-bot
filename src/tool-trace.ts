@@ -4,10 +4,25 @@ export const DEFAULT_TOOL_CALL_WIDTH = 79
 export const DEFAULT_TOOL_OUTPUT_WIDTH = 76
 const TRACE_BODY_CHAR_BUDGET = 1800
 const MEGA_LINE_MAX = 300
-const SECRET_RE = /[A-Za-z0-9_\-]{32,256}/g
 const TRACE_FAILSAFE_GRACE_MS = 5 * 60_000
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const WIDE_RE = /\p{Extended_Pictographic}|[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/u
+const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi
+const NORTH_AMERICAN_PHONE_RE = /(?<![\dA-Z])(?:\+?1[ .-]?)?\(?[2-9]\d{2}\)?[ .-][2-9]\d{2}[ .-]\d{4}(?![\dA-Z])/gi
+const SSN_RE = /\b\d{3}[- ]\d{2}[- ]\d{4}\b/g
+const LABELLED_CREDENTIAL_RE = /\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd|authorization|cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi
+const AUTH_CREDENTIAL_RE = /\b((?:Bearer|Bot)\s+)[A-Z0-9._~+/=-]{8,}/gi
+const JWT_RE = /\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\b/gi
+
+export function redactTraceSensitiveData(value: string): string {
+  return value
+    .replace(EMAIL_RE, '<REDACTED>')
+    .replace(NORTH_AMERICAN_PHONE_RE, '<REDACTED>')
+    .replace(SSN_RE, '<REDACTED>')
+    .replace(LABELLED_CREDENTIAL_RE, '$1<REDACTED>')
+    .replace(AUTH_CREDENTIAL_RE, '$1<REDACTED>')
+    .replace(JWT_RE, '<REDACTED>')
+}
 
 export function displayWidth(value: string): number {
   let width = 0
@@ -122,9 +137,10 @@ export function renderTraceCards(
 ): string[] {
   if (mode === 'off') return []
   const lines = rawLines.map((line) => {
-    const capped = line.length > MEGA_LINE_MAX
-      ? line.slice(0, MEGA_LINE_MAX - 1) + '…'
-      : line
+    const safe = redactTraceSensitiveData(line)
+    const capped = safe.length > MEGA_LINE_MAX
+      ? safe.slice(0, MEGA_LINE_MAX - 1) + '…'
+      : safe
     return truncateDisplayWidth(padTraceLine(capped), DEFAULT_TOOL_CALL_WIDTH)
   })
   const blocks = splitTraceBlocks(lines)
@@ -133,7 +149,7 @@ export function renderTraceCards(
     : paginateTraceBlocks(blocks)
 
   return pages.map((page, index) => {
-    const body = page.join('\n').replace(SECRET_RE, '<REDACTED>')
+    const body = page.join('\n')
     const header = index === 0 ? '🔧 **Tool trace**\n' : ''
     return `${header}\`\`\`diff\n${body}\n\`\`\``
   })
