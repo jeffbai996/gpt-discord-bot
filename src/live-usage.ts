@@ -37,11 +37,16 @@ interface TurnProgress extends LiveUsageDelta {
 }
 
 const turns = new Map<string, TurnProgress>()
+const activeTurnKeys = new Set<string>()
 let _file: string | null = null
+let _activityHeartbeatMs = 10_000
+let _activityTimer: ReturnType<typeof setInterval> | null = null
 
-export function initLiveUsage(file: string): void {
+export function initLiveUsage(file: string, activityHeartbeatMs = 10_000): void {
   _file = file
+  _activityHeartbeatMs = Math.max(1, activityHeartbeatMs)
   save()
+  syncActivityTimer()
 }
 
 function save(): void {
@@ -56,6 +61,11 @@ function save(): void {
         model: v.model,
         ts: v.ts,
       }])),
+      activity: activeTurnKeys.size === 0
+        ? ''
+        : activeTurnKeys.size === 1 ? 'running' : `${activeTurnKeys.size} running`,
+      activeTurns: activeTurnKeys.size,
+      activityTs: Date.now(),
       ts: Date.now(),
     }
     // Write-then-rename: the sampler reads this file on its own schedule and a
@@ -65,6 +75,30 @@ function save(): void {
     writeFileSync(tmp, JSON.stringify(payload))
     renameSync(tmp, _file)
   } catch { /* best-effort: telemetry must never break a turn */ }
+}
+
+function syncActivityTimer(): void {
+  if (activeTurnKeys.size > 0 && !_activityTimer) {
+    _activityTimer = setInterval(save, _activityHeartbeatMs)
+    _activityTimer.unref?.()
+  } else if (activeTurnKeys.size === 0 && _activityTimer) {
+    clearInterval(_activityTimer)
+    _activityTimer = null
+  }
+}
+
+/** A Discord turn entered the in-flight registry, before its first token event. */
+export function beginActivity(turnKey: string): void {
+  activeTurnKeys.add(turnKey)
+  save()
+  syncActivityTimer()
+}
+
+/** A Discord turn left the in-flight registry after all response cleanup. */
+export function endActivity(turnKey: string): void {
+  activeTurnKeys.delete(turnKey)
+  save()
+  syncActivityTimer()
 }
 
 /** Add one model roundtrip's reported usage to the turn currently in flight. */
@@ -129,6 +163,10 @@ export function liveSnapshot(): LiveUsageDelta & { turns: number } {
 
 // Test-only: reset all state.
 export function _reset(): void {
+  if (_activityTimer) clearInterval(_activityTimer)
+  _activityTimer = null
+  activeTurnKeys.clear()
   turns.clear()
   _file = null
+  _activityHeartbeatMs = 10_000
 }

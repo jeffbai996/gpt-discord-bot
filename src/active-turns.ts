@@ -8,6 +8,8 @@
 // turn and take over, but normal message barge-ins are deferred until a Codex
 // lifecycle boundary. That avoids killing the model mid-thought/output while still
 // stopping before the next tool action, where the queued replacement can run.
+import { beginActivity, endActivity } from './live-usage.ts'
+
 type Killer = () => void
 type SteeringAccepted = () => void | Promise<void>
 type Steerer = (text: string, onAccepted?: SteeringAccepted) => Promise<boolean>
@@ -49,6 +51,7 @@ class ActiveTurns {
     if (steer) this.steerers.set(channelId, steer)
     else this.steerers.delete(channelId)
     this.startedAt.set(channelId, Date.now())
+    beginActivity(channelId)
     return generation
   }
 
@@ -62,6 +65,7 @@ class ActiveTurns {
     this.busyTool.delete(channelId)
     this.steeredAfter.delete(channelId)
     this.clearPendingStop(channelId)
+    endActivity(channelId)
     this.resolveIdleIfNeeded()
   }
 

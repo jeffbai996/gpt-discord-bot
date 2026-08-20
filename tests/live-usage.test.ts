@@ -6,6 +6,7 @@ import path from 'node:path'
 import {
   initLiveUsage, noteRoundtrip, clearTurn, beginTurn, liveSnapshot, _reset,
 } from '../src/live-usage.ts'
+import { activeTurns } from '../src/active-turns.ts'
 import { rolloutOutputDelta, rolloutUsageDelta } from '../src/codex-chat.ts'
 
 async function tmpFile(): Promise<string> {
@@ -120,6 +121,37 @@ test('in-flight totals reach disk for the fleet sampler to read', async () => {
   clearTurn('thread-a')
   const after = JSON.parse(await readFile(file, 'utf8'))
   assert.deepEqual(after.turns, {})
+})
+
+test('activity heartbeat follows the full turn lifecycle and refreshes', async () => {
+  _reset()
+  const file = await tmpFile()
+  initLiveUsage(file, 5)
+
+  activeTurns.register('heartbeat-channel-a', () => {})
+  const started = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(started.activity, 'running')
+  assert.equal(started.activeTurns, 1)
+  assert.ok(started.activityTs > 0)
+
+  activeTurns.register('heartbeat-channel-b', () => {})
+  const concurrent = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(concurrent.activity, '2 running')
+  assert.equal(concurrent.activeTurns, 2)
+
+  await new Promise(resolve => setTimeout(resolve, 15))
+  const refreshed = JSON.parse(await readFile(file, 'utf8'))
+  assert.ok(refreshed.activityTs > concurrent.activityTs)
+
+  activeTurns.done('heartbeat-channel-a')
+  const oneLeft = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(oneLeft.activity, 'running')
+  assert.equal(oneLeft.activeTurns, 1)
+
+  activeTurns.done('heartbeat-channel-b')
+  const finished = JSON.parse(await readFile(file, 'utf8'))
+  assert.equal(finished.activity, '')
+  assert.equal(finished.activeTurns, 0)
 })
 
 test('full in-flight usage reaches disk for dollar accounting', async () => {
