@@ -38,8 +38,10 @@ export class CodexStoppedError extends Error {
   }
 }
 
-// Same binary the codex *tool* uses — Codex (OpenAI GPT-5.6) under nvm v22.
-const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
+// Same binary the codex *tool* uses. The default follows the runtime user's
+// home directory so a public checkout contains no machine-specific path.
+const CODEX_BIN = process.env.GPT_CODEX_BIN ||
+  path.join(os.homedir(), '.nvm', 'versions', 'node', 'v22.22.2', 'bin', 'codex')
 
 // codex inherits gpt's env for SQUAD_STORE_URL and friends, but dotenv also
 // loads DISCORD_BOT_TOKEN / GEMINI_API_KEY into process.env -- and codex
@@ -82,14 +84,11 @@ const DEFAULT_HEARTBEAT_MS = Number(process.env.GPT_CODEX_HEARTBEAT_MS) || 5_000
 const DEFAULT_KILL_GRACE_MS = Number(process.env.GPT_CODEX_KILL_GRACE_MS) || 5_000
 const MAX_STDERR_CHARS = Number(process.env.GPT_CODEX_STDERR_MAX_CHARS) || 64 * 1024
 
-// Squad-memory in the codex path: rather than an MCP server, we lean on codex's
-// agentic shell — it can run the shared-memory CLI directly (verified: works under
-// `-s read-only`, the CLI POSTs/GETs the local Flask store over loopback). The
-// model decides when to recall, exactly like a tool call. This is how the codex
-// path keeps squad-memory after the chat-engine swap (codex already has web).
-const SQUAD_STORE_BIN = process.env.GPT_SQUAD_STORE_BIN || '/home/user/.local/bin/shared-memory'
-const VECGREP_BIN = process.env.GPT_VECGREP_BIN || '/home/user/.local/bin/vecgrep'
-const IBKR_BIN = process.env.GPT_IBKR_BIN || '/home/user/.local/bin/ibkr'
+// Shared-memory access is deliberately opt-in. Public clones should not assume
+// the name or location of a private local service.
+const SQUAD_STORE_BIN = process.env.GPT_SHARED_MEMORY_BIN || process.env.GPT_SQUAD_STORE_BIN || ''
+const VECGREP_BIN = process.env.GPT_VECGREP_BIN ||
+  path.join(os.homedir(), '.local', 'bin', 'vecgrep')
 const LIVE_PROGRESS_INSTRUCTION =
   'Keep the Discord user visibly informed while you work: send a concise commentary update early, ' +
   'then another whenever the activity changes or roughly once a minute during long work. Commentary ' +
@@ -215,22 +214,16 @@ function buildPrompt(input: CodexChatInput): string {
     '--- You are chatting in a Discord conversation. Recent history (oldest first): ---',
     transcript || '(no prior messages)',
     input.extraText?.trim() ? `\n[Additional context]\n${input.extraText.trim()}` : '',
-    '--- Squad memory (use when relevant) ---',
-    `You can search the squad's shared long-term memory — durable facts about Jeff, his ` +
-      `family, his portfolio/projects, preferences, and past decisions — by running this shell ` +
-      `command:\n  ${SQUAD_STORE_BIN} recall "<search query>"\nRun it BEFORE replying whenever ` +
-      `the message turns on squad-specific knowledge you don't already have (a person, a ` +
-      `preference, a project, prior context). Skip it for general knowledge, code, or casual ` +
-      `chat — don't slow those down.`,
-    `For deeper semantic search across the whole squad corpus (past Discord conversations, indexed files, all memories/journals), run: ${VECGREP_BIN} search "<query>" — use it when recall isn't enough or you need older chat context; only when the question genuinely needs it.`,
-    `For Jeff's live IBKR brokerage data (real quotes, positions, margin/liquidity, P&L, technicals, risk metrics), run the ${IBKR_BIN} CLI. Examples: ${IBKR_BIN} quote MU  |  ${IBKR_BIN} positions  |  ${IBKR_BIN} margin  |  ${IBKR_BIN} pnl  |  ${IBKR_BIN} tools (lists all 34, then ${IBKR_BIN} <tool> '<json-args>' to call any). Use it whenever the question needs real account or market numbers - never guess prices or invent positions. Output is sensitive: only share portfolio specifics where Jeff already is.`,
-    `You are a FULL squad member — you can RECORD to the shared brain, not just read it. When `
-      + `something durable is worth saving (a decision, a preference, a person/project fact, a `
-      + `to-do), run ONE of these (always pass the --discord-chat-id shown so an undo card posts):\n`
-      + `  ${SQUAD_STORE_BIN} memory add --type project|user|feedback|reference --name "<short name>" --tags "a,b" --discord-chat-id "${input.channelId ?? ''}" "<body>"\n`
-      + `  ${SQUAD_STORE_BIN} journal add --discord-chat-id "${input.channelId ?? ''}" "<moment>"\n`
-      + `  ${SQUAD_STORE_BIN} todo add --discord-chat-id "${input.channelId ?? ''}" "<task>"\n`
-      + `Save ONLY genuinely durable, reusable facts — never chit-chat, recaps, or progress notes.`,
+    ...(SQUAD_STORE_BIN ? [
+      '--- Shared memory (use when configured) ---',
+      `You can search configured shared long-term memory by running:\n  ${SQUAD_STORE_BIN} recall "<search query>"\nRun it before replying only when the message turns on stored facts, preferences, projects, or prior context. Skip it for general knowledge, code, or casual chat.`,
+      `For deeper semantic search across configured indexed documents, run: ${VECGREP_BIN} search "<query>" — only when the question genuinely needs older context.`,
+      `When a durable fact is worth saving, run one of these commands (always pass the shown Discord chat id):\n`
+        + `  ${SQUAD_STORE_BIN} memory add --type project|user|feedback|reference --name "<short name>" --tags "a,b" --discord-chat-id "${input.channelId ?? ''}" "<body>"\n`
+        + `  ${SQUAD_STORE_BIN} journal add --discord-chat-id "${input.channelId ?? ''}" "<moment>"\n`
+        + `  ${SQUAD_STORE_BIN} todo add --discord-chat-id "${input.channelId ?? ''}" "<task>"\n`
+        + `Save only genuinely durable, reusable facts — never chit-chat, recaps, or progress notes.`,
+    ] : []),
     `You can set your own Discord status: include [[presence: <short status>]] anywhere in your reply and it'll be applied to your presence + stripped from the message. Use it sparingly — only for a genuine status change.`,
     LIVE_PROGRESS_INSTRUCTION,
     '--- New message ---',

@@ -23,11 +23,11 @@ export { ToolRegistry } from './registry.ts'
 export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore | null = null, embedClient: OpenAI = client): Promise<ToolRegistry> {
   const registry = new ToolRegistry()
   registry.register(fetchUrlTool)
-  // browse drives Jeff's logged-in Chrome (CDP attach) — reads pages behind a
-  // login / heavy JS that fetch_url's plain GET can't. Same host, same `jbai` user.
+  // browse drives a persistent Chrome session (CDP attach) — reads pages behind
+  // a login / heavy JS that fetch_url's plain GET can't.
   registry.register(browseTool)
   registry.register(makeWebSearchTool(client))
-  // Registered unconditionally: squad-memory search talks to shared-memory over
+  // Registered unconditionally: squad-memory search talks to the shared API over
   // HTTP, so it needs no local SQLite store (unlike search_memory below).
   registry.register(makeSquadMemoryTool())
   // Same posture: the squad files read-tool is HTTP-only, no local store.

@@ -1,6 +1,6 @@
 import type { Tool } from './registry.ts'
 
-// Shapes returned by shared-memory GET /api/files and /api/files/:id, served on
+// Shapes returned by the shared API's GET /api/files and /api/files/:id, served on
 // the local Flask bind at http://127.0.0.1:5005. The /squad/... prefix only
 // exists on the external funnel, so we use the bare /api path here.
 interface FileEntry {

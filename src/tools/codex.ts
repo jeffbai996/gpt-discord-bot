@@ -2,15 +2,17 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { rm } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
+import os from 'node:os'
 import path from 'node:path'
 import type { Tool } from './registry.ts'
 import { SQUAD_STORE_IDENTITY } from '../codex-chat.ts'
 
 const execFileAsync = promisify(execFile)
-const CODEX_BIN = process.env.GPT_CODEX_BIN || '/home/user/.nvm/versions/node/v22.22.2/bin/codex'
-const REPOS_DIR = '/home/user/repos'
+const CODEX_BIN = process.env.GPT_CODEX_BIN ||
+  path.join(os.homedir(), '.nvm', 'versions', 'node', 'v22.22.2', 'bin', 'codex')
+const REPOS_DIR = process.env.GPT_REPOS_DIR || path.join(os.homedir(), 'repos')
 const TIMEOUT_MS = 230_000 // ~4 min — this runs in the bot's own process, so there's
-// no Claude-Code 60s hook ceiling (unlike the shared-context /code passthrough).
+// no short hook ceiling.
 const OUT_CAP = 6000
 const HELPER_TIMEOUT_MS = Number(process.env.GPT_VOICE_CODEX_TIMEOUT_MS || 1_800_000)
 const HELPER_OUT_CAP = 24_000
@@ -116,7 +118,7 @@ export function makeCodexTool(): Tool {
       type: 'object',
       properties: {
         task: { type: 'string', description: 'The question or task for Codex about the repo.' },
-        repo: { type: 'string', description: 'Repo under ~/repos to inspect (e.g. shared-context, gpt-bot, gem-bot). Defaults to shared-context.' }
+        repo: { type: 'string', description: 'Repo under ~/repos to inspect. Defaults to gpt-bot.' }
       },
       required: ['task']
     },

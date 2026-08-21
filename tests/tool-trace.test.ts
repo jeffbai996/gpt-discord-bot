@@ -103,6 +103,22 @@ test('live traces keep one rolling code-block window with the newest rows', () =
   assert.ok(cards[0].length <= 2000)
 })
 
+test('embedded fences cannot break out of the tool trace code block', () => {
+  const fence = '`'.repeat(3)
+  const cards = renderTraceCards([
+    '+ ● shell(command output)',
+    `  ${fence}diff`,
+    '+ added a line',
+    `  ${fence}`,
+    '  output after the embedded fence',
+  ], 'collapse')
+  const rendered = cards.join('\n')
+
+  assert.equal(cards.length, 1)
+  assert.equal(rendered.split(fence).length - 1, 2, 'only the outer fence may remain raw')
+  assert.match(rendered, /output after the embedded fence\n```$/)
+})
+
 test('tool traces preserve long technical identifiers', () => {
   const commit = '4e1b5741661d7854bd1bf8435d3f5f4e67da9012'
   const cards = renderTraceCards([

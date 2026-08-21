@@ -13,6 +13,7 @@ const SSN_RE = /\b\d{3}[- ]\d{2}[- ]\d{4}\b/g
 const LABELLED_CREDENTIAL_RE = /\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|passwd|pwd|authorization|cookie)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi
 const AUTH_CREDENTIAL_RE = /\b((?:Bearer|Bot)\s+)[A-Z0-9._~+/=-]{8,}/gi
 const JWT_RE = /\beyJ[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\.[A-Z0-9_-]{8,}\b/gi
+const FENCE_RUN_RE = /`{3,}/g
 
 export function redactTraceSensitiveData(value: string): string {
   return value
@@ -22,6 +23,12 @@ export function redactTraceSensitiveData(value: string): string {
     .replace(LABELLED_CREDENTIAL_RE, '$1<REDACTED>')
     .replace(AUTH_CREDENTIAL_RE, '$1<REDACTED>')
     .replace(JWT_RE, '<REDACTED>')
+}
+
+function neutralizeTraceFences(value: string): string {
+  // Trace rows live inside one outer Discord fence. Keep embedded Markdown
+  // visually intact while preventing it from closing that rendering wrapper.
+  return value.replace(FENCE_RUN_RE, run => [...run].join('\u200b'))
 }
 
 export function displayWidth(value: string): number {
@@ -137,7 +144,7 @@ export function renderTraceCards(
 ): string[] {
   if (mode === 'off') return []
   const lines = rawLines.map((line) => {
-    const safe = redactTraceSensitiveData(line)
+    const safe = neutralizeTraceFences(redactTraceSensitiveData(line))
     const capped = safe.length > MEGA_LINE_MAX
       ? safe.slice(0, MEGA_LINE_MAX - 1) + '…'
       : safe

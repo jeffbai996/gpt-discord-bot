@@ -358,7 +358,7 @@ git commit -m "refactor(core): entry depends on Provider interface, not OpenAICl
 ## Deploy (after all 4 tasks green)
 
 - [ ] Push: `git push origin main`
-- [ ] host-a: check state first (`git fetch && git rev-list --left-right --count HEAD...origin/main`), then `git pull --ff-only origin main`, `npm install`, `systemctl --user restart gpt.service`, confirm `is-active`.
+- [ ] Deployment host: check state first (`git fetch && git rev-list --left-right --count HEAD...origin/main`), then `git pull --ff-only origin main`, `npm install`, restart the service, and confirm it is active.
 - [ ] Verify Gem still replies in its channel (behavior unchanged is the whole point of Phase 0).
 
 ## Definition of done

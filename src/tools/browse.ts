@@ -4,8 +4,8 @@ import type { Tool } from './registry.ts'
 
 const execFileAsync = promisify(execFile)
 
-// The `browse` CLI on this host (shared-context modules/browse). It auto-attaches to
-// Jeff's persistent logged-in Chrome over CDP when one is up, so it can read pages
+// The `browse` CLI on this host auto-attaches to a persistent logged-in Chrome
+// session over CDP when one is up, so it can read pages
 // BEHIND A LOGIN without re-auth; otherwise it falls back to anonymous headless.
 // Overridable for non-default installs.
 const BROWSE_BIN = process.env.GPT_BROWSE_BIN || `${process.env.HOME}/.local/bin/browse`
@@ -13,14 +13,14 @@ const TIMEOUT_MS = 45_000
 const OUT_CAP = 8000
 
 // Why a separate tool from fetch_url: fetch_url does a plain HTTP GET (no JS, no
-// cookies) — great for public articles, useless for anything that needs Jeff's
+// cookies) — great for public articles, useless for anything that needs the user's
 // session or client-side rendering. `browse` drives a real (logged-in) Chrome, so
 // it sees JS-rendered and authenticated pages. The model picks based on whether
 // the page needs a login / heavy JS.
 export const browseTool: Tool = {
   name: 'browse',
   description:
-    'Read a web page through a REAL browser (Jeff\'s logged-in Chrome on this host). Use this instead of fetch_url when the page needs a login (it inherits Jeff\'s session, no re-auth), renders content with JavaScript, or fetch_url returned an empty/blocked result. Returns the page\'s visible text (up to ~8000 chars). Read-only — it never clicks, types, or submits.',
+    'Read a web page through a real browser session on this host. Use this instead of fetch_url when the page needs a login, renders content with JavaScript, or fetch_url returned an empty/blocked result. Returns the page\'s visible text (up to ~8000 chars). Read-only — it never clicks, types, or submits.',
   parameters: {
     type: 'object',
     properties: {
