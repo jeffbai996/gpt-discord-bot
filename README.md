@@ -279,6 +279,19 @@ ssh <deploy-user>@<deploy-host> \
 
 `SIGUSR2` requests the normal in-band deploy restart: active turns drain, duplicate requests coalesce, queued work is preserved, and a transient unit restarts the service from outside its cgroup. Use a direct `systemctl --user restart gpt` only for recovery when the bot cannot process the signal.
 
+Install the tracked resource guard so browser-heavy Codex turns cannot trigger
+a host-wide OOM:
+
+```bash
+install -Dm644 systemd/gpt.service.d/50-memory-guard.conf \
+  ~/.config/systemd/user/gpt.service.d/50-memory-guard.conf
+systemctl --user daemon-reload
+```
+
+The guard starts reclaim at 4 GiB and contains a runaway turn at 5 GiB plus
+512 MiB of swap. `OOMPolicy=kill` terminates the complete poisoned process
+tree, and the service's existing `Restart=always` starts a clean bot.
+
 For persona or access changes only:
 
 ```bash
