@@ -407,6 +407,7 @@ export function normalizeAppServerNotification(message: any): any | null {
   const method = String(message?.method ?? '')
   const params = message?.params ?? {}
   if (method === 'turn/started') return { type: 'turn.started' }
+  if (method === 'thread/compacted') return { type: 'thread.compacted' }
   if (method === 'turn/completed') {
     return {
       type: 'turn.completed',
@@ -454,6 +455,9 @@ export function normalizeAppServerNotification(message: any): any | null {
       normalized.type = 'reasoning'
       normalized.text = [...(item.summary ?? []), ...(item.content ?? [])].join('\n')
       break
+    case 'contextCompaction':
+      normalized.type = 'context_compaction'
+      break
     default:
       return null
   }
@@ -461,6 +465,15 @@ export function normalizeAppServerNotification(message: any): any | null {
     type: method === 'item/started' ? 'item.started' : 'item.completed',
     item: normalized,
   }
+}
+
+export function compactionLifecycleEvent(event: any): LifecycleEvent | null {
+  if ((event?.type === 'item.started' || event?.type === 'item.completed')
+      && event.item?.type === 'context_compaction') {
+    return { type: 'compaction', active: event.type === 'item.started' }
+  }
+  if (event?.type === 'thread.compacted') return { type: 'compaction', active: false }
+  return null
 }
 
 // Run a chat turn through the Codex CLI instead of the OpenAI API. Returns a
@@ -1168,6 +1181,8 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     lines.push(JSON.stringify(obj))
     try {
       if (isMeaningfulCodexActivity(obj)) supervisor.markActivity()
+      const compaction = compactionLifecycleEvent(obj)
+      if (compaction) input.onEvent?.(compaction)
       // Barge-safety: track whether codex is mid a DESTRUCTIVE tool (shell/file-edit)
       // so canBarge() blocks a barge that would SIGKILL a half-written file. Set on
       // the item.started, cleared on the matching item.completed. web_search/reasoning

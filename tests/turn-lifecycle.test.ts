@@ -144,6 +144,8 @@ test('session rollover cannot block final trace collapse indefinitely', async ()
   assert.match(rollover, /settleWithin\(/)
   assert.match(rollover, /SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS/)
   assert.match(rollover, /channelSessions\.dropSession\(channelId\)/)
+  assert.match(rollover, /setLiveCompacting\(true\)/)
+  assert.match(rollover, /setLiveCompacting\(false\)/)
 })
 
 test('post-turn rollover runs only after the reply and trace cleanup are armed', async () => {

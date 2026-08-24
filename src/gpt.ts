@@ -871,6 +871,7 @@ async function handleUserMessage(
   let liveNarrationTrace: string[] = []
   let liveDetail = ''
   let liveFooter = ''
+  let liveCompacting = false
   let spinnerGlyph = '✻'
   let spinnerDots = '…'
   let pulseAgentPanel: () => void = () => {}
@@ -1023,6 +1024,7 @@ async function handleUserMessage(
       const accumulatesReasoning = flags.thinking === 'on' || flags.thinking === 'collapse'
       const display = formatLiveWorkMessage({
         effortLabel,
+        activity: liveCompacting ? 'compacting' : 'thinking',
         headline: accumulatesReasoning ? '' : liveHeadline,
         reasoningTrace: accumulatesReasoning ? liveReasoningTrace : [],
         detail: liveDetail,
@@ -1082,29 +1084,43 @@ async function handleUserMessage(
     queueLiveRender()
   }
 
+  const setLiveCompacting = (active: boolean): void => {
+    if (liveCompacting === active || liveUiClosed) return
+    liveCompacting = active
+    // Compaction owns the card while active. On completion the prior reasoning
+    // and commentary remain in memory and naturally render again.
+    liveProgressHoldUntil = 0
+    queueLiveRender()
+  }
+
   const compactAndDropCodexSession = async (reason: string, inputTokens?: number) => {
     let compacted = false
+    setLiveCompacting(true)
     try {
-      if (summarizer) {
-        const summaryRun = await settleWithin(
-          summarizer.runForChannel(channelId),
-          SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS,
-        )
-        if (summaryRun.status === 'fulfilled') compacted = !!summaryRun.value
-        else console.error(
-          `[session-rollover] summarization timed out for ${channelId} after `
-          + `${SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS}ms; continuing final render`,
-        )
+      try {
+        if (summarizer) {
+          const summaryRun = await settleWithin(
+            summarizer.runForChannel(channelId),
+            SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS,
+          )
+          if (summaryRun.status === 'fulfilled') compacted = !!summaryRun.value
+          else console.error(
+            `[session-rollover] summarization timed out for ${channelId} after `
+            + `${SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS}ms; continuing final render`,
+          )
+        }
+      } catch (e) {
+        console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
       }
-    } catch (e) {
-      console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
+      channelSessions.dropSession(channelId)
+      console.log(`[session-rollover] channel ${channelId}: ${reason}`
+        + (inputTokens !== undefined ? ` input=${inputTokens}` : '')
+        + ` >= ${CODEX_SESSION_MAX_INPUT_TOKENS} — `
+        + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
+        + `dropped session; next turn starts fresh`)
+    } finally {
+      setLiveCompacting(false)
     }
-    channelSessions.dropSession(channelId)
-    console.log(`[session-rollover] channel ${channelId}: ${reason}`
-      + (inputTokens !== undefined ? ` input=${inputTokens}` : '')
-      + ` >= ${CODEX_SESSION_MAX_INPUT_TOKENS} — `
-      + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
-      + `dropped session; next turn starts fresh`)
   }
   let pendingPostTurnRolloverUsage: number | undefined
   const finishPostTurnRollover = async (): Promise<void> => {
@@ -1311,6 +1327,7 @@ async function handleUserMessage(
   const onEvent = (event: LifecycleEvent) => {
     if (event.type === 'thinking_start') { void lifecycle.reasoning(); return }
     if (event.type === 'reasoning_start') { void lifecycle.reasoning(); return }
+    if (event.type === 'compaction') { setLiveCompacting(event.active); return }
     if (event.type === 'searching') { void lifecycle.transition('searching'); return }
     if (event.type === 'agents') {
       agentCommands.record(channelId, agentWorkflowId, event.agents)
