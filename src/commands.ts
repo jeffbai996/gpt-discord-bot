@@ -8,6 +8,12 @@ import { globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
+import {
+  appendRuntimeChecks,
+  type DoctorCheck,
+  type DoctorReport,
+  type DoctorRuntimeDeps,
+} from './runtime-doctor.ts'
 
 // Render the Codex subscription rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -68,13 +74,11 @@ export function fmtSettingChange(label: string, value: string, previous: string)
   return `✅ ${label} → \`${value}\`${changed}`
 }
 
-export interface DoctorCheck { name: string; ok: boolean; detail: string }
-export interface DoctorReport { ok: boolean; checks: DoctorCheck[] }
-
 /** Read-only runtime diagnostics. It deliberately creates no probe files. */
 export async function runGptDoctor(
   stateDir = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord'),
   rolloutDir = path.join(os.homedir(), '.codex', 'sessions'),
+  runtime?: DoctorRuntimeDeps,
 ): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     { name: 'process', ok: true, detail: `running · pid ${process.pid} · node ${process.version}` },
@@ -121,6 +125,7 @@ export async function runGptDoctor(
   }
   await directoryCheck('rollout store', rolloutDir)
   await lazyDirectoryCheck('agent registry', path.join(stateDir, 'agent-registry'))
+  if (runtime) await appendRuntimeChecks(checks, runtime)
   return { ok: checks.every(check => check.ok), checks }
 }
 
@@ -304,6 +309,7 @@ export interface CompactCommandDeps {
   summarizer: { runForChannel(channelId: string): Promise<{ messageCount: number } | null> } | null
   isTurnActive?: (channelId: string) => boolean
   dropSession?: (channelId: string) => boolean
+  doctor?: DoctorRuntimeDeps
 }
 
 export type CompactResult =
@@ -398,7 +404,7 @@ export async function executeGptCommand(
 
     if (subcommand === 'doctor') {
       await interaction.deferReply({ ephemeral: true })
-      const report = await runGptDoctor()
+      const report = await runGptDoctor(undefined, undefined, deps.doctor)
       const lines = report.checks.map(check =>
         `${check.ok ? 'ok' : 'FAIL'}  ${check.name.padEnd(16)} ${check.detail}`)
       return interaction.editReply([

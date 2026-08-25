@@ -65,7 +65,7 @@ import { initLiveUsage } from './live-usage.ts'
 import { channelSessions } from './channel-sessions.ts'
 import { formatUsageCounter } from './usage-counter.ts'
 import { buildDefaultRegistry } from './tools/index.ts'
-import { MemoryStore, embed } from './memory.ts'
+import { EMBEDDING_MODEL, MemoryStore, embed } from './memory.ts'
 import { shouldEmbed } from './embed-throttle.ts'
 import { PinnedFactsStore } from './pinned-facts.ts'
 import { PendingPlaceholders } from './pending-placeholders.ts'
@@ -76,7 +76,8 @@ import { PendingEditsStore } from './reactions/pending-edits.ts'
 import { handleReaction } from './reactions/handler.ts'
 import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
-import { settleWithin } from './promise-deadline.ts'
+import { preserveAndDropSession } from './session-rollover.ts'
+import { captureSourceState } from './runtime-doctor.ts'
 import { INTERRUPTED_MARKER, RETRY_PROMPT } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
@@ -442,6 +443,9 @@ const summarizer: SummarizationScheduler | null = (memoryStore && summaryStore)
 await access.load()
 await persona.load()
 
+const BOOT_SOURCE_STATE = captureSourceState()
+const discordRest = new REST({ version: '10' }).setToken(DISCORD_TOKEN)
+
 process.on('SIGHUP', async () => {
   console.error('SIGHUP received — reloading access.json and persona.md')
   try {
@@ -609,8 +613,7 @@ client.once('ready', async () => {
   })
 
   try {
-    const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN)
-    await rest.put(Routes.applicationCommands(APP_ID), { body: [gptCommand.toJSON()] })
+    await discordRest.put(Routes.applicationCommands(APP_ID), { body: [gptCommand.toJSON()] })
     console.error('slash commands registered')
   } catch (e) {
     console.error('slash command registration failed:', e)
@@ -688,7 +691,29 @@ client.on('interactionCreate', async interaction => {
     await executeVoiceCommand(interaction, voiceManager, ADMIN_USER_ID ?? '', persona, toolRegistry)
     return
   }
-  await executeGptCommand(interaction, access, ADMIN_USER_ID, { summarizer })
+  await executeGptCommand(interaction, access, ADMIN_USER_ID, {
+    summarizer,
+    doctor: {
+      memory: () => memoryStore
+        ? { ...memoryStore.diagnostics(), summarizationThreshold: SUMMARIZATION_THRESHOLD }
+        : null,
+      backgroundModels: {
+        summarizerModel: SUMMARIZATION_MODEL,
+        embeddingModel: EMBEDDING_MODEL,
+        list: async () => (await ollamaClient.models.list()).data.map(model => model.id),
+      },
+      deployment: {
+        boot: BOOT_SOURCE_STATE,
+        current: () => captureSourceState(),
+      },
+      slashCommands: {
+        expected: gptCommand.toJSON(),
+        fetchRemote: async () => await discordRest.get(
+          Routes.applicationCommands(APP_ID),
+        ) as unknown[],
+      },
+    },
+  })
 })
 
 // Core message-handling pipeline. Reused by:
@@ -1093,31 +1118,28 @@ async function handleUserMessage(
     queueLiveRender()
   }
 
-  const compactAndDropCodexSession = async (reason: string, inputTokens?: number) => {
-    let compacted = false
+  const compactAndDropCodexSession = async (reason: string, inputTokens?: number): Promise<boolean> => {
     setLiveCompacting(true)
     try {
-      try {
-        if (summarizer) {
-          const summaryRun = await settleWithin(
-            summarizer.runForChannel(channelId),
-            SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS,
-          )
-          if (summaryRun.status === 'fulfilled') compacted = !!summaryRun.value
-          else console.error(
-            `[session-rollover] summarization timed out for ${channelId} after `
-            + `${SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS}ms; continuing final render`,
-          )
-        }
-      } catch (e) {
-        console.error(`[session-rollover] summarization failed for ${channelId}:`, e)
-      }
-      channelSessions.dropSession(channelId)
-      console.log(`[session-rollover] channel ${channelId}: ${reason}`
+      const result = await preserveAndDropSession({
+        summarizer,
+        channelId,
+        dropSession: id => channelSessions.dropSession(id),
+        timeoutMs: SESSION_ROLLOVER_SUMMARY_TIMEOUT_MS,
+      })
+      const prefix = `[session-rollover] channel ${channelId}: ${reason}`
         + (inputTokens !== undefined ? ` input=${inputTokens}` : '')
         + ` >= ${CODEX_SESSION_MAX_INPUT_TOKENS} — `
-        + `${compacted ? 'compacted summary, ' : 'summary unavailable, '}`
-        + `dropped session; next turn starts fresh`)
+      if (result.status === 'compacted') {
+        console.log(prefix + `summarized ${result.messageCount} messages, dropped session; next turn starts fresh`)
+        return true
+      }
+      if (result.status === 'failed') {
+        console.error(`${prefix}summarization failed; preserved session`, result.error)
+      } else {
+        console.error(`${prefix}summarization ${result.status.replace('_', ' ')}; preserved session`)
+      }
+      return false
     } finally {
       setLiveCompacting(false)
     }
@@ -1470,9 +1492,9 @@ async function handleUserMessage(
         let resumeSessionId = channelSessions.get(channelId)
         const lastInput = channelSessions.lastUsage(channelId)?.input ?? 0
         if (resumeSessionId && CODEX_SESSION_MAX_INPUT_TOKENS > 0 && lastInput >= CODEX_SESSION_MAX_INPUT_TOKENS) {
-          await compactAndDropCodexSession('preflight', lastInput)
+          const dropped = await compactAndDropCodexSession('preflight', lastInput)
           throwIfStopped()
-          resumeSessionId = undefined
+          if (dropped) resumeSessionId = undefined
         }
         const codexInput = {
           systemPrompt,

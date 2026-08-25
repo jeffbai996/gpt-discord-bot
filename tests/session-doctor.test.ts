@@ -68,3 +68,87 @@ test('doctor validates the runtime state without creating or mutating files', as
   ])
   assert.deepEqual(fs.readdirSync(state, { recursive: true }).sort(), before)
 })
+
+test('doctor reports background model, memory, deployment, and slash-command health', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gpt-doctor-runtime-'))
+  const state = path.join(root, 'state')
+  const rollouts = path.join(root, 'rollouts')
+  fs.mkdirSync(state, { recursive: true })
+  fs.mkdirSync(rollouts, { recursive: true })
+  fs.writeFileSync(path.join(state, 'access.json'), '{"version":2,"channels":{}}')
+  fs.writeFileSync(path.join(state, 'persona.md'), 'you are gpt')
+  const now = Date.parse('2026-08-25T16:00:00Z')
+  const expectedCommand = gptCommand.toJSON()
+
+  const report = await runGptDoctor(state, rollouts, {
+    now: () => now,
+    memory: {
+      messageCount: 120,
+      latestMessageAt: '2026-08-25T15:58:00Z',
+      summaryCount: 4,
+      latestSummaryAt: '2026-08-25T15:30:00Z',
+      maxPendingMessages: 12,
+      summarizationThreshold: 50,
+    },
+    backgroundModels: {
+      summarizerModel: 'model-summary',
+      embeddingModel: 'model-embed',
+      list: async () => ['model-summary', 'model-embed'],
+    },
+    deployment: {
+      boot: { revision: 'abc12345', fingerprint: 'clean' },
+      current: async () => ({ revision: 'abc12345', fingerprint: 'clean' }),
+    },
+    slashCommands: {
+      expected: expectedCommand,
+      fetchRemote: async () => [{ ...expectedCommand, id: 'remote-id', version: 'remote-version' }],
+    },
+  })
+
+  assert.equal(report.ok, true)
+  assert.deepEqual(report.checks.slice(-7).map(check => check.name), [
+    'memory ingestion', 'summary state', 'model endpoint', 'summary model',
+    'embedding model', 'deployed source', 'remote slash',
+  ])
+})
+
+test('doctor fails loudly on the stale brain states that used to pass', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gpt-doctor-failures-'))
+  const state = path.join(root, 'state')
+  const rollouts = path.join(root, 'rollouts')
+  fs.mkdirSync(state, { recursive: true })
+  fs.mkdirSync(rollouts, { recursive: true })
+  fs.writeFileSync(path.join(state, 'access.json'), '{"version":2,"channels":{}}')
+  fs.writeFileSync(path.join(state, 'persona.md'), 'you are gpt')
+  const expectedCommand = gptCommand.toJSON()
+
+  const report = await runGptDoctor(state, rollouts, {
+    now: () => Date.parse('2026-08-25T16:00:00Z'),
+    memory: {
+      messageCount: 120,
+      latestMessageAt: '2026-08-20T12:00:00Z',
+      summaryCount: 1,
+      latestSummaryAt: '2026-08-14T12:00:00Z',
+      maxPendingMessages: 80,
+      summarizationThreshold: 50,
+    },
+    backgroundModels: {
+      summarizerModel: 'missing-summary-model',
+      embeddingModel: 'model-embed',
+      list: async () => ['model-embed'],
+    },
+    deployment: {
+      boot: { revision: 'abc12345', fingerprint: 'clean' },
+      current: async () => ({ revision: 'def67890', fingerprint: 'dirty:1234' }),
+    },
+    slashCommands: {
+      expected: expectedCommand,
+      fetchRemote: async () => [{ ...expectedCommand, description: 'stale schema' }],
+    },
+  })
+
+  assert.equal(report.ok, false)
+  for (const name of ['memory ingestion', 'summary state', 'summary model', 'deployed source', 'remote slash']) {
+    assert.equal(report.checks.find(check => check.name === name)?.ok, false, name)
+  }
+})

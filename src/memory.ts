@@ -61,6 +61,14 @@ export interface SearchResult extends MessageRow {
   distance: number
 }
 
+export interface MemoryDiagnostics {
+  messageCount: number
+  latestMessageAt: string | null
+  summaryCount: number
+  latestSummaryAt: string | null
+  maxPendingMessages: number
+}
+
 export class MemoryStore {
   private constructor(
     private db: any,
@@ -177,6 +185,33 @@ export class MemoryStore {
 
   getSummary(channelId: string): SummaryRow | null {
     return (this.statements.getSummary.get(channelId) as SummaryRow | undefined) ?? null
+  }
+
+  diagnostics(): MemoryDiagnostics {
+    const messages = this.db.prepare(`
+      SELECT COUNT(*) AS count, MAX(timestamp) AS latest FROM messages
+    `).get() as { count: number; latest: string | null }
+    const summaries = this.db.prepare(`
+      SELECT COUNT(*) AS count, MAX(updated_at) AS latest FROM conversation_summaries
+    `).get() as { count: number; latest: string | null }
+    const pending = this.db.prepare(`
+      SELECT COALESCE(MAX(pending_count), 0) AS max_pending
+      FROM (
+        SELECT COUNT(*) AS pending_count
+        FROM messages m
+        LEFT JOIN conversation_summaries s ON s.channel_id = m.channel_id
+        WHERE s.last_summarized_message_id IS NULL
+          OR CAST(m.id AS INTEGER) > CAST(s.last_summarized_message_id AS INTEGER)
+        GROUP BY m.channel_id
+      )
+    `).get() as { max_pending: number }
+    return {
+      messageCount: messages.count,
+      latestMessageAt: messages.latest,
+      summaryCount: summaries.count,
+      latestSummaryAt: summaries.latest,
+      maxPendingMessages: pending.max_pending,
+    }
   }
 
   close(): void {
