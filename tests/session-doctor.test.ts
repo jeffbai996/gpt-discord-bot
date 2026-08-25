@@ -101,7 +101,7 @@ test('doctor reports background model, memory, deployment, and slash-command hea
     },
     slashCommands: {
       expected: expectedCommand,
-      fetchRemote: async () => [{ ...expectedCommand, id: 'remote-id', version: 'remote-version' }],
+      fetchRemote: async () => [{ ...expectedCommand, type: 1, id: 'remote-id', version: 'remote-version' }],
     },
   })
 

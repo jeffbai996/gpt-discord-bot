@@ -65,7 +65,9 @@ function normalizedCommand(value: unknown): unknown {
   const out: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b))) {
     if (!COMMAND_FIELDS.has(key) || item === undefined || item === null || item === false) continue
-    out[key] = normalizedCommand(item)
+    const normalized = normalizedCommand(item)
+    if (Array.isArray(normalized) && normalized.length === 0) continue
+    out[key] = normalized
   }
   return out
 }
@@ -80,7 +82,13 @@ export function slashCommandMatches(
   const actual = remote.find(command => command && typeof command === 'object'
     && (command as Record<string, unknown>).name === expectedName)
   if (!actual) return false
-  return JSON.stringify(normalizedCommand(actual)) === JSON.stringify(normalizedCommand(expected))
+  const normalizedActual = normalizedCommand(actual) as Record<string, unknown>
+  const normalizedExpected = normalizedCommand(expected) as Record<string, unknown>
+  // Discord adds the top-level chat-input command type even though the builder
+  // omits its default. Nested option types remain part of the compared schema.
+  delete normalizedActual.type
+  delete normalizedExpected.type
+  return JSON.stringify(normalizedActual) === JSON.stringify(normalizedExpected)
 }
 
 export async function appendRuntimeChecks(
