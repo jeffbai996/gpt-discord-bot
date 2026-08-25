@@ -48,6 +48,8 @@ import { extractRichMedia, formatRichContext } from './discord-rich-input.ts'
 import { TurnLifecycleTracker } from './reactions/turn-lifecycle.ts'
 import { activeTurns } from './active-turns.ts'
 import { ChannelTurnRunner } from './channel-turns.ts'
+import { GlobalTurnAdmission, TurnAdmissionCancelledError } from './global-turn-admission.ts'
+import { readSelfCgroupMemoryBytes } from './cgroup-memory.ts'
 import { renderSteeredMessage } from './steering.ts'
 import { frameLiveSteerMessage, frameSteeredMessages } from './steer-context.ts'
 import { SteeringInbox } from './steering-inbox.ts'
@@ -78,6 +80,7 @@ import { SummaryStore } from './summarization/store.ts'
 import { SummarizationScheduler } from './summarization/scheduler.ts'
 import { preserveAndDropSession } from './session-rollover.ts'
 import { captureSourceState } from './runtime-doctor.ts'
+import { cleanBotTranscriptContent } from './transcript-ingest.ts'
 import { INTERRUPTED_MARKER, RETRY_PROMPT } from './interruption-label.ts'
 import { stripToolTraceCard } from './render-cleanup.ts'
 import { isHardStopMessage } from './stop-command.ts'
@@ -418,7 +421,13 @@ const SUMMARIZATION_BATCH_LIMIT = parseInt(process.env.GPT_SUMMARIZATION_BATCH_L
 // Summarization runs on the local Ollama client with a local model by default
 // (was metered gpt-5.5 on every rollup). Override the model via
 // GPT_SUMMARIZATION_MODEL; it resolves against whichever client is wired below.
-const SUMMARIZATION_MODEL = process.env.GPT_SUMMARIZATION_MODEL ?? DEFAULT_SUMMARIZATION_MODEL
+const CONFIGURED_SUMMARIZATION_MODEL = process.env.GPT_SUMMARIZATION_MODEL ?? DEFAULT_SUMMARIZATION_MODEL
+const SUMMARIZATION_MODEL = CONFIGURED_SUMMARIZATION_MODEL === 'qwen3.6:27b-mtp-q4_K_M'
+  ? 'qwen3.8:27b-mtp-q4_K_M'
+  : CONFIGURED_SUMMARIZATION_MODEL
+if (SUMMARIZATION_MODEL !== CONFIGURED_SUMMARIZATION_MODEL) {
+  console.error(`[summarization] retired model ${CONFIGURED_SUMMARIZATION_MODEL}; using ${SUMMARIZATION_MODEL}`)
+}
 const summaryStore = memoryStore ? SummaryStore.fromMemory(memoryStore) : null
 if (summaryStore) persona.setSummaryStore(summaryStore)
 const summarizer: SummarizationScheduler | null = (memoryStore && summaryStore)
@@ -460,29 +469,40 @@ process.on('SIGHUP', async () => {
 process.on('unhandledRejection', err => console.error('unhandledRejection:', err))
 process.on('uncaughtException', err => console.error('uncaughtException:', err))
 
-// Embed + persist a single message in the background. Errors are logged but
-// never thrown — ingestion failures shouldn't impact the reply flow.
-async function ingestMessage(message: Message): Promise<void> {
-  if (!memoryStore) return
-  // Per-(channel,user) embedding throttle: skip the embed API call entirely
-  // when this author embedded within the cooldown window. Stops a chatty user
-  // or busy channel from burning a continuous embedding stream. The dropped
-  // message just isn't RAG-indexed; it's still in live Discord history.
-  if (!shouldEmbed(message.channel.id, message.author.id)) return
+// Transcript persistence is authoritative; semantic embedding is best-effort.
+// A dead Ollama must not delete either half of the conversation from rollups.
+function ingestTranscriptRow(row: {
+  id: string
+  channel_id: string
+  author_id: string
+  author_name: string
+  content: string
+  timestamp: string
+}, allowEmbedding: boolean): boolean {
+  if (!memoryStore || !row.content.trim()) return false
   try {
-    const emb = await embed(ollamaClient, message.content)
-    if (!emb) return
-    memoryStore.insertMessage({
-      id: message.id,
-      channel_id: message.channel.id,
-      author_id: message.author.id,
-      author_name: message.author.username,
-      content: message.content,
-      timestamp: new Date(message.createdTimestamp).toISOString()
-    }, emb)
+    memoryStore.insertMessageText(row)
   } catch (e) {
-    console.error('ingestMessage failed:', e instanceof Error ? e.message : e)
+    console.error('transcript persist failed:', e instanceof Error ? e.message : e)
+    return false
   }
+  if (allowEmbedding && shouldEmbed(row.channel_id, row.author_id)) {
+    void embed(ollamaClient, row.content).then(vector => {
+      if (vector) memoryStore.insertMessageEmbedding(row.id, vector)
+    }).catch(e => console.error('transcript embed failed:', e instanceof Error ? e.message : e))
+  }
+  return true
+}
+
+function ingestMessage(message: Message, content = message.content, allowEmbedding = true): boolean {
+  return ingestTranscriptRow({
+    id: message.id,
+    channel_id: message.channel.id,
+    author_id: message.author.id,
+    author_name: message.author.username,
+    content,
+    timestamp: new Date(message.createdTimestamp).toISOString(),
+  }, allowEmbedding)
 }
 
 const client = new Client({
@@ -503,6 +523,15 @@ const shutdownGate = new ShutdownGate()
 const activeAgentViews = new Map<string, (agents: CodexAgentSnapshot[]) => Promise<void>>()
 const activeLifecycleTrackers = new Map<string, TurnLifecycleTracker>()
 const QUEUE_SETTLE_MS = Number(process.env.GPT_QUEUE_SETTLE_MS) || 0
+const MAX_GLOBAL_TURNS = Math.max(1, Number(process.env.GPT_MAX_GLOBAL_TURNS) || 2)
+const MEMORY_HIGH_WATER_BYTES = Math.max(1, Number(process.env.GPT_MEMORY_HIGH_WATER_MB) || 3_200) * 1024 * 1024
+const MEMORY_LOW_WATER_BYTES = Math.max(0, Number(process.env.GPT_MEMORY_LOW_WATER_MB) || 2_600) * 1024 * 1024
+const globalTurns = new GlobalTurnAdmission({
+  maxActive: MAX_GLOBAL_TURNS,
+  highWaterBytes: MEMORY_HIGH_WATER_BYTES,
+  lowWaterBytes: Math.min(MEMORY_LOW_WATER_BYTES, MEMORY_HIGH_WATER_BYTES - 1),
+  memoryBytes: readSelfCgroupMemoryBytes,
+})
 interface QueuedChannelTurn {
   message: Message
   target: Message | null
@@ -529,22 +558,60 @@ const channelTurns = new ChannelTurnRunner<QueuedChannelTurn>(
       channelId,
       queueDepth: channelTurns.queueDepth(channelId),
     })
-    await handleUserMessage(
-      carrier.message,
-      batch.length === 1 ? carrier.target : null,
-      false,
-      combined || undefined,
-      carrier.actor,
-    )
+    let queueReceipt: Message | null = null
+    const clearQueueReceipt = async (): Promise<void> => {
+      const receipt = queueReceipt
+      queueReceipt = null
+      if (receipt) await receipt.delete().catch(() => {})
+    }
+    try {
+      await globalTurns.run(
+        channelId,
+        () => handleUserMessage(
+          carrier.message,
+          batch.length === 1 ? carrier.target : null,
+          false,
+          combined || undefined,
+          carrier.actor,
+        ),
+        {
+          onQueued: async position => {
+            const receipt = await replyOrSend(
+              carrier.message,
+              `⏳ queued globally · position ${position} · ${globalTurns.snapshot().running}/${MAX_GLOBAL_TURNS} running`,
+              !carrier.actor,
+            )
+            queueReceipt = receipt
+          },
+          beforeStart: clearQueueReceipt,
+          onCancelled: clearQueueReceipt,
+        },
+      )
+    } catch (error) {
+      if (!(error instanceof TurnAdmissionCancelledError)) throw error
+    }
   },
   channelId => activeTurns.consumeStopped(channelId),
   QUEUE_SETTLE_MS,
 )
+
+function stopResolvableTurn(channelIds: Array<string | null | undefined>): string | null {
+  const active = activeTurns.stopResolvable(channelIds)
+  if (active) return active
+  for (const channelId of channelIds) {
+    if (!channelId || globalTurns.cancel(channelId) === 0) continue
+    channelTurns.clearQueued(channelId)
+    return channelId
+  }
+  return null
+}
+
 const restartCoordinator = new RestartCoordinator(
   () => Promise.all([
     shutdownGate.waitForIdle(),
     activeTurns.waitForIdle(),
     channelTurns.waitForIdle(),
+    globalTurns.waitForIdle(),
   ]).then(() => {}),
   () => {
     logTurnLifecycle({ event: 'restart_launching', restartPhase: 'launching' })
@@ -586,6 +653,7 @@ function installGracefulShutdown(): void {
       shutdownGate.waitForIdle(),
       activeTurns.waitForIdle(),
       channelTurns.waitForIdle(),
+      globalTurns.waitForIdle(),
     ])
     waitForIdleOrDeadline(idle, timeoutMs)
       .then(reason => {
@@ -693,6 +761,9 @@ client.on('interactionCreate', async interaction => {
   }
   await executeGptCommand(interaction, access, ADMIN_USER_ID, {
     summarizer,
+    isTurnActive: channelId => activeTurns.isActive(channelId) || channelTurns.isRunning(channelId),
+    admission: () => globalTurns.snapshot(),
+    stopChannel: stopResolvableTurn,
     doctor: {
       memory: () => memoryStore
         ? { ...memoryStore.diagnostics(), summarizationThreshold: SUMMARIZATION_THRESHOLD }
@@ -712,6 +783,7 @@ client.on('interactionCreate', async interaction => {
           Routes.applicationCommands(APP_ID),
         ) as unknown[],
       },
+      admission: () => globalTurns.snapshot(),
     },
   })
 })
@@ -810,6 +882,22 @@ async function handleUserMessage(
       const _cutoff = channelSessions.clearedSince(channelId)
       const rawFiltered = _cutoff ? raw.filter((m: any) => (m.createdTimestamp ?? 0) > _cutoff) : raw
       rawHistory = rawFiltered
+      // Backfill readable bot replies from Discord itself. Raw archives remain
+      // immutable; this repairs the rolling-summary source without importing
+      // transient tool/thought cards or re-embedding the whole channel.
+      for (const prior of rawFiltered) {
+        if (prior.authorId !== selfId) continue
+        const clean = cleanBotTranscriptContent(prior.content)
+        if (!clean) continue
+        ingestTranscriptRow({
+          id: prior.id,
+          channel_id: channelId,
+          author_id: prior.authorId,
+          author_name: prior.authorName,
+          content: clean,
+          timestamp: new Date(prior.createdTimestamp).toISOString(),
+        }, false)
+      }
       history = await formatHistoryForOpenAI(rawFiltered, selfId)
       // Observability (Jeff 2026-06-29): empty history = the bot loses context
       // for the turn. Log the counts so a fetch hiccup / over-aggressive cutoff
@@ -1977,6 +2065,23 @@ async function handleUserMessage(
     if (transientTrace && liveTraceMsgs.length) toDelete.push(...liveTraceMsgs)
     scheduleTransientTraceCleanup(toDelete)
 
+    // Commit the clean final answer before any rollover can discard provider
+    // context. The displayed thought line, trace cards and counter never enter
+    // the transcript authority.
+    const transcriptReply = cleanBotTranscriptContent(replyBody)
+    if (mergedMsg && client.user && transcriptReply) {
+      if (ingestTranscriptRow({
+        id: mergedMsg.id,
+        channel_id: mergedMsg.channelId,
+        author_id: client.user.id,
+        author_name: client.user.username,
+        content: transcriptReply,
+        timestamp: new Date(mergedMsg.createdTimestamp).toISOString(),
+      }, true)) {
+        summarizer?.scheduleIfNeeded(channelId)
+      }
+    }
+
     await finishPostTurnRollover()
 
     if (result.finishReason === 'length') {
@@ -2065,8 +2170,8 @@ async function handleUserMessage(
 // Per-channel turn queue: serialize turns within a channel so rapid-fire
 // messages don't each spawn a parallel codex process. While a turn runs, new
 // messages queue; when it finishes, ALL queued messages are batched into one
-// follow-up turn (repeated until the queue drains). Cross-channel stays
-// parallel — only same-channel pile-ups serialize. (Jeff 2026-06-25)
+// follow-up turn (repeated until the queue drains). Cross-channel work passes
+// through GlobalTurnAdmission for fair, memory-aware process-wide backpressure.
 async function runChannelTurn(
   message: Message,
   target: Message | null,
@@ -2180,11 +2285,11 @@ async function handleInboundMessage(
   )) return
 
   if (!relay && memoryStore && message.content.trim() && access.isAllowedAndEnabled(userId, channelId, parentChannelId)) {
-    void ingestMessage(message)
-    // Schedule summarization after ingestion so the message we just stored is
-    // counted toward the threshold. Single-flight per channel; no-op if a
-    // run is already in progress.
-    summarizer?.scheduleIfNeeded(channelId)
+    if (ingestMessage(message)) {
+      // Text persistence is synchronous, so the just-received message is
+      // guaranteed to count even if its background embedding later fails.
+      summarizer?.scheduleIfNeeded(channelId)
+    }
   }
 
   if (!access.canHandle({ channelId, parentChannelId, userId, isMention })) return
@@ -2204,7 +2309,7 @@ async function handleInboundMessage(
   // Lone ❌ / X message: hard-kill the in-flight turn before queue/barge logic.
   if (isHardStopMessage(inboundContent)) {
     message.delete().catch(() => {})
-    activeTurns.stop(channelId)
+    stopResolvableTurn([channelId])
     return
   }
 

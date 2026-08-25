@@ -3,7 +3,7 @@
 // slugs fail there. Explicit API-engine channels also use this model normally.
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.5'
 export const DEFAULT_CODEX_MODEL = 'gpt-5.6-sol'
-export const DEFAULT_SUMMARIZATION_MODEL = 'gpt-5.5'
+export const DEFAULT_SUMMARIZATION_MODEL = 'qwen3.8:27b-mtp-q4_K_M'
 
 export const OPENAI_MODELS = [
   'gpt-5.5',

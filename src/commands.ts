@@ -310,6 +310,13 @@ export interface CompactCommandDeps {
   isTurnActive?: (channelId: string) => boolean
   dropSession?: (channelId: string) => boolean
   doctor?: DoctorRuntimeDeps
+  admission?: () => {
+    running: number
+    queued: number
+    oldestWaitMs: number
+    pausedForMemory: boolean
+  }
+  stopChannel?: (channelIds: Array<string | null | undefined>) => string | null
 }
 
 export type CompactResult =
@@ -415,7 +422,8 @@ export async function executeGptCommand(
 
     if (subcommand === 'stop') {
       const parentId = interaction.channel?.isThread() ? interaction.channel.parentId : null
-      const stoppedChannelId = activeTurns.stopResolvable([interaction.channelId, parentId])
+      const stoppedChannelId = deps.stopChannel?.([interaction.channelId, parentId])
+        ?? activeTurns.stopResolvable([interaction.channelId, parentId])
       return interaction.reply({
         content: stoppedChannelId ? INTERRUPTED_MARKER : 'ℹ️ Nothing running here',
         ephemeral: true,
@@ -438,7 +446,7 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved.', ephemeral: true })
       }
-      if (activeTurns.isActive(channel.id)) {
+      if ((deps.isTurnActive ?? (id => activeTurns.isActive(id)))(channel.id)) {
         return interaction.reply({
           content: `⚠️ <#${channel.id}> has a turn running. Compact it after that finishes.`,
           ephemeral: true,
@@ -515,6 +523,11 @@ export async function executeGptCommand(
       const engines = Object.entries(g.byModel).map(([m, ct]) => `${m} ${ct}`).join(' · ') || '—'
       const rl = await readLatestRateLimits()
       const contextPressure = fmtContextPressureLine(rl)
+      const admission = deps.admission?.()
+      const admissionLine = admission
+        ? `work:      ${admission.running} running · ${admission.queued} queued`
+          + `${admission.pausedForMemory ? ' · memory paused' : ''}`
+        : ''
       const body = [
         '\ud83d\udcca @gpt usage — cumulative across restarts, all channels',
         '```',
@@ -528,6 +541,7 @@ export async function executeGptCommand(
         '',
         `engines:  ${engines}`,
         `uptime:   ${up}`,
+        ...(admissionLine ? [admissionLine] : []),
         ...(contextPressure ? [contextPressure] : []),
         '',
         ...fmtLimitLines(rl),

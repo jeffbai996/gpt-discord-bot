@@ -37,6 +37,12 @@ export interface DoctorRuntimeDeps {
     fetchRemote: () => Promise<unknown[]>
   }
   ingestionMaxAgeMs?: number
+  admission?: () => {
+    running: number
+    queued: number
+    oldestWaitMs: number
+    pausedForMemory: boolean
+  }
 }
 
 function ageDetail(timestamp: string | null, now: number): { ok: boolean; text: string; ageMs: number } {
@@ -118,6 +124,18 @@ export async function appendRuntimeChecks(
           + `${memory.maxPendingMessages}/${memory.summarizationThreshold} pending max/channel`,
       })
     }
+  }
+
+  if (deps.admission) {
+    const admission = deps.admission()
+    const waitSeconds = Math.ceil(admission.oldestWaitMs / 1_000)
+    checks.push({
+      name: 'turn admission',
+      ok: !admission.pausedForMemory,
+      detail: `${admission.running} running · ${admission.queued} queued`
+        + `${admission.queued ? ` · oldest ${waitSeconds}s` : ''}`
+        + `${admission.pausedForMemory ? ' · MEMORY PAUSED' : ''}`,
+    })
   }
 
   if (deps.backgroundModels) {

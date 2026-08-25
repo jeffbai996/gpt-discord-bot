@@ -162,6 +162,7 @@ test('post-turn rollover runs only after the reply and trace cleanup are armed',
   assert.doesNotMatch(source.slice(resultStart, renderStart), /await compactAndDropCodexSession/)
   assert.match(source.slice(resultStart, renderStart), /pendingPostTurnRolloverUsage\s*=/)
   assert.match(source.slice(cleanupStart, cleanupEnd), /scheduleTransientTraceCleanup/)
+  assert.match(source.slice(cleanupStart, cleanupEnd), /ingestTranscriptRow/)
 })
 
 test('silent and file-only completions also arm transient trace cleanup', async () => {

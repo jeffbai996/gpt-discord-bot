@@ -90,6 +90,7 @@ test('doctor reports background model, memory, deployment, and slash-command hea
       maxPendingMessages: 12,
       summarizationThreshold: 50,
     },
+    admission: () => ({ running: 2, queued: 3, oldestWaitMs: 12_300, pausedForMemory: false }),
     backgroundModels: {
       summarizerModel: 'model-summary',
       embeddingModel: 'model-embed',
@@ -106,10 +107,11 @@ test('doctor reports background model, memory, deployment, and slash-command hea
   })
 
   assert.equal(report.ok, true)
-  assert.deepEqual(report.checks.slice(-7).map(check => check.name), [
-    'memory ingestion', 'summary state', 'model endpoint', 'summary model',
+  assert.deepEqual(report.checks.slice(-8).map(check => check.name), [
+    'memory ingestion', 'summary state', 'turn admission', 'model endpoint', 'summary model',
     'embedding model', 'deployed source', 'remote slash',
   ])
+  assert.equal(report.checks.find(check => check.name === 'turn admission')?.detail, '2 running · 3 queued · oldest 13s')
 })
 
 test('doctor fails loudly on the stale brain states that used to pass', async () => {
@@ -132,6 +134,7 @@ test('doctor fails loudly on the stale brain states that used to pass', async ()
       maxPendingMessages: 80,
       summarizationThreshold: 50,
     },
+    admission: () => ({ running: 1, queued: 4, oldestWaitMs: 20_000, pausedForMemory: true }),
     backgroundModels: {
       summarizerModel: 'missing-summary-model',
       embeddingModel: 'model-embed',
@@ -148,7 +151,7 @@ test('doctor fails loudly on the stale brain states that used to pass', async ()
   })
 
   assert.equal(report.ok, false)
-  for (const name of ['memory ingestion', 'summary state', 'summary model', 'deployed source', 'remote slash']) {
+  for (const name of ['memory ingestion', 'summary state', 'turn admission', 'summary model', 'deployed source', 'remote slash']) {
     assert.equal(report.checks.find(check => check.name === name)?.ok, false, name)
   }
 })

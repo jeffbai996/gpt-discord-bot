@@ -81,6 +81,14 @@ export class ChannelTurnRunner<T> {
     return total
   }
 
+  clearQueued(channelId: string): number {
+    const state = this.states.get(channelId)
+    if (!state) return 0
+    const count = state.queue.length
+    state.queue.length = 0
+    return count
+  }
+
   activeChannels(): number {
     return this.states.size
   }

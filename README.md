@@ -259,6 +259,8 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | `GPT_EMBEDDING_MODEL` / `GPT_EMBEDDING_DIM` | local embedding model and vector dimension |
 | `GPT_EMBED_COOLDOWN_MS` | passive-ingestion throttle |
 | `GPT_SUMMARIZATION_MODEL` / `_THRESHOLD` / `_BATCH_LIMIT` | rolling-summary configuration |
+| `GPT_MAX_GLOBAL_TURNS` | concurrent model turns across all channels (default `2`) |
+| `GPT_MEMORY_HIGH_WATER_MB` / `_LOW_WATER_MB` | pause/resume thresholds for new turns (defaults `3200` / `2600`) |
 | `GPT_SEARCH_MODEL` | web-search side-call model |
 | `GPT_CODEX_HELPER_BIN` / `GPT_VOICE_CODEX_TIMEOUT_MS` | optional voice-to-Codex worker |
 | `OPENAI_REALTIME_MODEL` / `OPENAI_REALTIME_VOICE` | realtime voice configuration |

@@ -93,3 +93,18 @@ test('a failed active batch preserves and drains queued work before rejecting', 
   assert.equal(runner.isIdle(), true)
   assert.equal(runner.queueDepth('channel'), 0)
 })
+
+test('explicit queue cancellation drops follow-ups while the current batch unwinds', async () => {
+  const gate = deferred()
+  const seen: string[][] = []
+  const runner = new ChannelTurnRunner<string>(async (_channelId, batch) => {
+    seen.push(batch)
+    await gate.promise
+  })
+  const leader = runner.submit('channel', 'A')
+  assert.equal(await runner.submit('channel', 'B'), 'queued')
+  assert.equal(runner.clearQueued('channel'), 1)
+  gate.resolve()
+  await leader
+  assert.deepEqual(seen, [['A']])
+})

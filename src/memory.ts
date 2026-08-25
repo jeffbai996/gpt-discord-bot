@@ -74,6 +74,7 @@ export class MemoryStore {
     private db: any,
     private statements: {
       insertMsg: any
+      findRowId: any
       insertVss: any
       search: any
       fetchSince: any
@@ -121,6 +122,7 @@ export class MemoryStore {
         INSERT OR IGNORE INTO messages (id, channel_id, author_id, author_name, content, timestamp)
         VALUES (?, ?, ?, ?, ?, ?)
       `),
+      findRowId: db.prepare(`SELECT rowid FROM messages WHERE id = ?`),
       insertVss: db.prepare(`
         INSERT OR IGNORE INTO vss_messages (rowid, embedding) VALUES (?, ?)
       `),
@@ -154,20 +156,31 @@ export class MemoryStore {
     })
   }
 
-  insertMessage(row: MessageRow, embedding: number[]): void {
+  insertMessageText(row: MessageRow): void {
+    this.statements.insertMsg.run(
+      row.id, row.channel_id, row.author_id, row.author_name, row.content, row.timestamp
+    )
+  }
+
+  insertMessageEmbedding(messageId: string, embedding: number[]): void {
     if (embedding.length !== EMBEDDING_DIM) {
       throw new Error(`embedding dim ${embedding.length} ≠ expected ${EMBEDDING_DIM}`)
     }
     const embJson = JSON.stringify(embedding)
     const tx = this.db.transaction(() => {
-      const info = this.statements.insertMsg.run(
-        row.id, row.channel_id, row.author_id, row.author_name, row.content, row.timestamp
-      )
-      if (info.changes > 0) {
-        this.statements.insertVss.run(info.lastInsertRowid, embJson)
-      }
+      const row = this.statements.findRowId.get(messageId) as { rowid: number } | undefined
+      if (!row) throw new Error(`message ${messageId} must be stored before embedding`)
+      this.statements.insertVss.run(row.rowid, embJson)
     })
     tx()
+  }
+
+  insertMessage(row: MessageRow, embedding: number[]): void {
+    if (embedding.length !== EMBEDDING_DIM) {
+      throw new Error(`embedding dim ${embedding.length} ≠ expected ${EMBEDDING_DIM}`)
+    }
+    this.insertMessageText(row)
+    this.insertMessageEmbedding(row.id, embedding)
   }
 
   searchMessages(channelId: string, queryEmbedding: number[], limit: number = 10): SearchResult[] {
