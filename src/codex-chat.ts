@@ -410,6 +410,45 @@ export function parseCodexEvents(jsonl: string): ParsedEvents {
   }
 }
 
+const TURN_SCOPED_APP_SERVER_NOTIFICATIONS = new Set([
+  'turn/started',
+  'turn/completed',
+  'thread/tokenUsage/updated',
+  'thread/compacted',
+  'item/started',
+  'item/completed',
+])
+
+/**
+ * app-server can multiplex root and background-agent events onto one stream.
+ * Every notification that can mutate visible turn state must carry the exact
+ * active thread and turn IDs; otherwise a sibling final can complete and reply
+ * for the wrong Discord message.
+ */
+export function appServerNotificationBelongsToTurn(
+  message: any,
+  expectedThreadId: string,
+  expectedTurnId: string,
+): boolean {
+  const method = String(message?.method ?? '')
+  if (!TURN_SCOPED_APP_SERVER_NOTIFICATIONS.has(method)) return true
+
+  const params = message?.params ?? {}
+  const actualThreadId = typeof params.threadId === 'string' ? params.threadId : ''
+  const actualTurnId = typeof params.turnId === 'string'
+    ? params.turnId
+    : typeof params.turn?.id === 'string'
+      ? params.turn.id
+      : ''
+
+  return Boolean(
+    expectedThreadId
+    && expectedTurnId
+    && actualThreadId === expectedThreadId
+    && actualTurnId === expectedTurnId,
+  )
+}
+
 export function normalizeAppServerNotification(message: any): any | null {
   const method = String(message?.method ?? '')
   const params = message?.params ?? {}
@@ -1165,6 +1204,28 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
     stderrTail = (stderrTail + chunk).slice(-MAX_STDERR_CHARS)
   })
   const client = new CodexAppServerClient(child.stdout!, child.stdin!, message => {
+    // turn/started can beat the turn/start RPC response onto stdout. Capture
+    // its ID only when it belongs to the thread we just started/resumed, then
+    // enforce exact scope for every state-bearing notification after that.
+    if (!turnId && threadId && message?.method === 'turn/started'
+        && message?.params?.threadId === threadId
+        && typeof message?.params?.turn?.id === 'string') {
+      turnId = message.params.turn.id
+    }
+    if (!appServerNotificationBelongsToTurn(message, threadId, turnId)) {
+      if (message?.method === 'turn/completed'
+          || (message?.method === 'item/completed'
+            && message?.params?.item?.type === 'agentMessage'
+            && message?.params?.item?.phase === 'final_answer')) {
+        console.error(
+          `[codex-app-server] ignored foreign ${message.method}; ` +
+          `active=${threadId || '-'}:${turnId || '-'} ` +
+          `received=${message?.params?.threadId || '-'}:` +
+          `${message?.params?.turnId || message?.params?.turn?.id || '-'}`,
+        )
+      }
+      return
+    }
     if (!steeringAttached && turnId && message?.method === 'item/started'
         && message?.params?.item?.type === 'userMessage') {
       steeringAttached = true
@@ -1288,8 +1349,12 @@ export async function respondViaCodex(input: CodexChatInput): Promise<RespondRes
       approvalPolicy: 'never',
       sandboxPolicy: input.readOnly ? { type: 'readOnly' } : { type: 'dangerFullAccess' },
     })
-    turnId = String(turn?.turn?.id ?? '')
-    if (!turnId) throw new Error('app-server did not return a turn id')
+    const startedTurnId = String(turn?.turn?.id ?? '')
+    if (!startedTurnId) throw new Error('app-server did not return a turn id')
+    if (turnId && turnId !== startedTurnId) {
+      throw new Error(`app-server turn id changed during startup (${turnId} -> ${startedTurnId})`)
+    }
+    turnId = startedTurnId
     await Promise.race([
       turnCompleted,
       supervisor.wait().then(() => { throw new Error('codex app-server exited before turn completion') }),
