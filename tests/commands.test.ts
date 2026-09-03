@@ -175,6 +175,15 @@ test('/gpt model choices use durable tier labels', () => {
   ])
 })
 
+test('/gpt effort exposes ultra as automatic delegation', () => {
+  const json = gptCommand.toJSON()
+  const effort: any = json.options?.find((option: any) => option.name === 'effort')
+  const value: any = effort?.options?.find((option: any) => option.name === 'value')
+  const ultra = value?.choices?.find((choice: any) => choice.value === 'ultra')
+
+  assert.equal(ultra?.name, 'ultra - automatic delegation')
+})
+
 test('setting acknowledgements include the previous value only when changed', () => {
   assert.equal(fmtSettingChange('effort', 'high', 'medium'), '✅ effort → `high` (was `medium`)')
   assert.equal(fmtSettingChange('effort', 'high', 'high'), '✅ effort → `high`')

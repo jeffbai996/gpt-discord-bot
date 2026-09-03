@@ -100,7 +100,7 @@ export interface CodexChatInput {
   history: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
   userMessage: string
   userName: string
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
   codexModel?: string
   extraText?: string
   imagePaths?: string[]
@@ -122,7 +122,8 @@ export function mapEffort(effort?: string): string {
     case 'medium':
     case 'high':
     case 'xhigh':
-    case 'max': return effort
+    case 'max':
+    case 'ultra': return effort
     case 'minimal': return 'low' // legacy alias
     default: return 'medium'
   }

@@ -227,7 +227,7 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Set or show reasoning effort')
     .addStringOption(o => o
       .setName('value')
-      .setDescription('none | low | medium | high | xhigh | max')
+      .setDescription('none | low | medium | high | xhigh | max | ultra')
       .setRequired(true)
       .addChoices(
         { name: 'none - no reasoning, fastest', value: 'none' },
@@ -236,6 +236,7 @@ export const gptCommand = new SlashCommandBuilder()
         { name: 'high', value: 'high' },
         { name: 'xhigh', value: 'xhigh' },
         { name: 'max - deepest, slowest', value: 'max' },
+        { name: 'ultra - automatic delegation', value: 'ultra' },
       )
     )
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -568,8 +569,8 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: 'No channel resolved (run inside a channel or pass the channel arg).', ephemeral: true })
       }
-      if (!['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value)) {
-        return interaction.reply({ content: `effort must be none, low, medium, high, xhigh, or max (got ${value})`, ephemeral: true })
+      if (!['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) {
+        return interaction.reply({ content: `effort must be none, low, medium, high, xhigh, max, or ultra (got ${value})`, ephemeral: true })
       }
       try {
         const previous = access.channelFlags(channel.id).reasoning

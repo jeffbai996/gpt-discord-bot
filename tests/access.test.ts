@@ -75,6 +75,40 @@ test('access: max is a valid reasoning effort', async () => {
   assert.equal(a.channelFlags('c1').reasoning, 'max')
 })
 
+test('access: ultra is valid on a model that supports automatic delegation', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c1', true, false, { codexModel: 'gpt-5.6-sol' })
+  await a.setChannelFlags('c1', { reasoning: 'ultra' })
+
+  assert.equal(a.channelFlags('c1').reasoning, 'ultra')
+})
+
+test('access: ultra rejects models without automatic delegation', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-luna', true, false, { codexModel: 'gpt-5.6-luna' })
+
+  await assert.rejects(
+    () => a.setChannelFlags('c-luna', { reasoning: 'ultra' }),
+    /ultra.*gpt-5\.6-luna.*not supported/i,
+  )
+})
+
+test('access: model changes cannot strand an existing ultra setting', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-model-change', true, false, {
+    codexModel: 'gpt-5.6-sol',
+    reasoning: 'ultra',
+  })
+
+  await assert.rejects(
+    () => a.setChannelFlags('c-model-change', { codexModel: 'gpt-5.6-luna' }),
+    /ultra.*gpt-5\.6-luna.*not supported/i,
+  )
+})
+
 test('access: retired saved codexModel normalizes to current default', async () => {
   const a = new AccessManager()
   await a.load()

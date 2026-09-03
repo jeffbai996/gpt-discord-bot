@@ -6,6 +6,10 @@ test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
 })
 
+test('codex effort: ultra passes through to app-server unchanged', () => {
+  assert.equal(mapEffort('ultra'), 'ultra')
+})
+
 test('codex silence: a clean empty reply with no emitted prose does not trigger fallback', () => {
   const message = '<@111111111111111111> 我觉得这个功能可以加，您觉得呢'
   assert.match(message, /<@111111111111111111>/)

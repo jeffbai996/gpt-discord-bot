@@ -3,7 +3,7 @@ import path from 'path'
 import os from 'os'
 import { DEFAULT_CODEX_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
 
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 export type ThinkingMode = 'off' | 'on' | 'live' | 'collapse'
 export type TraceMode = 'off' | 'on' | 'live' | 'collapse'
 
@@ -49,7 +49,7 @@ export interface CanHandleInput {
 }
 
 const EMPTY: AccessFile = { version: 2, users: {}, channels: {} }
-const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 
 // Trace and thinking used to be booleans. Old saved configs may still hold one,
 // so map false->off and true->on rather than letting legacy false read as "on".
@@ -77,6 +77,24 @@ function normCodexModel(v: unknown): CodexModel {
 // so old saved channel config normalizes back to the default.
 export const CODEX_MODELS = OPENAI_MODELS
 export type CodexModel = OpenAIModel
+
+// Ultra is not just a deeper scalar: Codex enables automatic task delegation.
+// Keep this compatibility boundary beside the model allowlist so every setter
+// enforces the same contract, including model changes after Ultra was selected.
+export const ULTRA_CODEX_MODELS: readonly CodexModel[] = [
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-daybreak-blue-latest',
+]
+
+export function assertReasoningModelCompatibility(
+  reasoning: ReasoningEffort,
+  model: CodexModel,
+): void {
+  if (reasoning === 'ultra' && !ULTRA_CODEX_MODELS.includes(model)) {
+    throw new Error(`ultra reasoning for ${model} is not supported; use Sol, Terra, or Daybreak Blue`)
+  }
+}
 
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
@@ -194,14 +212,17 @@ export class AccessManager {
       throw new Error(`invalid reasoning effort "${flags.reasoning}" — must be one of: ${VALID_REASONING.join(', ')}`)
     }
     const existing = this.data.channels[channelId]
+    const reasoning = flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning
+    const codexModel = normCodexModel(flags?.codexModel ?? existing?.codexModel)
+    assertReasoningModelCompatibility(reasoning, codexModel)
     this.data.channels[channelId] = {
       enabled,
       requireMention,
-      reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
+      reasoning,
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
       thinking: normThinking(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
-      codexModel: normCodexModel(flags?.codexModel ?? existing?.codexModel),
+      codexModel,
       counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,
     }
     await this.save()
@@ -228,16 +249,19 @@ export class AccessManager {
     if (patch.codexModel !== undefined && !(CODEX_MODELS as readonly string[]).includes(patch.codexModel)) {
       throw new Error(`invalid codex model "${patch.codexModel}" — must be one of: ${CODEX_MODELS.join(', ')}`)
     }
+    const reasoning = patch.reasoning ?? existing.reasoning ?? DEFAULT_FLAGS.reasoning
+    const codexModel = patch.codexModel ?? normCodexModel(existing.codexModel)
+    assertReasoningModelCompatibility(reasoning, codexModel)
     this.data.channels[channelId] = {
       ...existing,
       // Changing model/trace inside a previously deaf thread is not an access
       // grant. Only setChannel(..., enabled=true, ...) can open the thread.
       ...(parent && !exact ? { enabled: false } : {}),
-      ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
+      ...(patch.reasoning !== undefined ? { reasoning } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
       ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
-      ...(patch.codexModel !== undefined ? { codexModel: normCodexModel(patch.codexModel) } : {}),
+      ...(patch.codexModel !== undefined ? { codexModel } : {}),
       ...(patch.counter !== undefined ? { counter: patch.counter } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }
