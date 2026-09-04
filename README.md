@@ -180,7 +180,7 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt mention [#channel]` | toggle mention gating with one tap |
 | `/gpt engine codex\|api [#channel]` | choose the chat engine |
 | `/gpt model [model] [#channel]` | show or set the Codex model |
-| `/gpt effort none\|low\|medium\|high\|xhigh\|max [#channel]` | set reasoning effort |
+| `/gpt effort low\|medium\|high\|xhigh\|max\|ultra [#channel]` | set reasoning effort (availability depends on model) |
 | `/gpt thinking off\|on\|live\|collapse [#channel]` | configure reasoning display |
 | `/gpt trace off\|on\|live\|collapse [#channel]` | configure tool-trace display |
 | `/gpt counter off\|token\|both [#channel]` | configure per-turn telemetry |

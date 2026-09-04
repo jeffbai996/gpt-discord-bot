@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
-import { AccessManager } from '../src/access.ts'
+import { AccessManager, CODEX_REASONING_BY_MODEL } from '../src/access.ts'
 
 let tmpDir: string
 
@@ -93,15 +93,26 @@ test('access: Astra supports observable ultra delegation', async () => {
   assert.equal(a.channelFlags('c-astra').reasoning, 'ultra')
 })
 
-test('access: Astra rejects unsupported none reasoning', async () => {
+test('access: model effort ladders match the Codex catalog', () => {
+  assert.deepEqual(CODEX_REASONING_BY_MODEL, {
+    'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+    'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
+    'gpt-daybreak-blue-latest': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  })
+})
+
+test('access: every current Codex model rejects unsupported none reasoning', async () => {
   const a = new AccessManager()
   await a.load()
-  await a.setChannel('c-astra', true, false, { codexModel: 'gpt-6-astra' as any })
-
-  await assert.rejects(
-    () => a.setChannelFlags('c-astra', { reasoning: 'none' }),
-    /none.*gpt-6-astra.*not supported/i,
-  )
+  for (const model of Object.keys(CODEX_REASONING_BY_MODEL)) {
+    await a.setChannel(`c-${model}`, true, false, { codexModel: model as any })
+    await assert.rejects(
+      () => a.setChannelFlags(`c-${model}`, { reasoning: 'none' }),
+      new RegExp(`none.*${model.replaceAll('.', '\\.') }.*not supported`, 'i'),
+    )
+  }
 })
 
 test('access: ultra rejects models without automatic delegation', async () => {
@@ -142,6 +153,29 @@ test('access: retired saved GPT-5.5 normalizes to current default', async () => 
   await a.load()
   const flags = a.channelFlags('c1')
   assert.equal(flags.codexModel, 'gpt-5.6-sol')
+})
+
+test('access: stale none effort migrates to the supported default', async () => {
+  const file = path.join(tmpDir, 'access.json')
+  await fs.writeFile(file, JSON.stringify({
+    version: 2,
+    users: {},
+    channels: {
+      c1: {
+        enabled: true,
+        requireMention: false,
+        codexModel: 'gpt-5.6-sol',
+        reasoning: 'none',
+      },
+    },
+  }, null, 2))
+
+  const a = new AccessManager()
+  await a.load()
+
+  assert.equal(a.channelFlags('c1').reasoning, 'high')
+  const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+  assert.equal(migrated.channels.c1.reasoning, 'high')
 })
 
 test('access: migrates the old thinking collapse mode to live once', async () => {

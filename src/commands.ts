@@ -214,7 +214,7 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Set or show the Codex model')
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
-        { name: 'GPT-6 Astra - most capable', value: 'gpt-6-astra' },
+        { name: 'gpt-6-astra', value: 'gpt-6-astra' },
         { name: 'gpt-5.6-sol - frontier coding', value: 'gpt-5.6-sol' },
         { name: 'gpt-5.6-terra - balanced', value: 'gpt-5.6-terra' },
         { name: 'gpt-5.6-luna - high-throughput', value: 'gpt-5.6-luna' },
@@ -227,10 +227,9 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Set or show reasoning effort')
     .addStringOption(o => o
       .setName('value')
-      .setDescription('none | low | medium | high | xhigh | max | ultra')
+      .setDescription('low | medium | high | xhigh | max | ultra')
       .setRequired(true)
       .addChoices(
-        { name: 'none - no reasoning, fastest', value: 'none' },
         { name: 'low', value: 'low' },
         { name: 'medium', value: 'medium' },
         { name: 'high', value: 'high' },

@@ -78,25 +78,27 @@ function normCodexModel(v: unknown): CodexModel {
 export const CODEX_MODELS = OPENAI_MODELS
 export type CodexModel = OpenAIModel
 
-// Ultra is not just a deeper scalar: Codex enables automatic task delegation.
-// Keep this compatibility boundary beside the model allowlist so every setter
-// enforces the same contract, including model changes after Ultra was selected.
-export const ULTRA_CODEX_MODELS: readonly CodexModel[] = [
-  'gpt-6-astra',
-  'gpt-5.6-sol',
-  'gpt-5.6-terra',
-  'gpt-daybreak-blue-latest',
-]
+// Snapshot of Codex's model catalog. Effort support is per model, not a single
+// house scale: Ultra additionally enables automatic task delegation.
+export const CODEX_REASONING_BY_MODEL: Record<CodexModel, readonly ReasoningEffort[]> = {
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-daybreak-blue-latest': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+}
+
+export const ULTRA_CODEX_MODELS: readonly CodexModel[] = CODEX_MODELS.filter(
+  model => CODEX_REASONING_BY_MODEL[model].includes('ultra'),
+)
 
 export function assertReasoningModelCompatibility(
   reasoning: ReasoningEffort,
   model: CodexModel,
 ): void {
-  if (model === 'gpt-6-astra' && reasoning === 'none') {
-    throw new Error(`none reasoning for ${model} is not supported; use low or higher`)
-  }
-  if (reasoning === 'ultra' && !ULTRA_CODEX_MODELS.includes(model)) {
-    throw new Error(`ultra reasoning for ${model} is not supported; use Astra, Sol, Terra, or Daybreak Blue`)
+  const supported = CODEX_REASONING_BY_MODEL[model]
+  if (!supported.includes(reasoning)) {
+    throw new Error(`${reasoning} reasoning for ${model} is not supported; use one of: ${supported.join(', ')}`)
   }
 }
 
@@ -127,6 +129,7 @@ export class AccessManager {
       const parsed = JSON.parse(raw) as Partial<AccessFile>
       const needsThinkingModeMigration = parsed.version !== 2
       const channels = parsed.channels ?? {}
+      let needsReasoningMigration = false
       if (needsThinkingModeMigration) {
         for (const channel of Object.values(channels)) {
           // In v1, "collapse" was the one-line live view. Preserve that
@@ -134,12 +137,20 @@ export class AccessManager {
           if (channel.thinking === 'collapse') channel.thinking = 'live'
         }
       }
+      for (const channel of Object.values(channels)) {
+        const model = normCodexModel(channel.codexModel)
+        const effort = channel.reasoning ?? DEFAULT_FLAGS.reasoning
+        if (!CODEX_REASONING_BY_MODEL[model].includes(effort)) {
+          channel.reasoning = DEFAULT_FLAGS.reasoning
+          needsReasoningMigration = true
+        }
+      }
       this.data = {
         version: 2,
         users: parsed.users ?? {},
         channels,
       }
-      if (needsThinkingModeMigration) await this.save()
+      if (needsThinkingModeMigration || needsReasoningMigration) await this.save()
     } catch (e: any) {
       if (e.code === 'ENOENT') {
         this.data = { ...EMPTY }

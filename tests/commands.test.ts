@@ -167,7 +167,7 @@ test('/gpt model choices use durable tier labels', () => {
   const value: any = model?.options?.find((option: any) => option.name === 'value')
 
   assert.deepEqual(value?.choices?.map((choice: any) => choice.name), [
-    'GPT-6 Astra - most capable',
+    'gpt-6-astra',
     'gpt-5.6-sol - frontier coding',
     'gpt-5.6-terra - balanced',
     'gpt-5.6-luna - high-throughput',
@@ -182,6 +182,7 @@ test('/gpt effort exposes ultra as automatic delegation', () => {
   const ultra = value?.choices?.find((choice: any) => choice.value === 'ultra')
 
   assert.equal(ultra?.name, 'ultra - automatic delegation')
+  assert.equal(value?.choices?.some((choice: any) => choice.value === 'none'), false)
 })
 
 test('setting acknowledgements include the previous value only when changed', () => {
