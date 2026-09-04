@@ -82,6 +82,7 @@ export type CodexModel = OpenAIModel
 // Keep this compatibility boundary beside the model allowlist so every setter
 // enforces the same contract, including model changes after Ultra was selected.
 export const ULTRA_CODEX_MODELS: readonly CodexModel[] = [
+  'gpt-6-astra',
   'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-daybreak-blue-latest',
@@ -91,8 +92,11 @@ export function assertReasoningModelCompatibility(
   reasoning: ReasoningEffort,
   model: CodexModel,
 ): void {
+  if (model === 'gpt-6-astra' && reasoning === 'none') {
+    throw new Error(`none reasoning for ${model} is not supported; use low or higher`)
+  }
   if (reasoning === 'ultra' && !ULTRA_CODEX_MODELS.includes(model)) {
-    throw new Error(`ultra reasoning for ${model} is not supported; use Sol, Terra, or Daybreak Blue`)
+    throw new Error(`ultra reasoning for ${model} is not supported; use Astra, Sol, Terra, or Daybreak Blue`)
   }
 }
 

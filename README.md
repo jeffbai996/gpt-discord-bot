@@ -192,7 +192,7 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt limits` | show Codex subscription usage windows |
 | `/gpt voice join\|type\|leave\|speak` | control realtime voice |
 
-Current Codex model choices: `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Current Codex model choices: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-daybreak-blue-latest`.
 
 ---
 

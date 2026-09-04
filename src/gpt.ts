@@ -419,7 +419,7 @@ const toolRegistry = await buildDefaultRegistry(openaiRaw, memoryStore, ollamaCl
 const SUMMARIZATION_THRESHOLD = parseInt(process.env.GPT_SUMMARIZATION_THRESHOLD ?? '50', 10)
 const SUMMARIZATION_BATCH_LIMIT = parseInt(process.env.GPT_SUMMARIZATION_BATCH_LIMIT ?? '500', 10)
 // Summarization runs on the local Ollama client with a local model by default
-// (was metered gpt-5.5 on every rollup). Override the model via
+// (was metered API inference on every rollup). Override the model via
 // GPT_SUMMARIZATION_MODEL; it resolves against whichever client is wired below.
 const CONFIGURED_SUMMARIZATION_MODEL = process.env.GPT_SUMMARIZATION_MODEL ?? DEFAULT_SUMMARIZATION_MODEL
 const SUMMARIZATION_MODEL = CONFIGURED_SUMMARIZATION_MODEL === 'qwen3.6:27b-mtp-q4_K_M'

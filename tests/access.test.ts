@@ -84,6 +84,26 @@ test('access: ultra is valid on a model that supports automatic delegation', asy
   assert.equal(a.channelFlags('c1').reasoning, 'ultra')
 })
 
+test('access: Astra supports observable ultra delegation', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-astra', true, false, { codexModel: 'gpt-6-astra' as any })
+  await a.setChannelFlags('c-astra', { reasoning: 'ultra' })
+
+  assert.equal(a.channelFlags('c-astra').reasoning, 'ultra')
+})
+
+test('access: Astra rejects unsupported none reasoning', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-astra', true, false, { codexModel: 'gpt-6-astra' as any })
+
+  await assert.rejects(
+    () => a.setChannelFlags('c-astra', { reasoning: 'none' }),
+    /none.*gpt-6-astra.*not supported/i,
+  )
+})
+
 test('access: ultra rejects models without automatic delegation', async () => {
   const a = new AccessManager()
   await a.load()
@@ -109,14 +129,14 @@ test('access: model changes cannot strand an existing ultra setting', async () =
   )
 })
 
-test('access: retired saved codexModel normalizes to current default', async () => {
+test('access: retired saved GPT-5.5 normalizes to current default', async () => {
   const a = new AccessManager()
   await a.load()
   await a.setChannel('c1', true, false)
 
   const file = path.join(tmpDir, 'access.json')
   const raw = JSON.parse(await fs.readFile(file, 'utf8'))
-  raw.channels.c1.codexModel = 'retired-model'
+  raw.channels.c1.codexModel = 'gpt-5.5'
   await fs.writeFile(file, JSON.stringify(raw, null, 2))
 
   await a.load()

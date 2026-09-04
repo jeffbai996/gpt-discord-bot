@@ -167,7 +167,7 @@ test('/gpt model choices use durable tier labels', () => {
   const value: any = model?.options?.find((option: any) => option.name === 'value')
 
   assert.deepEqual(value?.choices?.map((choice: any) => choice.name), [
-    'gpt-5.5 - legacy',
+    'GPT-6 Astra - most capable',
     'gpt-5.6-sol - frontier coding',
     'gpt-5.6-terra - balanced',
     'gpt-5.6-luna - high-throughput',
