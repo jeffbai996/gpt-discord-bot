@@ -6,6 +6,7 @@ import {
   fmtClearAcknowledgement,
   fmtContextPressureLine,
   fmtLimitLines,
+  fmtModelStatus,
   fmtSettingChange,
   gptCommand,
 } from '../src/commands.ts'
@@ -188,4 +189,11 @@ test('/gpt effort exposes ultra as automatic delegation', () => {
 test('setting acknowledgements include the previous value only when changed', () => {
   assert.equal(fmtSettingChange('effort', 'high', 'medium'), '✅ effort → `high` (was `medium`)')
   assert.equal(fmtSettingChange('effort', 'high', 'high'), '✅ effort → `high`')
+})
+
+test('/gpt model status shows the model and effective effort without engine trivia', () => {
+  const status = fmtModelStatus('123456789012345678', 'gpt-5.6-sol', 'high')
+
+  assert.equal(status, '🤖 <#123456789012345678> model `gpt-5.6-sol` · effort `high`')
+  assert.doesNotMatch(status, /postmortem|engine|\(|\)/i)
 })

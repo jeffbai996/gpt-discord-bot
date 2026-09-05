@@ -74,6 +74,10 @@ export function fmtSettingChange(label: string, value: string, previous: string)
   return `✅ ${label} → \`${value}\`${changed}`
 }
 
+export function fmtModelStatus(channelId: string, model: string, effort: string): string {
+  return `🤖 <#${channelId}> model \`${model}\` · effort \`${effort}\``
+}
+
 /** Read-only runtime diagnostics. It deliberately creates no probe files. */
 export async function runGptDoctor(
   stateDir = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord'),
@@ -487,8 +491,9 @@ export async function executeGptCommand(
       }
       const raw = interaction.options.getString('value')
       if (!raw) {
-        const cur = access.channelFlags(channel.id).codexModel ?? DEFAULT_CODEX_MODEL
-        return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API postmortem path uses its own model).`, ephemeral: true })
+        const flags = access.channelFlags(channel.id)
+        const cur = flags.codexModel ?? DEFAULT_CODEX_MODEL
+        return interaction.reply({ content: fmtModelStatus(channel.id, cur, flags.reasoning), ephemeral: true })
       }
       const value = raw.trim().toLowerCase()
       if (!(CODEX_MODELS as readonly string[]).includes(value)) {
