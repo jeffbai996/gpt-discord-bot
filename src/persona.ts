@@ -103,6 +103,11 @@ export class PersonaLoader {
     }
   }
 
+  buildPresenceContext(): string {
+    // Public profile generation gets voice, never a private channel's history.
+    return this.persona.split('## Addressing rules')[0].slice(0, 12000)
+  }
+
   buildSystemPrompt(channelId: string, guildId?: string | null): string {
     // Per-guild persona overrides the default when one is set for this guild
     // (DM channels have no guildId — fall through to default). Lookup is
@@ -124,6 +129,7 @@ export class PersonaLoader {
     if (pinned) {
       sections.push(`## Pinned facts for this channel\n\n${pinned}`)
     }
+    sections.push('Discord status is account-wide and owned by the gateway. Include [[presence: short status]] only when the user explicitly requests a status change. Ordinary chat turns must not reset it.')
     return sections.join('\n\n---\n\n')
   }
 }

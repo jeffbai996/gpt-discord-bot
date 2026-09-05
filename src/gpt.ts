@@ -1,3 +1,4 @@
+import { PresenceOwner } from './presence-owner.ts'
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
 import path from 'path'
 import os from 'os'
@@ -339,24 +340,6 @@ const APP_ID: string = process.env.DISCORD_APP_ID
 const OPENAI_KEY: string = process.env.OPENAI_API_KEY
 const DEFAULT_MODEL: string = process.env.GPT_MODEL || DEFAULT_OPENAI_MODEL
 const ADMIN_USER_ID: string | undefined = process.env.DISCORD_ADMIN_USER_ID
-const DEFAULT_PRESENCE_TEXT = '📎 actually, on reflection—'
-
-function loadSettings(): { presence?: string } {
-  try {
-    const raw = fs.readFileSync(path.join(STATE_DIR, 'settings.json'), 'utf8')
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return {}
-    return typeof parsed.presence === 'string' ? { presence: parsed.presence } : {}
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code
-    if (code !== 'ENOENT') console.error('settings load failed:', e)
-    return {}
-  }
-}
-
-const settings = loadSettings()
-const initialPresenceText = settings.presence?.slice(0, 128) || DEFAULT_PRESENCE_TEXT
-
 const access = new AccessManager()
 const persona = new PersonaLoader()
 const pendingEdits = new PendingEditsStore()
@@ -675,10 +658,8 @@ installGracefulShutdown()
 
 client.once('ready', async () => {
   console.error(`gpt online as ${client.user?.tag} (${client.user?.id})`)
-  client.user?.setPresence({
-    status: 'online',
-    activities: [{ name: initialPresenceText, type: ActivityType.Custom, state: initialPresenceText }]
-  })
+  void presenceOwner.start(persona.buildPresenceContext(), generateStartupPresence)
+    .catch(error => console.error('[presence] startup failed:', error))
 
   try {
     await discordRest.put(Routes.applicationCommands(APP_ID), { body: [gptCommand.toJSON()] })
@@ -798,24 +779,24 @@ client.on('interactionCreate', async interaction => {
 //
 // targetMessage non-null → edit that bot message instead of posting fresh.
 // expansion=true → prepend an "expand on your prior reply" instruction.
-// Presence: @gpt sets its own status via a [[presence: …]] reply directive →
-// applyBasePresence(). The API-postmortem indicator (setEnginePresence) temporarily
-// overrides with ⚠️ and restores the base on recovery.
-let basePresenceText = initialPresenceText
-let lastDegraded = false
-function presenceActivity(text: string) {
-  return { name: text, type: ActivityType.Custom, state: text }
+// One gateway owns the account status across all channel sessions.
+const presenceOwner = new PresenceOwner(STATE_DIR, text => {
+  client.user?.setPresence({ status: 'online', activities: [
+    { name: text, type: ActivityType.Custom, state: text },
+  ] })
+  console.error(`[presence] applied ${JSON.stringify(text)}`)
+})
+client.on('shardResume', () => presenceOwner.restore())
+
+async function generateStartupPresence(prompt: string, signal: AbortSignal): Promise<string> {
+  const result = await respondViaCodex({
+    systemPrompt: 'Write only the requested public profile status. Do not use tools.',
+    history: [], userMessage: prompt, userName: 'startup',
+    reasoningEffort: 'low', readOnly: true, signal,
+  })
+  return result.reply ?? ''
 }
-function applyBasePresence(text: string): void {
-  basePresenceText = text.slice(0, 128) || basePresenceText
-  if (!lastDegraded) { try { client.user?.setPresence({ activities: [presenceActivity(basePresenceText)] }) } catch {} }
-}
-function setEnginePresence(degraded: boolean): void {
-  if (degraded === lastDegraded) return
-  lastDegraded = degraded
-  const text = degraded ? '⚠️ API postmortem (codex failed)' : basePresenceText
-  try { client.user?.setPresence({ activities: [presenceActivity(text)] }) } catch {}
-}
+
 
 async function handleUserMessage(
   message: Message,
@@ -830,6 +811,7 @@ async function handleUserMessage(
   // When a batched-queue turn folds several messages together, the combined
   // text comes in via contentOverride; otherwise use the message's own content.
   const userText = contentOverride ?? message.content
+  const presenceTicket = presenceOwner.request(userText)
   const replyContext = await resolveReplyContext(message)
   const pinContext = await resolvePinContext(message)
   const threadContext = await resolveThreadContext(message)
@@ -1666,7 +1648,6 @@ async function handleUserMessage(
             && (result.usage?.inputTokens ?? 0) >= CODEX_SESSION_MAX_INPUT_TOKENS) {
           pendingPostTurnRolloverUsage = result.usage!.inputTokens
         }
-        setEnginePresence(false)
       } catch (e) {
         if (e instanceof NonTerminalCompletionError) {
           await settleLiveUi()
@@ -1764,7 +1745,6 @@ async function handleUserMessage(
         }
         throwIfStopped()
         result = await apiPostmortemRespond(e)
-        setEnginePresence(true)
       }
     } else {
       throwIfStopped()
@@ -1788,7 +1768,7 @@ async function handleUserMessage(
     {
       const pm = result.reply?.match(/\[\[presence:\s*([^\]]+)\]\]/i)
       if (pm) {
-        applyBasePresence(pm[1].trim())
+        presenceOwner.update(presenceTicket, pm[1].trim())
         result.reply = (result.reply ?? '').replace(/\[\[presence:\s*[^\]]+\]\]/ig, '').trim()
       }
     }

@@ -225,7 +225,7 @@ function buildPrompt(input: CodexChatInput): string {
         + `  ${SQUAD_STORE_BIN} todo add --discord-chat-id "${input.channelId ?? ''}" "<task>"\n`
         + `Save only genuinely durable, reusable facts — never chit-chat, recaps, or progress notes.`,
     ] : []),
-    `You can set your own Discord status: include [[presence: <short status>]] anywhere in your reply and it'll be applied to your presence + stripped from the message. Use it sparingly — only for a genuine status change.`,
+    `You can set your own Discord status: include [[presence: <short status>]] anywhere in your reply and it'll be applied to your presence + stripped from the message. Use it only when the user explicitly asks to change your Discord status. Startup presence is owned by the gateway process; ordinary turns must not reset it.`,
     LIVE_PROGRESS_INSTRUCTION,
     '--- New message ---',
     `${input.userName}: ${input.userMessage}`,
