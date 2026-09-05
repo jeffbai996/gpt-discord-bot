@@ -81,8 +81,8 @@ export function initGlobalStats(file: string): void {
     globalTotals.turns = d.turns ?? 0
     globalTotals.inputTokens = d.inputTokens ?? 0
     globalTotals.outputTokens = d.outputTokens ?? 0
-    globalTotals.cachedInputTokens = d.cachedInputTokens ?? 0
-    globalTotals.reasoningTokens = d.reasoningTokens ?? 0
+    globalTotals.cachedInputTokens = (d.cachedInputTokens ?? 0)
+    globalTotals.reasoningTokens = (d.reasoningTokens ?? 0)
     globalTotals.byModel = (d.byModel && typeof d.byModel === 'object') ? d.byModel : {}
     globalTotals.since = d.since ?? Date.now()
     globalTotals.days = (d.days && typeof d.days === 'object') ? pruneDays(d.days) : {}

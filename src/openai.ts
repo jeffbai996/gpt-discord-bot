@@ -447,11 +447,11 @@ export class OpenAIClient {
                 }
                 totalUsage = totalUsage
                   ? {
-                      inputTokens: totalUsage.inputTokens + mapped.inputTokens,
-                      outputTokens: totalUsage.outputTokens + mapped.outputTokens,
-                      totalTokens: totalUsage.totalTokens + mapped.totalTokens,
-                      cachedInputTokens: totalUsage.cachedInputTokens + mapped.cachedInputTokens,
-                      reasoningTokens: totalUsage.reasoningTokens + mapped.reasoningTokens,
+                      inputTokens: (totalUsage.inputTokens + mapped.inputTokens),
+                      outputTokens: (totalUsage.outputTokens + mapped.outputTokens),
+                      totalTokens: (totalUsage.totalTokens + mapped.totalTokens),
+                      cachedInputTokens: (totalUsage.cachedInputTokens + mapped.cachedInputTokens),
+                      reasoningTokens: (totalUsage.reasoningTokens + mapped.reasoningTokens),
                     }
                   : mapped
               }
@@ -477,11 +477,11 @@ export class OpenAIClient {
                 }
                 totalUsage = totalUsage
                   ? {
-                      inputTokens: totalUsage.inputTokens + mapped.inputTokens,
-                      outputTokens: totalUsage.outputTokens + mapped.outputTokens,
-                      totalTokens: totalUsage.totalTokens + mapped.totalTokens,
-                      cachedInputTokens: totalUsage.cachedInputTokens + mapped.cachedInputTokens,
-                      reasoningTokens: totalUsage.reasoningTokens + mapped.reasoningTokens,
+                      inputTokens: (totalUsage.inputTokens + mapped.inputTokens),
+                      outputTokens: (totalUsage.outputTokens + mapped.outputTokens),
+                      totalTokens: (totalUsage.totalTokens + mapped.totalTokens),
+                      cachedInputTokens: (totalUsage.cachedInputTokens + mapped.cachedInputTokens),
+                      reasoningTokens: (totalUsage.reasoningTokens + mapped.reasoningTokens),
                     }
                   : mapped
               }

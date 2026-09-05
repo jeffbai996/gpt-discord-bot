@@ -460,10 +460,10 @@ export function normalizeAppServerNotification(message: any): any | null {
     return {
       type: 'usage.updated',
       usage: {
-        input_tokens: usage.inputTokens ?? 0,
-        cached_input_tokens: usage.cachedInputTokens ?? 0,
-        output_tokens: usage.outputTokens ?? 0,
-        reasoning_output_tokens: usage.reasoningOutputTokens ?? 0,
+        input_tokens: (usage.inputTokens ?? 0),
+        cached_input_tokens: (usage.cachedInputTokens ?? 0),
+        output_tokens: (usage.outputTokens ?? 0),
+        reasoning_output_tokens: (usage.reasoningOutputTokens ?? 0),
       },
     }
   }
