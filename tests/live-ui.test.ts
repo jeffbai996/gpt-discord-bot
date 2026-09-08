@@ -59,6 +59,20 @@ test('keeps the thinking header above live progress', () => {
   )
 })
 
+test('compaction replaces the thinking card with the paper indicator', () => {
+  assert.equal(
+    formatLiveWorkMessage({
+      effortLabel: 'thinking with high effort',
+      activity: 'compacting',
+      headline: 'stale reasoning should not leak through',
+      detail: 'stale progress should not leak through',
+      spinnerGlyph: '✶',
+      spinnerDots: '..',
+    }),
+    '📝 ✶ **Compacting context..**',
+  )
+})
+
 test('keeps the effort header and renders the latest reasoning one-liner beneath it', () => {
   assert.equal(
     latestReasoningHeadline([

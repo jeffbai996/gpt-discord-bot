@@ -43,7 +43,7 @@ test('voice session connects Realtime before opening the Discord receive path', 
   }
 
   const session = new VoiceSession(
-    { apiKey: 'test' },
+    { apiKey: 'test', speakerUserId: 'user-1' },
     {
       createRealtime: () => new FakeRealtime(events) as any,
       joinVoice: () => {
@@ -65,7 +65,7 @@ test('voice session connects Realtime before opening the Discord receive path', 
   session.leave()
 })
 
-test('voice session subscribes as soon as Discord reports a speaker', async () => {
+test('voice session subscribes only to the authorized speaker', async () => {
   const speaking = new EventEmitter()
   const subscribed: string[] = []
   const connection = {
@@ -81,7 +81,7 @@ test('voice session subscribes as soon as Discord reports a speaker', async () =
   }
 
   const session = new VoiceSession(
-    { apiKey: 'test' },
+    { apiKey: 'test', speakerUserId: 'owner-1' },
     {
       createRealtime: () => new FakeRealtime([]) as any,
       joinVoice: () => connection as any,
@@ -95,9 +95,10 @@ test('voice session subscribes as soon as Discord reports a speaker', async () =
     id: 'voice-1',
     guild: { id: 'guild-1', voiceAdapterCreator: {} },
   } as any)
-  speaking.emit('start', 'user-1')
+  speaking.emit('start', 'intruder-1')
+  speaking.emit('start', 'owner-1')
 
-  assert.deepEqual(subscribed, ['user-1'])
+  assert.deepEqual(subscribed, ['owner-1'])
   session.leave()
 })
 
@@ -113,7 +114,7 @@ test('voice session appends a silence tail after Discord closes an utterance', a
   }
 
   const session = new VoiceSession(
-    { apiKey: 'test' },
+    { apiKey: 'test', speakerUserId: 'user-1' },
     {
       createRealtime: () => realtime as any,
       joinVoice: () => connection as any,
@@ -149,7 +150,7 @@ test('voice session warms the Discord playback path before the first reply', asy
   }
 
   const session = new VoiceSession(
-    { apiKey: 'test' },
+    { apiKey: 'test', speakerUserId: 'user-1' },
     {
       createRealtime: () => new FakeRealtime([]) as any,
       joinVoice: () => connection as any,
@@ -187,7 +188,7 @@ test('barge-in truncates model history to the audio Discord had time to play', a
   }
 
   const session = new VoiceSession(
-    { apiKey: 'test' },
+    { apiKey: 'test', speakerUserId: 'user-1' },
     {
       createRealtime: () => realtime as any,
       joinVoice: () => connection as any,

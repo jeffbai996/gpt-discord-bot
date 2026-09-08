@@ -2,20 +2,21 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseStructuredReply, extractPartialReply, previewToolResult, maxToolLoops } from '../src/openai.ts'
 
-test('maxToolLoops: defaults to 256 rounds', () => {
-  assert.equal(maxToolLoops(undefined), 256)
-  assert.equal(maxToolLoops(''), 256)
+test('maxToolLoops: defaults to a bounded 16 rounds', () => {
+  assert.equal(maxToolLoops(undefined), 16)
+  assert.equal(maxToolLoops(''), 16)
 })
 
-test('maxToolLoops: accepts a positive integer override', () => {
-  assert.equal(maxToolLoops('40'), 40)
+test('maxToolLoops: accepts an override only up to the hard cap', () => {
+  assert.equal(maxToolLoops('24'), 24)
+  assert.equal(maxToolLoops('40'), 32)
 })
 
 test('maxToolLoops: rejects invalid and unsafe overrides', () => {
-  assert.equal(maxToolLoops('0'), 256)
-  assert.equal(maxToolLoops('-1'), 256)
-  assert.equal(maxToolLoops('12.5'), 256)
-  assert.equal(maxToolLoops('garbage'), 256)
+  assert.equal(maxToolLoops('0'), 16)
+  assert.equal(maxToolLoops('-1'), 16)
+  assert.equal(maxToolLoops('12.5'), 16)
+  assert.equal(maxToolLoops('garbage'), 16)
 })
 
 test('parseStructuredReply: well-formed JSON', () => {

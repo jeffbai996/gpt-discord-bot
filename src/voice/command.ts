@@ -20,6 +20,7 @@ import type { RealtimeTool, ToolCall } from './realtime.ts'
 import type { PersonaLoader } from '../persona.ts'
 import type { ToolRegistry } from '../tools/registry.ts'
 import type { DeferredToolJob } from '../tools/registry.ts'
+import type { AccessManager } from '../access.ts'
 import {
   getVoicePref,
   REALTIME_VOICE_CHOICES,
@@ -52,12 +53,13 @@ background completion arrives, report the actual outcome out loud without \
 pretending you did work that the result does not confirm.`.trim()
 
 // Tools too slow for a live call (multi-second = dead air that feels broken).
-// Excluded from what the voice model is OFFERED — still dispatchable if somehow
-// named. Comma-separated override via GPT_VOICE_TOOL_DENY (default: codex).
-const VOICE_TOOL_DENY = new Set(
-  (process.env.GPT_VOICE_TOOL_DENY ?? 'codex')
+// Read at command time because the service loads its state-directory .env after
+// module imports. The same set gates both schemas and dispatch.
+function voiceToolDeny(): Set<string> {
+  return new Set((process.env.GPT_VOICE_TOOL_DENY ?? 'codex')
     .split(',').map(s => s.trim()).filter(Boolean),
-)
+  )
+}
 
 /** Attach the `voice` subcommand group to the existing /gpt command builder. */
 export function addVoiceGroup(cmd: SlashCommandSubcommandsOnlyBuilder): void {
@@ -124,6 +126,7 @@ export class VoiceManager {
   async join(
     guildId: string,
     channel: Parameters<VoiceSession['join']>[0],
+    speakerUserId: string,
     // Per-join overrides — the live persona + tools + dispatch are built at
     // join time (they depend on the channel/guild), overriding any constructor
     // defaults. Falls back to the constructor opts when not supplied.
@@ -132,6 +135,7 @@ export class VoiceManager {
     if (this.sessions.has(guildId)) this.leave(guildId)
     const session = new VoiceSession({
       apiKey: this.opts.apiKey,
+      speakerUserId,
       model: resolveRealtimeModel(overrides?.model, this.opts.model),
       instructions: overrides?.instructions ?? this.opts.instructions,
       voice: resolveRealtimeVoice(overrides?.voice, this.opts.voice),
@@ -181,6 +185,7 @@ export async function executeVoiceCommand(
     getModel?: () => string
     setModel?: (model: string) => void
   } = {},
+  access: Pick<AccessManager, 'isUserAllowed'> = { isUserAllowed: () => false },
 ): Promise<void> {
   if (interaction.user.id !== adminUserId) {
     await interaction.reply({ content: 'Voice is owner-only · billed per minute', ephemeral: true })
@@ -268,29 +273,39 @@ export async function executeVoiceCommand(
     const textChannel = interaction.channel
     if (textChannel && 'messages' in textChannel) {
       const recent = await textChannel.messages.fetch({ limit: 20 })
+      const selfId = interaction.client.user?.id
       recentConversation = formatRecentConversation(
-        [...recent.values()].reverse().map(message => ({
+        [...recent.values()].reverse()
+          .filter(message => message.author.id === selfId || access.isUserAllowed(message.author.id))
+          .map(message => ({
           author: message.author.username,
           content: message.cleanContent,
-        })),
+          })),
       )
     }
   } catch (e) {
     console.warn(`[voice] recent-history fetch failed: ${(e as Error).message}`)
   }
   const instructions = buildVoiceInstructions(personaInstructions, recentConversation)
-  const tools = toolRegistry.toRealtimeTools().filter(t => !VOICE_TOOL_DENY.has(t.name))
+  const deniedTools = voiceToolDeny()
+  const tools = toolRegistry.toRealtimeTools().filter(t => !deniedTools.has(t.name))
   const ctx = { channelId: interaction.channelId, userId: interaction.user.id }
   const onToolCall = async (
     call: ToolCall,
     defer: (job: DeferredToolJob) => void,
   ): Promise<unknown> => {
+    if (deniedTools.has(call.name)) return `Tool ${call.name} is not available during voice calls`
     let args: Record<string, unknown> = {}
     try { args = JSON.parse(call.argsJson || '{}') } catch { /* malformed args → {} */ }
     return await toolRegistry.dispatch(call.name, args, { ...ctx, defer })
   }
   try {
-    await manager.join(interaction.guildId, channel, { instructions, model, voice, tools, onToolCall })
+    await manager.join(
+      interaction.guildId,
+      channel,
+      interaction.user.id,
+      { instructions, model, voice, tools, onToolCall },
+    )
     await interaction.editReply(
       `🎙️ In **${channel.name}** with **${voice}** on **${model}** — talk to me. \`/gpt voice leave\` to stop.`,
     )

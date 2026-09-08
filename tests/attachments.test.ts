@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { access } from 'node:fs/promises'
-import { cleanupAttachmentFiles, processAttachments } from '../src/attachments.ts'
-import { zipSync, strToU8 } from 'fflate'
+import { cleanupAttachmentFiles, downloadToBuffer, processAttachments } from '../src/attachments.ts'
+import { gzipSync, zipSync, strToU8 } from 'fflate'
+import { extractLocalText } from '../src/attachment-worker-client.ts'
 
 // Minimal stand-in for discord.js's Attachment type. processAttachments only
 // reads url/name/size/contentType, so we don't need the full class.
@@ -206,4 +207,25 @@ test('processAttachments: extracts supported text members from ZIP archives', as
   globalThis.fetch = originalFetch
   assert.match(out.text, /hello from archive/)
   assert.deepEqual(out.skipped, [])
+})
+
+test('downloadToBuffer cancels a streaming response as soon as the byte cap is exceeded', async () => {
+  let cancelled = false
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(8))
+    },
+    cancel() { cancelled = true },
+  })
+
+  await assert.rejects(
+    () => downloadToBuffer('https://cdn.example/large.bin', 15, async () => new Response(stream)),
+    /exceeds 15 byte cap/,
+  )
+  assert.equal(cancelled, true)
+})
+
+test('archive extraction is isolated and rejects an oversized expansion', async () => {
+  const bomb = Buffer.from(gzipSync(new Uint8Array(9 * 1024 * 1024)))
+  await assert.rejects(() => extractLocalText(bomb, 'bomb.gz'), /expanded size cap exceeded/)
 })

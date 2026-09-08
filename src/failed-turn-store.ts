@@ -5,6 +5,7 @@ export interface FailedTurn {
   channelId: string
   sourceMessageId: string
   diagnostic: string
+  consumed?: boolean
 }
 
 export class FailedTurnStore {
@@ -26,6 +27,16 @@ export class FailedTurnStore {
   set(errorMessageId: string, turn: FailedTurn): void {
     this.items[errorMessageId] = turn
     this.flush()
+  }
+
+  // Claim synchronously before any Discord I/O; both buttons and reactions use this.
+  // Retain a tombstone so late reactions cannot fall through to generic regenerate.
+  claim(errorMessageId: string): FailedTurn | undefined {
+    const turn = this.items[errorMessageId]
+    if (!turn || turn.consumed) return undefined
+    this.items[errorMessageId] = { ...turn, consumed: true }
+    this.flush()
+    return turn
   }
 
   delete(errorMessageId: string): void {

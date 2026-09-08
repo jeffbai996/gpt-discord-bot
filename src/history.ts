@@ -174,11 +174,13 @@ export async function formatHistoryForOpenAI(
   messages: HistoryMessage[],
   selfId: string,
   budget: number = HISTORY_TOKEN_BUDGET,
-  countTokens: CountTokens = defaultCountTokens
+  countTokens?: CountTokens,
+  isAllowedAuthor: (authorId: string) => boolean = () => true,
 ): Promise<OpenAI.Chat.Completions.ChatCompletionMessageParam[]> {
   const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = []
   for (const m of messages) {
     const isBot = m.authorId === selfId
+    if (!isBot && !isAllowedAuthor(m.authorId)) continue
     // Do not quietly ingest messages explicitly addressed to somebody else.
     // Discord reply metadata is unavailable in this normalized history shape,
     // so body mention tokens are intentionally the source of truth here too.
@@ -197,5 +199,5 @@ export async function formatHistoryForOpenAI(
       content
     })
   }
-  return selectWithinBudget(out, countTokens, { budget, minRetain: MIN_RETAIN })
+  return selectWithinBudget(out, countTokens ?? defaultCountTokens, { budget, minRetain: MIN_RETAIN })
 }

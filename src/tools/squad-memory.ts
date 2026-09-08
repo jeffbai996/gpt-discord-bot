@@ -1,6 +1,6 @@
 import type { Tool } from './registry.ts'
 
-// Shape returned by squad-store GET /api/search, verified live against the
+// Shape returned by the shared-memory API's GET /api/search, verified against the
 // local Flask bind at http://127.0.0.1:5005:
 //   { ok, q, mode, count, total, entries: SquadEntry[], ... }
 // `count` = number of entries in this returned slice; `total` = full match count.
@@ -77,7 +77,7 @@ async function fetchById(id: number): Promise<string> {
     const tags = Array.isArray(m.tags) && m.tags.length ? ` [${m.tags.join(', ')}]` : ''
     const raw = typeof m.text === 'string' ? m.text : ''
     const text = raw.length > MAX_TEXT_CHARS_BY_ID ? raw.slice(0, MAX_TEXT_CHARS_BY_ID) + '…' : raw
-    return `squad-store memory #${m.id} (${m.type}) ${m.name}${tags}\n\n${text}`
+    return `shared memory #${m.id} (${m.type}) ${m.name}${tags}\n\n${text}`
   } catch (e: any) {
     if (e?.name === 'AbortError') {
       return `Squad memory fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s.`
@@ -132,7 +132,7 @@ async function fetchRecent(limit: number): Promise<string> {
     const entries = Array.isArray(data?.entries) ? data.entries : []
     if (entries.length === 0) return 'No squad memories found.'
     const { block } = renderEntries(entries)
-    return `squad-store: newest memories first\n\n${block}`
+    return `shared memory: newest memories first\n\n${block}`
   } catch (e: any) {
     if (e?.name === 'AbortError') {
       return `Squad memory recency fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s.`
@@ -143,14 +143,14 @@ async function fetchRecent(limit: number): Promise<string> {
   }
 }
 
-// Read-only tool: searches the shared squad-store memory over HTTP. Unlike
+// Read-only tool: searches shared memory over HTTP. Unlike
 // makeSearchMemoryTool it needs no OpenAI client or local store — just native
 // fetch + an env-overridable base URL — so the factory takes no args.
 export function makeSquadMemoryTool(): Tool {
   return {
     name: 'search_squad_memory',
     description:
-      'Read the shared squad-store memory (durable facts about the user, their projects, portfolio, and the bot squad). Read-only.\n' +
+      'Read shared memory (durable facts about the user, their projects, preferences, and the bot group). Read-only.\n' +
       '- When the user references a memory by NUMBER ("memory 84", "read #84", "what does 84 say"), pass that number as "id" to fetch that EXACT record. Do not keyword-search for the number — that returns the wrong record.\n' +
       '- For "latest / newest / most recent project" or "what are we working on now", pass "recent": true — keyword search CANNOT answer recency, so you MUST use recent for those.\n' +
       '- Otherwise pass "query" to keyword-search by topic.\n' +
@@ -197,11 +197,11 @@ export function makeSquadMemoryTool(): Tool {
       // mode=hybrid: vector embeddings (semantic) fused with BM25 (keyword).
       // Strictly better recall than literal substring — it finds records by
       // meaning, so "Jeff's wife" surfaces the 蛋 profile even though the word
-      // "wife" never appears in it. squad-store falls back to literal on its
+      // "relationship" never appears in it. The service falls back to literal on its
       // own when the vector index is unavailable.
       const url = `${base}/api/search?q=${encodeURIComponent(query)}&mode=hybrid`
 
-      // Abort the request if squad-store hangs, so a stalled tool call cannot
+      // Abort the request if the service hangs, so a stalled tool call cannot
       // wedge the whole tool-dispatch loop.
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -233,7 +233,7 @@ export function makeSquadMemoryTool(): Tool {
       // of every hit chopped to a 600-char fragment (the old surface-level bug).
       const { block, rendered } = renderEntries(shown, scores)
       const modeNote = data.mode && data.mode !== 'hybrid' ? ` (${data.mode} mode)` : ''
-      return `squad-store: ${rendered} of ${total} match(es) for "${query}"${modeNote}. Ranked by relevance; lower-ranked / low-% hits may be off-topic.\n\n${block}`
+      return `shared memory: ${rendered} of ${total} match(es) for "${query}"${modeNote}. Ranked by relevance; lower-ranked / low-% hits may be off-topic.\n\n${block}`
     }
   }
 }

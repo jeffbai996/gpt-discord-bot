@@ -180,7 +180,7 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt mention [#channel]` | toggle mention gating with one tap |
 | `/gpt engine codex\|api [#channel]` | choose the chat engine |
 | `/gpt model [model] [#channel]` | show or set the Codex model |
-| `/gpt effort none\|low\|medium\|high\|xhigh\|max [#channel]` | set reasoning effort |
+| `/gpt effort low\|medium\|high\|xhigh\|max\|ultra [#channel]` | set reasoning effort (availability depends on model) |
 | `/gpt thinking off\|on\|live\|collapse [#channel]` | configure reasoning display |
 | `/gpt trace off\|on\|live\|collapse [#channel]` | configure tool-trace display |
 | `/gpt counter off\|token\|both [#channel]` | configure per-turn telemetry |
@@ -192,7 +192,7 @@ Administrative commands are owner-gated and reply ephemerally where appropriate.
 | `/gpt limits` | show Codex subscription usage windows |
 | `/gpt voice join\|type\|leave\|speak` | control realtime voice |
 
-Current Codex model choices: `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Current Codex model choices: `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, and `gpt-daybreak-blue-latest`.
 
 ---
 
@@ -213,7 +213,7 @@ npm install
 
 mkdir -p ~/.gpt/channels/discord
 cp .env.example ~/.gpt/channels/discord/.env
-# Fill in DISCORD_BOT_TOKEN, DISCORD_APP_ID, and OPENAI_API_KEY.
+# Fill in DISCORD_BOT_TOKEN, DISCORD_APP_ID, DISCORD_ADMIN_USER_ID, and OPENAI_API_KEY.
 
 npm run start
 ```
@@ -239,6 +239,7 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | Variable | Purpose |
 |---|---|
 | `GPT_STATE_DIR` | runtime state directory |
+| `DISCORD_ADMIN_USER_ID` | required Discord snowflake for privileged commands and voice |
 | `GPT_INSTANCE_ID` | optional agent-registry namespace; defaults to `DISCORD_APP_ID` |
 | `GPT_CODEX_BIN` | Codex CLI path |
 | `GPT_CODEX_CHAT` | set `0` to disable Codex as the default engine |
@@ -253,12 +254,16 @@ Runtime state defaults to `~/.gpt/channels/discord/` and can be moved with `GPT_
 | `GPT_TRACE_FAILSAFE_MS` | optional transient-trace crash-cleanup override |
 | `GPT_HISTORY_TOKEN_BUDGET` | Discord-history budget |
 | `GPT_MODEL` | explicit API engine and postmortem model |
-| `GPT_MAX_TOOL_LOOPS` | API tool-loop cap |
+| `GPT_MAX_TOOL_LOOPS` | API tool-loop cap (default 16, hard cap 32) |
+| `GPT_MAX_ACTIVE_CHANNELS` / `GPT_MAX_QUEUED_PER_CHANNEL` / `GPT_MAX_OUTSTANDING_PER_USER` | hard-clamped global, per-channel, per-caller, and live-steering admission limits |
+| `GPT_MAX_DAILY_TURNS_PER_USER` / `GPT_MAX_DAILY_TURNS_GLOBAL` | persisted daily provider circuit breakers (defaults 200/500; hard maximum overrides 500/2,000) |
 | `GPT_MCP_URL` / `GPT_MCP_LABEL` | comma-separated MCP endpoints and labels |
 | `OLLAMA_URL` | local OpenAI-compatible embeddings/summarization endpoint |
 | `GPT_EMBEDDING_MODEL` / `GPT_EMBEDDING_DIM` | local embedding model and vector dimension |
 | `GPT_EMBED_COOLDOWN_MS` | passive-ingestion throttle |
 | `GPT_SUMMARIZATION_MODEL` / `_THRESHOLD` / `_BATCH_LIMIT` | rolling-summary configuration |
+| `GPT_MAX_GLOBAL_TURNS` | concurrent model turns across all channels (default `2`) |
+| `GPT_MEMORY_HIGH_WATER_MB` / `_LOW_WATER_MB` | pause/resume thresholds for new turns (defaults `3200` / `2600`) |
 | `GPT_SEARCH_MODEL` | web-search side-call model |
 | `GPT_CODEX_HELPER_BIN` / `GPT_VOICE_CODEX_TIMEOUT_MS` | optional voice-to-Codex worker |
 | `OPENAI_REALTIME_MODEL` / `OPENAI_REALTIME_VOICE` | realtime voice configuration |

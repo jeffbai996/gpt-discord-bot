@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { makeCodexHelperTool } from '../src/tools/codex.ts'
+import { codexReadOnlyEnv, makeCodexHelperTool } from '../src/tools/codex.ts'
 import type { DeferredToolJob } from '../src/tools/registry.ts'
 
 test('codex_helper acknowledges immediately and defers the running job', async () => {
@@ -70,4 +70,25 @@ test('codex_helper validates task and sanitizes repo names', async () => {
   ), /invalid repo/i)
   assert.deepEqual(calls, [])
   assert.deepEqual(jobs, [])
+})
+
+test('read-only codex child receives an explicit credential-free environment', () => {
+  const env = codexReadOnlyEnv({
+    HOME: '/home/alice',
+    PATH: '/usr/bin',
+    LANG: 'C.UTF-8',
+    CODEX_HOME: '/home/alice/.codex',
+    OPENAI_API_KEY: 'secret',
+    DISCORD_BOT_TOKEN: 'secret',
+    GPT_MCP_URL: 'http://internal.example/mcp',
+    HTTPS_PROXY: 'http://proxy.internal',
+  }, 'inspect the repo')
+
+  assert.equal(env.HOME, '/home/alice')
+  assert.equal(env.CODEX_HOME, '/home/alice/.codex')
+  assert.equal(env.CODEX_TASK, 'inspect the repo')
+  assert.equal(env.OPENAI_API_KEY, undefined)
+  assert.equal(env.DISCORD_BOT_TOKEN, undefined)
+  assert.equal(env.GPT_MCP_URL, undefined)
+  assert.equal(env.HTTPS_PROXY, undefined)
 })

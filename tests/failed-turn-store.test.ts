@@ -9,6 +9,17 @@ import { FailedTurnStore, formatFailureDiagnostic } from '../src/failed-turn-sto
 const tmp = path.join(os.tmpdir(), `gpt-failed-turn-store-${process.pid}`)
 const file = path.join(tmp, 'failed-turns.json')
 
+test('button and emoji share a durable single-use retry claim; a new failure rearms it', () => {
+  const store = new FailedTurnStore(file)
+  const turn = { channelId: 'channel-a', sourceMessageId: 'source', diagnostic: 'failed' }
+  store.set('receipt', turn)
+  assert.ok(store.claim('receipt'))
+  assert.equal(store.claim('receipt'), undefined)
+  assert.equal(new FailedTurnStore(file).claim('receipt'), undefined)
+  store.set('receipt', turn)
+  assert.ok(store.claim('receipt'))
+})
+
 afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
 test('failed turns survive process restart with source and diagnostic intact', () => {

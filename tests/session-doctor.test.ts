@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import { gptCommand, runGptDoctor } from '../src/commands.ts'
 import { readSessionStats } from '../src/codex-chat.ts'
+import { appendRuntimeChecks, type DoctorCheck } from '../src/runtime-doctor.ts'
 
 test('/gpt exposes session and doctor commands', () => {
   const names = new Set(gptCommand.toJSON().options?.map((option: any) => option.name))
@@ -67,4 +68,23 @@ test('doctor validates the runtime state without creating or mutating files', as
     'persona', 'rollout store', 'agent registry',
   ])
   assert.deepEqual(fs.readdirSync(state, { recursive: true }).sort(), before)
+})
+
+test('doctor exposes global queue and memory-pressure admission state', async () => {
+  const healthy: DoctorCheck[] = []
+  await appendRuntimeChecks(healthy, {
+    admission: () => ({ running: 2, queued: 3, oldestWaitMs: 12_300, pausedForMemory: false }),
+  })
+  assert.deepEqual(healthy, [{
+    name: 'turn admission',
+    ok: true,
+    detail: '2 running · 3 queued · oldest 13s',
+  }])
+
+  const paused: DoctorCheck[] = []
+  await appendRuntimeChecks(paused, {
+    admission: () => ({ running: 1, queued: 4, oldestWaitMs: 20_000, pausedForMemory: true }),
+  })
+  assert.equal(paused[0].ok, false)
+  assert.match(paused[0].detail, /MEMORY PAUSED/)
 })

@@ -137,4 +137,4 @@ Expected: `import ok` (or a benign missing-env error unrelated to the refactor; 
 - `imageParts` still OpenAI-typed (deferred to 1b).
 
 ## Deploy
-Push branch → merge main (after review) → fragserv `git pull --ff-only` (discard any `package-lock.json` churn first: `git checkout -- package-lock.json`) → `npm install` → `systemctl --user restart gpt.service` → confirm `gpt online` in the log.
+Push branch → merge main (after review) → deploy host `git pull --ff-only` (discard any `package-lock.json` churn first) → `npm install` → restart the service → confirm it is online in the log.

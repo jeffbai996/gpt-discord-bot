@@ -19,6 +19,7 @@ const FILE = path.join(STATE_DIR, 'channel-sessions.json')
 const USAGE_FILE = path.join(STATE_DIR, 'channel-usage.json')
 // Per-channel /clear cutoff timestamps — persisted so the cutoff survives restarts.
 const CLEARED_FILE = path.join(STATE_DIR, 'channel-cleared.json')
+const SECURITY_EPOCH_FILE = path.join(STATE_DIR, 'channel-session-security-epoch')
 
 interface CumUsage { input: number; output: number; cachedInput: number; reasoning: number }
 
@@ -35,6 +36,56 @@ class ChannelSessions {
     this.load()
     this.loadUsage()
     this.loadCleared()
+  }
+
+  /**
+   * One-time security migration for resumable Codex sessions. A session can
+   * retain context that is no longer present in filtered Discord history, so a
+   * history-authorization change must cold-start every channel once. Backups
+   * make the migration recoverable without allowing the bot to resume them.
+   */
+  invalidateAllOnce(epoch: string): number {
+    if (!/^[a-z0-9][a-z0-9._-]{0,79}$/i.test(epoch)) {
+      throw new Error('invalid channel-session security epoch')
+    }
+    try {
+      if (fs.readFileSync(SECURITY_EPOCH_FILE, 'utf8').trim() === epoch) {
+        this.hardenSecurityMigrationFiles(epoch)
+        return 0
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+
+    fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+    this.backupOnce(FILE, epoch)
+    this.backupOnce(USAGE_FILE, epoch)
+    const invalidated = this.map.size
+    this.map.clear()
+    this.usage.clear()
+    fs.writeFileSync(FILE, '{}', { mode: 0o600 })
+    fs.writeFileSync(USAGE_FILE, '{}', { mode: 0o600 })
+    fs.writeFileSync(SECURITY_EPOCH_FILE, `${epoch}\n`, { mode: 0o600 })
+    this.hardenSecurityMigrationFiles(epoch)
+    return invalidated
+  }
+
+  private hardenSecurityMigrationFiles(epoch: string): void {
+    for (const file of [
+      FILE,
+      USAGE_FILE,
+      SECURITY_EPOCH_FILE,
+      `${FILE}.${epoch}.bak`,
+      `${USAGE_FILE}.${epoch}.bak`,
+    ]) {
+      if (fs.existsSync(file)) fs.chmodSync(file, 0o600)
+    }
+  }
+
+  private backupOnce(file: string, epoch: string): void {
+    if (!fs.existsSync(file)) return
+    const backup = `${file}.${epoch}.bak`
+    if (!fs.existsSync(backup)) fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL)
   }
 
   private load(): void {

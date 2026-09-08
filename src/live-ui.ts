@@ -1,5 +1,6 @@
 interface LiveWorkMessageOptions {
   effortLabel: string
+  activity?: 'thinking' | 'compacting'
   headline?: string
   reasoningTrace?: string[]
   detail?: string
@@ -117,6 +118,7 @@ export function formatHeartbeatFooter(
 
 export function formatLiveWorkMessage({
   effortLabel,
+  activity = 'thinking',
   headline = '',
   reasoningTrace = [],
   detail = '',
@@ -126,6 +128,9 @@ export function formatLiveWorkMessage({
   spinnerDots = '…',
   maxLength = 1900,
 }: LiveWorkMessageOptions): string {
+  if (activity === 'compacting') {
+    return `📝 ${spinnerGlyph} **Compacting context${spinnerDots}**`
+  }
   const header = `💭 ${spinnerGlyph} **${effortLabel}${spinnerDots}**`
   const cleanHeadline = headline.trim().toLocaleLowerCase('en-US')
   const accumulated = reasoningTraceLines(reasoningTrace)

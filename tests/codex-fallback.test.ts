@@ -23,7 +23,7 @@ test('confirmed timeout builds a postmortem-only API request without tools or at
       history: [{ role: 'assistant', content: 'Earlier context' }],
       userMessage: 'edit the repository and deploy it',
       userName: 'alice',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
       reasoningEffort: 'high',
       imageParts: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,abc' } }],
       extraText: 'local attachment contents',
@@ -57,7 +57,7 @@ test('confirmed process death is reported as a process failure, not task complet
       history: [],
       userMessage: 'do the work',
       userName: 'alice',
-      model: 'gpt-5.5',
+      model: 'gpt-5.6-sol',
     },
     error: new CodexProcessDiedError(42_000, 'codex exited code=1 signal=none'),
   })

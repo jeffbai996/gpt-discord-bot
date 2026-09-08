@@ -7,8 +7,8 @@ import { mcpSchemaToOpenAI } from './mcp-schema.ts'
 
 // Where image content blocks from MCP tools (e.g. Playwright screenshots) get
 // written before being attached to the Discord reply. A scratch dir, pruned by
-// the same systemd timer that prunes the Playwright MCP output (see cc-context
-// modules/browse). Overridable via GPT_MCP_IMAGE_DIR.
+// the same systemd timer that prunes the Playwright MCP output. Overridable via
+// GPT_MCP_IMAGE_DIR.
 const IMAGE_DIR = process.env.GPT_MCP_IMAGE_DIR
   || join(homedir(), '.cache', 'gpt-mcp-images')
 

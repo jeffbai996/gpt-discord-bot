@@ -55,6 +55,7 @@ function pcmSilence(sampleRate: number, channels: number, durationMs: number): B
 
 export interface VoiceSessionOptions {
   apiKey: string
+  speakerUserId: string
   model?: string
   instructions?: string
   voice?: string
@@ -150,7 +151,13 @@ export class VoiceSession {
     // Install the receive listener immediately when Discord becomes ready,
     // before doing playback setup. The input path now has no awaited blind spot.
     const receiver = this.connection.receiver
-    receiver.speaking.on('start', (userId: string) => this.listenTo(userId))
+    receiver.speaking.on('start', (userId: string) => {
+      if (userId !== this.opts.speakerUserId) {
+        this.log('ignored audio from unauthorized voice speaker')
+        return
+      }
+      this.listenTo(userId)
+    })
 
     this.player = this.deps.createPlayer({
       behaviors: {

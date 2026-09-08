@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { isPrivateIp, validateUrl, extractContent, truncate } from '../src/tools/fetch-url-internal.ts'
+import { fetchPublicUrl, resolvePublicAddress, type PinnedResponse } from '../src/tools/safe-http.ts'
 
 // These tests extend tools.test.ts with edge cases for the SSRF guard and the
 // content-type router, covering isPrivateIp including CGNAT (100.64.0.0/10,
@@ -93,6 +94,8 @@ test('isPrivateIp: IPv4-mapped IPv6 inherits IPv4 verdict', () => {
   assert.equal(isPrivateIp('::ffff:10.0.0.5'), true)
   assert.equal(isPrivateIp('::ffff:8.8.8.8'), false)
   assert.equal(isPrivateIp('::FFFF:192.168.1.1'), true) // case-insensitive prefix
+  assert.equal(isPrivateIp('::ffff:7f00:1'), true)
+  assert.equal(isPrivateIp('0:0:0:0:0:ffff:a9fe:a9fe'), true)
 })
 
 // ─────────────────────────── validateUrl ───────────────────────────
@@ -111,6 +114,41 @@ test('validateUrl: rejects ftp/data/ws schemes', () => {
 test('validateUrl: rejects garbage', () => {
   assert.throws(() => validateUrl(''), /invalid URL/)
   assert.throws(() => validateUrl('   '), /invalid URL/)
+})
+
+test('resolvePublicAddress rejects a hostname when any DNS answer is private', async () => {
+  await assert.rejects(
+    () => resolvePublicAddress(new URL('https://public.example'), async () => [
+      { address: '93.184.216.34', family: 4 },
+      { address: '127.0.0.1', family: 4 },
+    ]),
+    /private network/,
+  )
+})
+
+test('fetchPublicUrl revalidates redirects before issuing the next request', async () => {
+  const requested: string[] = []
+  const response = (status: number, location?: string): PinnedResponse => ({
+    status,
+    statusText: 'Found',
+    headers: { get: name => name === 'location' ? location ?? null : null },
+    body: (async function* () {})(),
+    destroy() {},
+  })
+
+  await assert.rejects(
+    () => fetchPublicUrl('https://public.example/start', 1024, {
+      lookup: async hostname => hostname === 'public.example'
+        ? [{ address: '93.184.216.34', family: 4 }]
+        : [{ address: '127.0.0.1', family: 4 }],
+      request: async url => {
+        requested.push(url.toString())
+        return response(302, 'http://internal.example/admin')
+      },
+    }),
+    /private network/,
+  )
+  assert.deepEqual(requested, ['https://public.example/start'])
 })
 
 // ─────────────────────────── extractContent: content-type routing ───────────────────────────

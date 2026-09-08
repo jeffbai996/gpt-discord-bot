@@ -150,7 +150,7 @@ await runBot(config)
 - A Gemini bot is now *launchable* via a BotConfig — but standing up + parallel-running live Gemma is Phase 2.
 
 ## Deploy
-After review + merge: fragserv `git checkout -- package-lock.json` (churn) → `git pull --ff-only` → `npm install` → restart `gpt.service` → confirm `gpt online` + Gem replies normally (behavior-preservation is the whole point).
+After review + merge: on the deploy host, discard dependency-lock churn if needed → `git pull --ff-only` → `npm install` → restart the service → confirm the bot replies normally (behavior-preservation is the whole point).
 
 ## Note for the executor
 This is the highest-risk phase so far — it restructures the live GPT bot's entry. Go task-by-task, keep the full suite green at every step, and treat "Gem boots + replies identically after deploy" as the real acceptance test. If extracting the runner reveals coupling the plan didn't anticipate (e.g. a handler that reaches a module-level singleton), STOP and report rather than guessing — a broken runner takes down the live GPT bot.

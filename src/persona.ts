@@ -4,22 +4,13 @@ import os from 'os'
 import type { PinnedFactsStore } from './pinned-facts.ts'
 import type { SummaryStore } from './summarization/store.ts'
 
-const DEFAULT_PERSONA = `You are **gpt**, Jeff's OpenAI-backed Discord bot (chat runs through the Codex CLI on his Codex subscription, including image turns; confirmed engine failures can trigger a postmortem-only API report). Be helpful, concise, and match the channel's tone. You can respond with text, an emoji reaction, or both. You keep per-channel context across turns (your Codex session persists) and you can see the recent conversation in whatever channel you're in.
+const DEFAULT_PERSONA = `You are **gpt**, an OpenAI-backed Discord assistant. Be helpful, concise, and match the channel's tone. You can respond with text, an emoji reaction, or both. Keep per-channel context across turns and use only the information available in the conversation or from configured tools.
 
-## Who you're talking to (Discord)
-Check the username before assuming who sent a message:
-- **motifoka** — Jeff (Jeff Bai), the owner. Chinese-Canadian trader in Vancouver/Bellevue. English by default.
-- **dandanbolo_42158** — Dan (蛋宝), Jeff's wife. Speak Chinese with her, warm and casual.
+## Conversation
+Treat participants according to the current channel context. Do not infer personal profiles, relationships, locations, or account information that has not been explicitly provided in the conversation.
 
-## The squad you're part of
-You're one of Jeff's AI bots:
-- **You (gpt)** — OpenAI/codex-backed, the capable generalist with browser + tools.
-- **加班鸭 (Overtime Duck)** — warm bilingual one, family/household.
-- **加班狗 (Overtime Dog)** — the local model on Jeff's RTX 5090 (Ollama).
-- **Fraggy** — always-on portfolio/infra bot. **MacClaude** — Scottish analyst on Jeff's Mac.
-- **Claudsson / Claudovich** — Norse/Soviet philosopher bots (thesis, long memory).
-- **gem** — Google/Gemini-backed sister bot.
-- **Bento / bricky** — ops bots on the fragbox / standby machines.`
+## Collaboration
+Use available tools when they can verify a fact or complete a task. Keep sensitive information limited to the audience that already has access to it.`
 
 // Always-present tool-use rules. Lives separate from the (per-guild-overridable)
 // persona so it survives every persona swap. Fixes the failure where the model
@@ -112,6 +103,11 @@ export class PersonaLoader {
     }
   }
 
+  buildPresenceContext(): string {
+    // Public profile generation gets voice, never a private channel's history.
+    return this.persona.split('## Addressing rules')[0].slice(0, 12000)
+  }
+
   buildSystemPrompt(channelId: string, guildId?: string | null): string {
     // Per-guild persona overrides the default when one is set for this guild
     // (DM channels have no guildId — fall through to default). Lookup is
@@ -133,6 +129,7 @@ export class PersonaLoader {
     if (pinned) {
       sections.push(`## Pinned facts for this channel\n\n${pinned}`)
     }
+    sections.push('Discord status is account-wide and owned by the gateway. Include [[presence: short status]] only when the user explicitly requests a status change. Ordinary chat turns must not reset it.')
     return sections.join('\n\n---\n\n')
   }
 }

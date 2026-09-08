@@ -6,8 +6,11 @@ import {
   fmtClearAcknowledgement,
   fmtContextPressureLine,
   fmtLimitLines,
+  fmtModelStatus,
   fmtSettingChange,
   gptCommand,
+  executeGptCommand,
+  requireAdminUserId,
 } from '../src/commands.ts'
 
 const futureReset = () => Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
@@ -91,6 +94,25 @@ test('/gpt command menu excludes redundant maintenance controls', () => {
   }
 })
 
+test('admin configuration rejects missing and malformed owner IDs', () => {
+  assert.throws(() => requireAdminUserId(undefined), /DISCORD_ADMIN_USER_ID/)
+  assert.throws(() => requireAdminUserId('owner'), /DISCORD_ADMIN_USER_ID/)
+  assert.equal(requireAdminUserId('123456789012345678'), '123456789012345678')
+})
+
+test('/gpt fails closed when the designated admin is unavailable', async () => {
+  const replies: any[] = []
+  const interaction = {
+    user: { id: '123456789012345678' },
+    options: { getSubcommand: () => { throw new Error('must not reach command dispatch') } },
+    reply: async (message: unknown) => { replies.push(message) },
+  }
+
+  await executeGptCommand(interaction as any, {} as any, undefined)
+
+  assert.match(replies[0].content, /Unauthorized/)
+})
+
 test('/gpt compact summarizes before dropping only the active Codex session', async () => {
   const events: string[] = []
   const result = await compactChannel('channel-1', {
@@ -167,7 +189,7 @@ test('/gpt model choices use durable tier labels', () => {
   const value: any = model?.options?.find((option: any) => option.name === 'value')
 
   assert.deepEqual(value?.choices?.map((choice: any) => choice.name), [
-    'gpt-5.5 - legacy',
+    'GPT-6 Astra - most capable',
     'gpt-5.6-sol - frontier coding',
     'gpt-5.6-terra - balanced',
     'gpt-5.6-luna - high-throughput',
@@ -175,7 +197,23 @@ test('/gpt model choices use durable tier labels', () => {
   ])
 })
 
+test('/gpt effort exposes ultra as automatic delegation', () => {
+  const json = gptCommand.toJSON()
+  const effort: any = json.options?.find((option: any) => option.name === 'effort')
+  const value: any = effort?.options?.find((option: any) => option.name === 'value')
+  const ultra = value?.choices?.find((choice: any) => choice.value === 'ultra')
+
+  assert.equal(ultra?.name, 'ultra - automatic delegation')
+})
+
 test('setting acknowledgements include the previous value only when changed', () => {
   assert.equal(fmtSettingChange('effort', 'high', 'medium'), '✅ effort → `high` (was `medium`)')
   assert.equal(fmtSettingChange('effort', 'high', 'high'), '✅ effort → `high`')
+})
+
+test('/gpt model status shows the model and effective effort without engine trivia', () => {
+  const status = fmtModelStatus('123456789012345678', 'gpt-5.6-sol', 'high')
+
+  assert.equal(status, '🤖 <#123456789012345678> model `gpt-5.6-sol` · effort `high`')
+  assert.doesNotMatch(status, /postmortem|engine|\(|\)/i)
 })

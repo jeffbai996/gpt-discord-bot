@@ -2,8 +2,8 @@ import OpenAI, { toFile } from 'openai'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { parseOffice } from 'officeparser'
-import { extensionMime, extractLocalText, isLocallyExtractable, officeParserType } from './attachment-text.ts'
+import { extensionMime, isLocallyExtractable, officeParserType } from './attachment-text.ts'
+import { extractLocalText, extractOfficeText } from './attachment-worker-client.ts'
 import { animationContactSheet } from './animation-frames.ts'
 
 // 20 MB default cap. Discord's per-attachment max is 25/100/500MB depending
@@ -45,7 +45,6 @@ const TEXT_MIMES = new Set([
   'text/typescript', 'text/x-typescript'
 ])
 const TEXT_INLINE_BYTE_CAP = 100 * 1024
-const DOCUMENT_TEXT_CHAR_CAP = 400_000
 const OFFICE_MIMES = new Set([
   'application/pdf', 'application/rtf',
   'application/msword',
@@ -208,7 +207,7 @@ export async function processAttachments(
       try {
         const localExtraction = isLocallyExtractable(name, mime)
         const buf = await downloadToBuffer(att.url, localExtraction ? MAX_BYTES : TEXT_INLINE_BYTE_CAP)
-        const text = localExtraction ? extractLocalText(buf, name) : buf.toString('utf8')
+        const text = localExtraction ? await extractLocalText(buf, name) : buf.toString('utf8')
         textBlocks.push(`[attached file: ${name}]\n\`\`\`\n${text}\n\`\`\``)
         result.documents.push({ name, characters: text.length })
       } catch (e) {
@@ -221,9 +220,8 @@ export async function processAttachments(
     if (OFFICE_MIMES.has(mime)) {
       try {
         const buf = await downloadToBuffer(att.url, MAX_BYTES)
-        const ast = await parseOffice(buf, { fileType: (officeParserType(name) ?? path.extname(name).slice(1).toLowerCase()) as any })
-        const text = ast.toText().trim().slice(0, DOCUMENT_TEXT_CHAR_CAP)
-        if (!text) throw new Error('document contained no extractable text')
+        const fileType = officeParserType(name) ?? path.extname(name).slice(1).toLowerCase()
+        const text = await extractOfficeText(buf, name, fileType)
         textBlocks.push(`[attached document: ${name}]\n${text}`)
         result.documents.push({ name, characters: text.length })
       } catch (e) {
@@ -260,14 +258,37 @@ function mimeExtension(mime: string): string {
   return '.png'
 }
 
-async function downloadToBuffer(url: string, maxBytes: number): Promise<Buffer> {
-  const resp = await fetch(url)
+type AttachmentFetcher = (url: string, init?: RequestInit) => Promise<Response>
+
+export async function downloadToBuffer(
+  url: string,
+  maxBytes: number,
+  fetcher: AttachmentFetcher = fetch,
+): Promise<Buffer> {
+  const resp = await fetcher(url, { signal: AbortSignal.timeout(30_000) })
   if (!resp.ok) throw new Error(`fetch ${resp.status} ${resp.statusText}`)
-  const ab = await resp.arrayBuffer()
-  if (ab.byteLength > maxBytes) {
-    throw new Error(`exceeds ${maxBytes} byte cap (${ab.byteLength})`)
+  const declared = Number(resp.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await resp.body?.cancel().catch(() => {})
+    throw new Error(`exceeds ${maxBytes} byte cap (${declared})`)
   }
-  return Buffer.from(ab)
+  if (!resp.body) return Buffer.alloc(0)
+
+  const reader = resp.body.getReader()
+  const chunks: Buffer[] = []
+  let total = 0
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    if (!value) continue
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`exceeds ${maxBytes} byte cap (${total})`)
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks, total)
 }
 
 function imageCacheKey(url: string): string {

@@ -1,38 +1,18 @@
-import dns from 'dns/promises'
 import type { Tool } from './registry.ts'
-import { validateUrl, isPrivateIp, extractContent, truncate } from './fetch-url-internal.ts'
+import { extractContent, truncate } from './fetch-url-internal.ts'
+import { fetchPublicUrl } from './safe-http.ts'
 
 const DEFAULT_MAX_CHARS = 8000
 const HARD_MAX_CHARS = 50_000
-const FETCH_TIMEOUT_MS = 15_000
 const MAX_BODY_BYTES = 5 * 1024 * 1024
-
-async function readBodyWithCap(res: Response): Promise<Buffer | null> {
-  if (!res.body) return Buffer.alloc(0)
-  const reader = (res.body as any).getReader()
-  const chunks: Buffer[] = []
-  let total = 0
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    if (!value) continue
-    total += value.byteLength
-    if (total > MAX_BODY_BYTES) {
-      try { reader.cancel() } catch { /* noop */ }
-      return null
-    }
-    chunks.push(Buffer.from(value))
-  }
-  return Buffer.concat(chunks)
-}
 
 export const fetchUrlTool: Tool = {
   name: 'fetch_url',
-  description: 'Fetch a URL and return its main text content. Use when the user pastes a link or asks you to read a webpage. Supports HTML (article extraction), plain text, markdown, and JSON. Returns up to 8000 chars by default.',
+  description: 'Fetch a public URL and return its main text content. Use when the user pastes a link or asks you to read a webpage. Supports HTML (article extraction), plain text, markdown, and JSON. Returns up to 8000 chars by default.',
   parameters: {
     type: 'object',
     properties: {
-      url: { type: 'string', description: 'http(s) URL to fetch' },
+      url: { type: 'string', description: 'public http(s) URL to fetch' },
       maxChars: { type: 'number', description: 'Optional cap on output size in characters. Default 8000, hard cap 50000.' }
     },
     required: ['url']
@@ -43,41 +23,9 @@ export const fetchUrlTool: Tool = {
     const requestedMax = typeof args.maxChars === 'number' ? args.maxChars : DEFAULT_MAX_CHARS
     const maxChars = Math.min(Math.max(100, requestedMax), HARD_MAX_CHARS)
 
-    let url: URL
-    try { url = validateUrl(rawUrl).url } catch (e: any) {
-      return `fetch_url: ${e.message ?? 'invalid URL'}`
-    }
-
-    // The private-IP guard can only be disabled OUTSIDE production. This keeps
-    // the testing escape hatch usable in CI/local, but a leaked
-    // FETCH_URL_TESTING_ALLOW_PRIVATE=1 in a prod deploy is inert — it can no
-    // longer open an SSRF path to localhost / RFC1918 internal services.
-    const allowPrivate =
-      process.env.FETCH_URL_TESTING_ALLOW_PRIVATE === '1' &&
-      process.env.NODE_ENV !== 'production'
-    if (!allowPrivate) {
-      try {
-        const lookups = await dns.lookup(url.hostname, { all: true })
-        for (const l of lookups) {
-          if (isPrivateIp(l.address)) {
-            return 'fetch_url: refusing to fetch private network address'
-          }
-        }
-      } catch (e: any) {
-        return `fetch_url: could not resolve host (${e?.code ?? e?.message ?? 'DNS failure'})`
-      }
-    }
-
-    let res: Response
+    let res: Awaited<ReturnType<typeof fetchPublicUrl>>
     try {
-      res = await fetch(url.toString(), {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        redirect: 'follow',
-        headers: {
-          'User-Agent': 'gpt-bot/1.0',
-          'Accept': 'text/html,text/plain,text/markdown,application/json,*/*;q=0.8'
-        }
-      })
+      res = await fetchPublicUrl(rawUrl, MAX_BODY_BYTES)
     } catch (e: any) {
       const msg = e?.message ?? String(e)
       if (e?.name === 'TimeoutError' || /timeout/i.test(msg)) return 'fetch_url: timed out after 15s'
@@ -85,17 +33,13 @@ export const fetchUrlTool: Tool = {
       return `fetch_url: ${msg}`
     }
 
-    if (!res.ok) {
+    if (res.status < 200 || res.status >= 300) {
       return `fetch_url: HTTP ${res.status} ${res.statusText}`
     }
 
-    const buf = await readBodyWithCap(res)
-    if (buf === null) return 'fetch_url: response body exceeded 5MB cap'
-
-    const ctHeader = res.headers.get('content-type') ?? ''
-    const extracted = await extractContent(buf, ctHeader, url.toString())
+    const extracted = await extractContent(res.buffer, res.contentType, res.url.toString())
     const titleLine = extracted.title ? `# ${extracted.title}\n` : ''
-    const head = `${titleLine}${url.toString()}\n\n`
+    const head = `${titleLine}${res.url.toString()}\n\n`
     return head + truncate(extracted.body, maxChars)
   }
 }

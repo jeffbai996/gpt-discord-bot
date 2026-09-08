@@ -1,9 +1,12 @@
 import path from 'node:path'
-import { gunzipSync, unzipSync } from 'fflate'
+import { Gunzip, Unzip, UnzipInflate } from 'fflate'
 
 const CHAR_CAP = 400_000
 const ARCHIVE_ENTRY_CAP = 64
 const ARCHIVE_EXPANDED_CAP = 8 * 1024 * 1024
+const ARCHIVE_MIN_EXPANDED_CAP = 1024 * 1024
+const ARCHIVE_MAX_EXPANSION_RATIO = 200
+const ARCHIVE_INPUT_CHUNK = 256
 
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.jsonl', '.ndjson',
@@ -62,7 +65,10 @@ export function isLocallyExtractable(name: string, mime: string): boolean {
   ].includes(mime)
 }
 
-export function extractLocalText(buffer: Buffer, name: string): string {
+// This parser intentionally stays synchronous and is only called inside the
+// bounded attachment worker. Keeping the untrusted decompression off the main
+// event loop means a malformed archive cannot stall Discord heartbeats.
+export function extractLocalTextUnsafe(buffer: Buffer, name: string): string {
   const ext = path.extname(name).toLowerCase()
   if (ext === '.ipynb') return extractNotebook(buffer)
   if (ext === '.eml') return extractEml(buffer)
@@ -70,7 +76,7 @@ export function extractLocalText(buffer: Buffer, name: string): string {
   if (ext === '.pages' || ext === '.numbers' || ext === '.key') return extractZipText(buffer, name, true)
   if (ext === '.zip') return extractZipText(buffer, name, false)
   if (ext === '.gz' || ext === '.tgz') {
-    const inflated = Buffer.from(gunzipSync(buffer))
+    const inflated = gunzipBounded(buffer)
     return ext === '.tgz' || name.toLowerCase().endsWith('.tar.gz') ? printableStrings(inflated) : decodeText(inflated)
   }
   if (ext === '.tar' || ext === '.7z') return printableStrings(buffer)
@@ -106,22 +112,100 @@ function extractEml(buffer: Buffer): string {
 }
 
 function extractZipText(buffer: Buffer, archiveName: string, includeBinaryStrings: boolean): string {
-  const files = unzipSync(buffer, { filter: file => !file.name.endsWith('/') })
   const blocks: string[] = []
   let expanded = 0
-  for (const [entryName, bytes] of Object.entries(files).slice(0, ARCHIVE_ENTRY_CAP)) {
-    expanded += bytes.length
-    if (expanded > ARCHIVE_EXPANDED_CAP) throw new Error('archive expanded size cap exceeded')
-    const ext = path.extname(entryName).toLowerCase()
-    if (TEXT_EXTENSIONS.has(ext) || ['.json', '.xml', '.html', '.txt'].includes(ext)) {
-      blocks.push(`[${entryName}]\n${decodeText(Buffer.from(bytes))}`)
-    } else if (includeBinaryStrings && ext === '.iwa') {
-      const text = printableStrings(Buffer.from(bytes))
-      if (text) blocks.push(`[${entryName}]\n${text}`)
+  let entries = 0
+  let failure: Error | undefined
+  const expandedCap = archiveExpandedCap(buffer.length)
+  const unzip = new Unzip(file => {
+    entries += 1
+    const ext = path.extname(file.name).toLowerCase()
+    const selected = !file.name.endsWith('/') && (
+      TEXT_EXTENSIONS.has(ext)
+      || ['.json', '.xml', '.html', '.txt'].includes(ext)
+      || (includeBinaryStrings && ext === '.iwa')
+    )
+    if (entries > ARCHIVE_ENTRY_CAP) failure ??= new Error('archive entry cap exceeded')
+    if ((file.originalSize ?? 0) + expanded > expandedCap) {
+      failure ??= new Error('archive expanded size cap exceeded')
     }
+    if (!selected || failure) {
+      file.ondata = () => {}
+      return
+    }
+
+    const chunks: Buffer[] = []
+    let entryBytes = 0
+    file.ondata = (error, chunk, final) => {
+      if (failure) return
+      if (error) {
+        failure = error
+        return
+      }
+      entryBytes += chunk.byteLength
+      expanded += chunk.byteLength
+      if (expanded > expandedCap) {
+        failure = new Error('archive expanded size cap exceeded')
+        file.terminate()
+        return
+      }
+      chunks.push(Buffer.from(chunk))
+      if (!final) return
+      try {
+        const bytes = Buffer.concat(chunks, entryBytes)
+        const text = includeBinaryStrings && ext === '.iwa'
+          ? printableStrings(bytes)
+          : decodeText(bytes)
+        if (text) blocks.push(`[${file.name}]\n${text}`)
+      } catch (error) {
+        failure = error as Error
+      }
+    }
+    try {
+      file.start()
+    } catch (error) {
+      failure = error as Error
+    }
+  })
+  unzip.register(UnzipInflate)
+  for (let offset = 0; offset < buffer.length; offset += ARCHIVE_INPUT_CHUNK) {
+    const end = Math.min(offset + ARCHIVE_INPUT_CHUNK, buffer.length)
+    unzip.push(buffer.subarray(offset, end), end === buffer.length)
+    if (failure) throw failure
   }
+  if (failure) throw failure
   if (!blocks.length) throw new Error(`${archiveName} contained no extractable text`)
   return blocks.join('\n\n').slice(0, CHAR_CAP)
+}
+
+function gunzipBounded(buffer: Buffer): Buffer {
+  const chunks: Buffer[] = []
+  let expanded = 0
+  let failure: Error | undefined
+  const expandedCap = archiveExpandedCap(buffer.length)
+  const gunzip = new Gunzip((chunk) => {
+    if (failure) return
+    expanded += chunk.byteLength
+    if (expanded > expandedCap) {
+      failure = new Error('archive expanded size cap exceeded')
+      return
+    }
+    chunks.push(Buffer.from(chunk))
+  })
+  for (let offset = 0; offset < buffer.length; offset += ARCHIVE_INPUT_CHUNK) {
+    const end = Math.min(offset + ARCHIVE_INPUT_CHUNK, buffer.length)
+    gunzip.push(buffer.subarray(offset, end), end === buffer.length)
+    if (failure) throw failure
+  }
+  if (failure) throw failure
+  return Buffer.concat(chunks, expanded)
+}
+
+function archiveExpandedCap(compressedBytes: number): number {
+  return Math.min(
+    ARCHIVE_EXPANDED_CAP,
+    Math.max(ARCHIVE_MIN_EXPANDED_CAP, compressedBytes * ARCHIVE_MAX_EXPANSION_RATIO),
+  )
 }
 
 function decodeText(buffer: Buffer): string {

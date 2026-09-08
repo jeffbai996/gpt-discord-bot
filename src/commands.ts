@@ -8,6 +8,12 @@ import { globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
+import {
+  appendRuntimeChecks,
+  type DoctorCheck,
+  type DoctorReport,
+  type DoctorRuntimeDeps,
+} from './runtime-doctor.ts'
 
 // Render the Codex subscription rate-limit windows as bars + reset countdowns. Shared by
 // /gpt limits and /gpt stats.
@@ -68,13 +74,15 @@ export function fmtSettingChange(label: string, value: string, previous: string)
   return `✅ ${label} → \`${value}\`${changed}`
 }
 
-export interface DoctorCheck { name: string; ok: boolean; detail: string }
-export interface DoctorReport { ok: boolean; checks: DoctorCheck[] }
+export function fmtModelStatus(channelId: string, model: string, effort: string): string {
+  return `🤖 <#${channelId}> model \`${model}\` · effort \`${effort}\``
+}
 
 /** Read-only runtime diagnostics. It deliberately creates no probe files. */
 export async function runGptDoctor(
   stateDir = process.env.GPT_STATE_DIR || path.join(os.homedir(), '.gpt', 'channels', 'discord'),
   rolloutDir = path.join(os.homedir(), '.codex', 'sessions'),
+  runtime?: DoctorRuntimeDeps,
 ): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [
     { name: 'process', ok: true, detail: `running · pid ${process.pid} · node ${process.version}` },
@@ -121,6 +129,7 @@ export async function runGptDoctor(
   }
   await directoryCheck('rollout store', rolloutDir)
   await lazyDirectoryCheck('agent registry', path.join(stateDir, 'agent-registry'))
+  if (runtime) await appendRuntimeChecks(checks, runtime)
   return { ok: checks.every(check => check.ok), checks }
 }
 
@@ -209,11 +218,14 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Set or show the Codex model')
     .addStringOption(o => o.setName('value').setDescription('omit to show current; else pick a model').setRequired(false)
       .addChoices(
-        { name: 'gpt-5.5 - legacy', value: 'gpt-5.5' },
-        { name: 'gpt-5.6-sol - frontier coding', value: 'gpt-5.6-sol' },
-        { name: 'gpt-5.6-terra - balanced', value: 'gpt-5.6-terra' },
-        { name: 'gpt-5.6-luna - high-throughput', value: 'gpt-5.6-luna' },
-        { name: 'Daybreak Blue - defensive cyber', value: 'gpt-daybreak-blue-latest' },
+        // Bare model ids, no blurbs (Jeff 2026-09-04). The descriptions
+        // padded every row and the friendly name hid what you were actually
+        // selecting — you pick a model here, so the menu says the model.
+        { name: 'gpt-6-astra', value: 'gpt-6-astra' },
+        { name: 'gpt-5.6-sol', value: 'gpt-5.6-sol' },
+        { name: 'gpt-5.6-terra', value: 'gpt-5.6-terra' },
+        { name: 'gpt-5.6-luna', value: 'gpt-5.6-luna' },
+        { name: 'gpt-daybreak-blue-latest', value: 'gpt-daybreak-blue-latest' },
       ))
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
   )
@@ -222,15 +234,15 @@ export const gptCommand = new SlashCommandBuilder()
     .setDescription('Set or show reasoning effort')
     .addStringOption(o => o
       .setName('value')
-      .setDescription('none | low | medium | high | xhigh | max')
+      .setDescription('low | medium | high | xhigh | max | ultra')
       .setRequired(true)
       .addChoices(
-        { name: 'none - no reasoning, fastest', value: 'none' },
         { name: 'low', value: 'low' },
         { name: 'medium', value: 'medium' },
         { name: 'high', value: 'high' },
         { name: 'xhigh', value: 'xhigh' },
         { name: 'max - deepest, slowest', value: 'max' },
+        { name: 'ultra - automatic delegation', value: 'ultra' },
       )
     )
     .addChannelOption(o => o.setName('channel').setDescription('Channel (defaults to current)').setRequired(false))
@@ -304,6 +316,22 @@ export interface CompactCommandDeps {
   summarizer: { runForChannel(channelId: string): Promise<{ messageCount: number } | null> } | null
   isTurnActive?: (channelId: string) => boolean
   dropSession?: (channelId: string) => boolean
+  doctor?: DoctorRuntimeDeps
+  admission?: () => {
+    running: number
+    queued: number
+    oldestWaitMs: number
+    pausedForMemory: boolean
+  }
+  stopChannel?: (channelIds: Array<string | null | undefined>) => string | null
+}
+
+export function requireAdminUserId(raw: string | undefined): string {
+  const value = raw?.trim() ?? ''
+  if (!/^\d{17,20}$/.test(value)) {
+    throw new Error('DISCORD_ADMIN_USER_ID must be a valid Discord user ID')
+  }
+  return value
 }
 
 export type CompactResult =
@@ -337,7 +365,7 @@ export async function executeGptCommand(
   adminUserId: string | undefined,
   deps: CompactCommandDeps = { summarizer: null },
 ) {
-  if (adminUserId && interaction.user.id !== adminUserId) {
+  if (!adminUserId || interaction.user.id !== adminUserId) {
     return interaction.reply({ content: 'Unauthorized. You are not the designated bot admin.', ephemeral: true })
   }
 
@@ -398,7 +426,7 @@ export async function executeGptCommand(
 
     if (subcommand === 'doctor') {
       await interaction.deferReply({ ephemeral: true })
-      const report = await runGptDoctor()
+      const report = await runGptDoctor(undefined, undefined, deps.doctor)
       const lines = report.checks.map(check =>
         `${check.ok ? 'ok' : 'FAIL'}  ${check.name.padEnd(16)} ${check.detail}`)
       return interaction.editReply([
@@ -409,7 +437,8 @@ export async function executeGptCommand(
 
     if (subcommand === 'stop') {
       const parentId = interaction.channel?.isThread() ? interaction.channel.parentId : null
-      const stoppedChannelId = activeTurns.stopResolvable([interaction.channelId, parentId])
+      const stoppedChannelId = deps.stopChannel?.([interaction.channelId, parentId])
+        ?? activeTurns.stopResolvable([interaction.channelId, parentId])
       return interaction.reply({
         content: stoppedChannelId ? INTERRUPTED_MARKER : 'ℹ️ Nothing running here',
         ephemeral: true,
@@ -432,7 +461,7 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: '❌ No channel resolved.', ephemeral: true })
       }
-      if (activeTurns.isActive(channel.id)) {
+      if ((deps.isTurnActive ?? (id => activeTurns.isActive(id)))(channel.id)) {
         return interaction.reply({
           content: `⚠️ <#${channel.id}> has a turn running. Compact it after that finishes.`,
           ephemeral: true,
@@ -473,8 +502,9 @@ export async function executeGptCommand(
       }
       const raw = interaction.options.getString('value')
       if (!raw) {
-        const cur = access.channelFlags(channel.id).codexModel ?? DEFAULT_CODEX_MODEL
-        return interaction.reply({ content: `\ud83e\udd16 <#${channel.id}> codex model = \`${cur}\` (codex engine; the API postmortem path uses its own model).`, ephemeral: true })
+        const flags = access.channelFlags(channel.id)
+        const cur = flags.codexModel ?? DEFAULT_CODEX_MODEL
+        return interaction.reply({ content: fmtModelStatus(channel.id, cur, flags.reasoning), ephemeral: true })
       }
       const value = raw.trim().toLowerCase()
       if (!(CODEX_MODELS as readonly string[]).includes(value)) {
@@ -509,6 +539,11 @@ export async function executeGptCommand(
       const engines = Object.entries(g.byModel).map(([m, ct]) => `${m} ${ct}`).join(' · ') || '—'
       const rl = await readLatestRateLimits()
       const contextPressure = fmtContextPressureLine(rl)
+      const admission = deps.admission?.()
+      const admissionLine = admission
+        ? `work:      ${admission.running} running · ${admission.queued} queued`
+          + `${admission.pausedForMemory ? ' · memory paused' : ''}`
+        : ''
       const body = [
         '\ud83d\udcca @gpt usage — cumulative across restarts, all channels',
         '```',
@@ -522,6 +557,7 @@ export async function executeGptCommand(
         '',
         `engines:  ${engines}`,
         `uptime:   ${up}`,
+        ...(admissionLine ? [admissionLine] : []),
         ...(contextPressure ? [contextPressure] : []),
         '',
         ...fmtLimitLines(rl),
@@ -548,8 +584,8 @@ export async function executeGptCommand(
       if (!channel) {
         return interaction.reply({ content: 'No channel resolved (run inside a channel or pass the channel arg).', ephemeral: true })
       }
-      if (!['none', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value)) {
-        return interaction.reply({ content: `effort must be none, low, medium, high, xhigh, or max (got ${value})`, ephemeral: true })
+      if (!['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(value)) {
+        return interaction.reply({ content: `effort must be none, low, medium, high, xhigh, max, or ultra (got ${value})`, ephemeral: true })
       }
       try {
         const previous = access.channelFlags(channel.id).reasoning

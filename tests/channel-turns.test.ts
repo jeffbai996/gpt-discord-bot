@@ -93,3 +93,56 @@ test('a failed active batch preserves and drains queued work before rejecting', 
   assert.equal(runner.isIdle(), true)
   assert.equal(runner.queueDepth('channel'), 0)
 })
+
+test('explicit queue cancellation drops follow-ups while the current batch unwinds', async () => {
+  const gate = deferred()
+  const seen: string[][] = []
+  const runner = new ChannelTurnRunner<string>(async (_channelId, batch) => {
+    seen.push(batch)
+    await gate.promise
+  })
+  const leader = runner.submit('channel', 'A')
+  assert.equal(await runner.submit('channel', 'B'), 'queued')
+  assert.equal(runner.clearQueued('channel'), 1)
+  gate.resolve()
+  await leader
+  assert.deepEqual(seen, [['A']])
+})
+
+test('rejects queue floods per channel and per principal while preserving accepted FIFO work', async () => {
+  const gate = deferred()
+  const seen: string[][] = []
+  const runner = new ChannelTurnRunner<{ id: string, user: string }>(
+    async (_channelId, batch) => {
+      seen.push(batch.map(item => item.id))
+      if (batch[0].id === 'A') await gate.promise
+    },
+    () => false,
+    0,
+    { maxQueuedPerChannel: 1, maxActiveChannels: 2, maxOutstandingPerKey: 2, keyForItem: item => item.user },
+  )
+
+  const leader = runner.submit('one', { id: 'A', user: 'alice' })
+  assert.equal(await runner.submit('one', { id: 'B', user: 'alice' }), 'queued')
+  assert.equal(await runner.submit('one', { id: 'C', user: 'alice' }), 'rejected_channel')
+  assert.equal(await runner.submit('two', { id: 'D', user: 'alice' }), 'rejected_principal')
+  gate.resolve()
+  await leader
+
+  assert.deepEqual(seen, [['A'], ['B']])
+})
+
+test('caps simultaneous active channels globally', async () => {
+  const gate = deferred()
+  const runner = new ChannelTurnRunner<string>(
+    async () => { await gate.promise },
+    () => false,
+    0,
+    { maxActiveChannels: 1 },
+  )
+
+  const leader = runner.submit('one', 'A')
+  assert.equal(await runner.submit('two', 'B'), 'rejected_global')
+  gate.resolve()
+  await leader
+})

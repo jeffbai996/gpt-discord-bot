@@ -1,12 +1,11 @@
 import OpenAI from 'openai'
 import { ToolRegistry } from './registry.ts'
 import { fetchUrlTool } from './fetch-url.ts'
-import { browseTool } from './browse.ts'
 import { makeWebSearchTool } from './web-search.ts'
 import { makeSearchMemoryTool } from './search-memory.ts'
 import { makeSquadMemoryTool } from './squad-memory.ts'
 import { makeSquadFilesTool } from './squad-files.ts'
-import { makeCodexHelperTool, makeCodexTool } from './codex.ts'
+import { makeCodexHelperTool } from './codex.ts'
 import { connectMcpClient } from './mcp-client.ts'
 import { loadMcpTools } from './mcp-tools.ts'
 import { makeUnreachableStub } from './mcp-unreachable-stub.ts'
@@ -23,16 +22,18 @@ export { ToolRegistry } from './registry.ts'
 export async function buildDefaultRegistry(client: OpenAI, memory: MemoryStore | null = null, embedClient: OpenAI = client): Promise<ToolRegistry> {
   const registry = new ToolRegistry()
   registry.register(fetchUrlTool)
-  // browse drives Jeff's logged-in Chrome (CDP attach) — reads pages behind a
-  // login / heavy JS that fetch_url's plain GET can't. Same host, same `jbai` user.
-  registry.register(browseTool)
+  // The persistent logged-in browser is intentionally not model-callable. A
+  // page can redirect or load private subresources after navigation, which
+  // cannot be contained by an initial URL check in this process.
   registry.register(makeWebSearchTool(client))
-  // Registered unconditionally: squad-memory search talks to squad-store over
+  // Registered unconditionally: squad-memory search talks to the shared API over
   // HTTP, so it needs no local SQLite store (unlike search_memory below).
   registry.register(makeSquadMemoryTool())
   // Same posture: the squad files read-tool is HTTP-only, no local store.
   registry.register(makeSquadFilesTool())
-  registry.register(makeCodexTool())
+  // Repository inspection stays on the supervised Codex chat engine. The
+  // narrower API tool cannot safely expose a host-authenticated Codex process:
+  // read-only prevents writes but does not make unrelated host secrets unreadable.
   registry.register(makeCodexHelperTool())
   if (memory) {
     registry.register(makeSearchMemoryTool(embedClient, memory))

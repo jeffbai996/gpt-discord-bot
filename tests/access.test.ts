@@ -19,6 +19,8 @@ test('access: canHandle requires user allowlist + channel enabled', async () => 
   assert.equal(a.canHandle({ channelId: 'c1', userId: 'u1', isMention: false }), false)
 
   await a.allowUser('u1')
+  assert.equal(a.isUserAllowed('u1'), true)
+  assert.equal(a.isUserAllowed('u2'), false)
   assert.equal(a.canHandle({ channelId: 'c1', userId: 'u1', isMention: false }), false, 'channel still disabled')
 
   await a.setChannel('c1', true, false)
@@ -75,6 +77,51 @@ test('access: max is a valid reasoning effort', async () => {
   assert.equal(a.channelFlags('c1').reasoning, 'max')
 })
 
+test('access: ultra is valid on a model that supports automatic delegation', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c1', true, false, { codexModel: 'gpt-6-astra' })
+  await a.setChannelFlags('c1', { reasoning: 'ultra' })
+
+  assert.equal(a.channelFlags('c1').reasoning, 'ultra')
+})
+
+test('access: Astra rejects unsupported none reasoning', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-astra', true, false, { codexModel: 'gpt-6-astra' })
+
+  await assert.rejects(
+    () => a.setChannelFlags('c-astra', { reasoning: 'none' }),
+    /none.*gpt-6-astra.*not supported/i,
+  )
+})
+
+test('access: ultra rejects models without automatic delegation', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-luna', true, false, { codexModel: 'gpt-5.6-luna' })
+
+  await assert.rejects(
+    () => a.setChannelFlags('c-luna', { reasoning: 'ultra' }),
+    /ultra.*gpt-5\.6-luna.*not supported/i,
+  )
+})
+
+test('access: model changes cannot strand an existing ultra setting', async () => {
+  const a = new AccessManager()
+  await a.load()
+  await a.setChannel('c-model-change', true, false, {
+    codexModel: 'gpt-5.6-sol',
+    reasoning: 'ultra',
+  })
+
+  await assert.rejects(
+    () => a.setChannelFlags('c-model-change', { codexModel: 'gpt-5.6-luna' }),
+    /ultra.*gpt-5\.6-luna.*not supported/i,
+  )
+})
+
 test('access: retired saved codexModel normalizes to current default', async () => {
   const a = new AccessManager()
   await a.load()
@@ -82,7 +129,7 @@ test('access: retired saved codexModel normalizes to current default', async () 
 
   const file = path.join(tmpDir, 'access.json')
   const raw = JSON.parse(await fs.readFile(file, 'utf8'))
-  raw.channels.c1.codexModel = 'retired-model'
+  raw.channels.c1.codexModel = 'gpt-5.5'
   await fs.writeFile(file, JSON.stringify(raw, null, 2))
 
   await a.load()

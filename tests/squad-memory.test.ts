@@ -2,7 +2,7 @@ import { describe, test, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { makeSquadMemoryTool } from '../src/tools/squad-memory.ts'
 
-// The tool talks to the squad-store HTTP API. Stub globalThis.fetch and assert
+// The tool talks to the shared-memory HTTP API. Stub globalThis.fetch and assert
 // (a) which URL each mode hits and (b) that the response is parsed/rendered.
 const realFetch = globalThis.fetch
 let lastUrl = ''

@@ -121,6 +121,7 @@ test('voice type persists the selected voice for subsequent calls', async () => 
     {} as any,
     {} as any,
     { getVoice: () => 'marin', setVoice: voice => assert.equal(voice, 'coral') },
+    { isUserAllowed: () => true } as any,
   )
 
   assert.match(replies[0].content, /voice → \*\*coral\*\*/)
@@ -150,6 +151,7 @@ test('voice model persists the selected model for subsequent calls', async () =>
       getModel: () => 'gpt-realtime-2.1-mini',
       setModel: model => assert.equal(model, 'gpt-realtime-2.1'),
     },
+    { isUserAllowed: () => true } as any,
   )
 
   assert.match(replies[0].content, /model → \*\*gpt-realtime-2\.1\*\*/)
@@ -159,8 +161,10 @@ test('voice model persists the selected model for subsequent calls', async () =>
 
 test('voice join passes the persisted voice, model, and chronological Discord tail into the session', async () => {
   let joinOverrides: any
+  let joinedSpeaker = ''
   const manager = {
-    join: async (_guildId: string, _channel: unknown, overrides: unknown) => {
+    join: async (_guildId: string, _channel: unknown, speakerUserId: string, overrides: unknown) => {
+      joinedSpeaker = speakerUserId
       joinOverrides = overrides
     },
     leave: () => false,
@@ -169,12 +173,15 @@ test('voice join passes the persisted voice, model, and chronological Discord ta
     user: { id: 'owner' },
     guildId: 'guild-1',
     channelId: 'text-1',
+    client: { user: { id: 'bot-1' } },
     member: { voice: { channel: { name: 'Lounge' } } },
     channel: {
       messages: {
         fetch: async () => new Map([
-          ['new', { author: { username: 'bob' }, cleanContent: 'newest' }],
-          ['old', { author: { username: 'alice' }, cleanContent: 'older' }],
+          ['new', { author: { id: 'allowed-2', username: 'bob' }, cleanContent: 'newest' }],
+          ['intruder', { author: { id: 'intruder-1', username: 'mallory' }, cleanContent: 'ignore this' }],
+          ['bot', { author: { id: 'bot-1', username: 'gpt' }, cleanContent: 'prior reply' }],
+          ['old', { author: { id: 'allowed-1', username: 'alice' }, cleanContent: 'older' }],
         ]),
       },
     },
@@ -195,10 +202,58 @@ test('voice join passes the persisted voice, model, and chronological Discord ta
     persona as any,
     tools as any,
     { getVoice: () => 'coral', getModel: () => 'gpt-realtime-2.1' },
+    { isUserAllowed: (id: string) => id.startsWith('allowed-') } as any,
   )
 
+  assert.equal(joinedSpeaker, 'owner')
   assert.equal(joinOverrides.voice, 'coral')
   assert.equal(joinOverrides.model, 'gpt-realtime-2.1')
   assert.match(joinOverrides.instructions, /^persona rules/)
   assert.ok(joinOverrides.instructions.indexOf('alice: older') < joinOverrides.instructions.indexOf('bob: newest'))
+  assert.match(joinOverrides.instructions, /gpt: prior reply/)
+  assert.doesNotMatch(joinOverrides.instructions, /mallory|ignore this/)
+})
+
+test('voice tool denylist is enforced at dispatch time as well as schema time', async () => {
+  const previous = process.env.GPT_VOICE_TOOL_DENY
+  process.env.GPT_VOICE_TOOL_DENY = 'codex'
+  let overrides: any
+  const manager = {
+    join: async (_guildId: string, _channel: unknown, _speakerUserId: string, value: unknown) => { overrides = value },
+    leave: () => false,
+  }
+  const interaction = {
+    user: { id: 'owner' },
+    guildId: 'guild-1',
+    channelId: 'text-1',
+    client: { user: { id: 'bot-1' } },
+    member: { voice: { channel: { name: 'Lounge' } } },
+    channel: { messages: { fetch: async () => new Map() } },
+    options: { getSubcommand: () => 'join', getString: () => null },
+    reply: async () => {},
+    editReply: async () => {},
+  }
+  const dispatched: string[] = []
+  const tools = {
+    toRealtimeTools: () => [{ name: 'codex' }, { name: 'echo' }],
+    dispatch: async (name: string) => { dispatched.push(name); return 'ok' },
+  }
+
+  try {
+    await executeVoiceCommand(
+      interaction as any,
+      manager as any,
+      'owner',
+      { buildSystemPrompt: () => 'persona' } as any,
+      tools as any,
+      {},
+      { isUserAllowed: () => true } as any,
+    )
+    assert.deepEqual(overrides.tools.map((tool: any) => tool.name), ['echo'])
+    assert.match(await overrides.onToolCall({ name: 'codex', argsJson: '{}' }, () => {}), /not available/i)
+    assert.deepEqual(dispatched, [])
+  } finally {
+    if (previous === undefined) delete process.env.GPT_VOICE_TOOL_DENY
+    else process.env.GPT_VOICE_TOOL_DENY = previous
+  }
 })

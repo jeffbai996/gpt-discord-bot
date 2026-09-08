@@ -3,7 +3,7 @@ import path from 'path'
 import os from 'os'
 import { DEFAULT_CODEX_MODEL, OPENAI_MODELS, type OpenAIModel } from './models.ts'
 
-export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 export type ThinkingMode = 'off' | 'on' | 'live' | 'collapse'
 export type TraceMode = 'off' | 'on' | 'live' | 'collapse'
 
@@ -49,7 +49,7 @@ export interface CanHandleInput {
 }
 
 const EMPTY: AccessFile = { version: 2, users: {}, channels: {} }
-const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+const VALID_REASONING: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 
 // Trace and thinking used to be booleans. Old saved configs may still hold one,
 // so map false->off and true->on rather than letting legacy false read as "on".
@@ -78,6 +78,30 @@ function normCodexModel(v: unknown): CodexModel {
 export const CODEX_MODELS = OPENAI_MODELS
 export type CodexModel = OpenAIModel
 
+// Snapshot of Codex's model catalog. Effort support is per model, not a single
+// house scale: Ultra additionally enables automatic task delegation.
+export const CODEX_REASONING_BY_MODEL: Record<CodexModel, readonly ReasoningEffort[]> = {
+  'gpt-6-astra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+  'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-daybreak-blue-latest': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+}
+
+export const ULTRA_CODEX_MODELS: readonly CodexModel[] = CODEX_MODELS.filter(
+  model => CODEX_REASONING_BY_MODEL[model].includes('ultra'),
+)
+
+export function assertReasoningModelCompatibility(
+  reasoning: ReasoningEffort,
+  model: CodexModel,
+): void {
+  const supported = CODEX_REASONING_BY_MODEL[model]
+  if (!supported.includes(reasoning)) {
+    throw new Error(`${reasoning} reasoning for ${model} is not supported; use one of: ${supported.join(', ')}`)
+  }
+}
+
 const DEFAULT_FLAGS = {
   reasoning: 'high' as ReasoningEffort,
   trace: 'collapse' as TraceMode,
@@ -105,6 +129,7 @@ export class AccessManager {
       const parsed = JSON.parse(raw) as Partial<AccessFile>
       const needsThinkingModeMigration = parsed.version !== 2
       const channels = parsed.channels ?? {}
+      let needsReasoningMigration = false
       if (needsThinkingModeMigration) {
         for (const channel of Object.values(channels)) {
           // In v1, "collapse" was the one-line live view. Preserve that
@@ -112,12 +137,20 @@ export class AccessManager {
           if (channel.thinking === 'collapse') channel.thinking = 'live'
         }
       }
+      for (const channel of Object.values(channels)) {
+        const model = normCodexModel(channel.codexModel)
+        const effort = channel.reasoning ?? DEFAULT_FLAGS.reasoning
+        if (!CODEX_REASONING_BY_MODEL[model].includes(effort)) {
+          channel.reasoning = DEFAULT_FLAGS.reasoning
+          needsReasoningMigration = true
+        }
+      }
       this.data = {
         version: 2,
         users: parsed.users ?? {},
         channels,
       }
-      if (needsThinkingModeMigration) await this.save()
+      if (needsThinkingModeMigration || needsReasoningMigration) await this.save()
     } catch (e: any) {
       if (e.code === 'ENOENT') {
         this.data = { ...EMPTY }
@@ -170,6 +203,10 @@ export class AccessManager {
     return true
   }
 
+  isUserAllowed(userId: string): boolean {
+    return this.data.users[userId]?.allowed === true
+  }
+
   isAllowedAndEnabled(userId: string, channelId: string, parentChannelId?: string | null): boolean {
     return this.canReact(userId, channelId, parentChannelId)
   }
@@ -194,14 +231,17 @@ export class AccessManager {
       throw new Error(`invalid reasoning effort "${flags.reasoning}" — must be one of: ${VALID_REASONING.join(', ')}`)
     }
     const existing = this.data.channels[channelId]
+    const reasoning = flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning
+    const codexModel = normCodexModel(flags?.codexModel ?? existing?.codexModel)
+    assertReasoningModelCompatibility(reasoning, codexModel)
     this.data.channels[channelId] = {
       enabled,
       requireMention,
-      reasoning: flags?.reasoning ?? existing?.reasoning ?? DEFAULT_FLAGS.reasoning,
+      reasoning,
       trace: normTri(flags?.trace ?? existing?.trace ?? DEFAULT_FLAGS.trace),
       thinking: normThinking(flags?.thinking ?? existing?.thinking ?? DEFAULT_FLAGS.thinking),
       engine: flags?.engine ?? existing?.engine ?? DEFAULT_FLAGS.engine,
-      codexModel: normCodexModel(flags?.codexModel ?? existing?.codexModel),
+      codexModel,
       counter: flags?.counter ?? existing?.counter ?? DEFAULT_FLAGS.counter,
     }
     await this.save()
@@ -228,16 +268,19 @@ export class AccessManager {
     if (patch.codexModel !== undefined && !(CODEX_MODELS as readonly string[]).includes(patch.codexModel)) {
       throw new Error(`invalid codex model "${patch.codexModel}" — must be one of: ${CODEX_MODELS.join(', ')}`)
     }
+    const reasoning = patch.reasoning ?? existing.reasoning ?? DEFAULT_FLAGS.reasoning
+    const codexModel = patch.codexModel ?? normCodexModel(existing.codexModel)
+    assertReasoningModelCompatibility(reasoning, codexModel)
     this.data.channels[channelId] = {
       ...existing,
       // Changing model/trace inside a previously deaf thread is not an access
       // grant. Only setChannel(..., enabled=true, ...) can open the thread.
       ...(parent && !exact ? { enabled: false } : {}),
-      ...(patch.reasoning !== undefined ? { reasoning: patch.reasoning } : {}),
+      ...(patch.reasoning !== undefined ? { reasoning } : {}),
       ...(patch.trace !== undefined ? { trace: patch.trace } : {}),
       ...(patch.thinking !== undefined ? { thinking: patch.thinking } : {}),
       ...(patch.engine !== undefined ? { engine: patch.engine } : {}),
-      ...(patch.codexModel !== undefined ? { codexModel: normCodexModel(patch.codexModel) } : {}),
+      ...(patch.codexModel !== undefined ? { codexModel } : {}),
       ...(patch.counter !== undefined ? { counter: patch.counter } : {}),
       ...(patch.requireMention !== undefined ? { requireMention: patch.requireMention } : {}),
     }

@@ -61,11 +61,20 @@ export interface SearchResult extends MessageRow {
   distance: number
 }
 
+export interface MemoryDiagnostics {
+  messageCount: number
+  latestMessageAt: string | null
+  summaryCount: number
+  latestSummaryAt: string | null
+  maxPendingMessages: number
+}
+
 export class MemoryStore {
   private constructor(
     private db: any,
     private statements: {
       insertMsg: any
+      findRowId: any
       insertVss: any
       search: any
       fetchSince: any
@@ -113,6 +122,7 @@ export class MemoryStore {
         INSERT OR IGNORE INTO messages (id, channel_id, author_id, author_name, content, timestamp)
         VALUES (?, ?, ?, ?, ?, ?)
       `),
+      findRowId: db.prepare(`SELECT rowid FROM messages WHERE id = ?`),
       insertVss: db.prepare(`
         INSERT OR IGNORE INTO vss_messages (rowid, embedding) VALUES (?, ?)
       `),
@@ -146,20 +156,31 @@ export class MemoryStore {
     })
   }
 
-  insertMessage(row: MessageRow, embedding: number[]): void {
+  insertMessageText(row: MessageRow): void {
+    this.statements.insertMsg.run(
+      row.id, row.channel_id, row.author_id, row.author_name, row.content, row.timestamp
+    )
+  }
+
+  insertMessageEmbedding(messageId: string, embedding: number[]): void {
     if (embedding.length !== EMBEDDING_DIM) {
       throw new Error(`embedding dim ${embedding.length} ≠ expected ${EMBEDDING_DIM}`)
     }
     const embJson = JSON.stringify(embedding)
     const tx = this.db.transaction(() => {
-      const info = this.statements.insertMsg.run(
-        row.id, row.channel_id, row.author_id, row.author_name, row.content, row.timestamp
-      )
-      if (info.changes > 0) {
-        this.statements.insertVss.run(info.lastInsertRowid, embJson)
-      }
+      const row = this.statements.findRowId.get(messageId) as { rowid: number } | undefined
+      if (!row) throw new Error(`message ${messageId} must be stored before embedding`)
+      this.statements.insertVss.run(row.rowid, embJson)
     })
     tx()
+  }
+
+  insertMessage(row: MessageRow, embedding: number[]): void {
+    if (embedding.length !== EMBEDDING_DIM) {
+      throw new Error(`embedding dim ${embedding.length} ≠ expected ${EMBEDDING_DIM}`)
+    }
+    this.insertMessageText(row)
+    this.insertMessageEmbedding(row.id, embedding)
   }
 
   searchMessages(channelId: string, queryEmbedding: number[], limit: number = 10): SearchResult[] {
@@ -177,6 +198,33 @@ export class MemoryStore {
 
   getSummary(channelId: string): SummaryRow | null {
     return (this.statements.getSummary.get(channelId) as SummaryRow | undefined) ?? null
+  }
+
+  diagnostics(): MemoryDiagnostics {
+    const messages = this.db.prepare(`
+      SELECT COUNT(*) AS count, MAX(timestamp) AS latest FROM messages
+    `).get() as { count: number; latest: string | null }
+    const summaries = this.db.prepare(`
+      SELECT COUNT(*) AS count, MAX(updated_at) AS latest FROM conversation_summaries
+    `).get() as { count: number; latest: string | null }
+    const pending = this.db.prepare(`
+      SELECT COALESCE(MAX(pending_count), 0) AS max_pending
+      FROM (
+        SELECT COUNT(*) AS pending_count
+        FROM messages m
+        LEFT JOIN conversation_summaries s ON s.channel_id = m.channel_id
+        WHERE s.last_summarized_message_id IS NULL
+          OR CAST(m.id AS INTEGER) > CAST(s.last_summarized_message_id AS INTEGER)
+        GROUP BY m.channel_id
+      )
+    `).get() as { max_pending: number }
+    return {
+      messageCount: messages.count,
+      latestMessageAt: messages.latest,
+      summaryCount: summaries.count,
+      latestSummaryAt: summaries.latest,
+      maxPendingMessages: pending.max_pending,
+    }
   }
 
   close(): void {

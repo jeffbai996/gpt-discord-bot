@@ -1,3 +1,5 @@
+import { BlockList } from 'node:net'
+
 // jsdom is loaded lazily inside extractContent so the rest of this module
 // (URL validation, IP guards, mime-routing) is usable on Node versions that
 // don't satisfy jsdom's modern-ArrayBuffer requirements. The bot's runtime
@@ -16,6 +18,15 @@ type ReadabilityCtor = new (doc: any) => {
 
 let _jsdomCache: { JSDOM: JSDOMCtor; Readability: ReadabilityCtor } | null = null
 let _jsdomFailed = false
+
+const PRIVATE_IPV4_BLOCKS = new BlockList()
+PRIVATE_IPV4_BLOCKS.addSubnet('0.0.0.0', 8, 'ipv4')
+PRIVATE_IPV4_BLOCKS.addSubnet('10.0.0.0', 8, 'ipv4')
+PRIVATE_IPV4_BLOCKS.addSubnet('100.64.0.0', 10, 'ipv4')
+PRIVATE_IPV4_BLOCKS.addSubnet('127.0.0.0', 8, 'ipv4')
+PRIVATE_IPV4_BLOCKS.addSubnet('169.254.0.0', 16, 'ipv4')
+PRIVATE_IPV4_BLOCKS.addSubnet('172.16.0.0', 12, 'ipv4')
+PRIVATE_IPV4_BLOCKS.addSubnet('192.168.0.0', 16, 'ipv4')
 
 async function ensureJsdom(): Promise<{ JSDOM: JSDOMCtor; Readability: ReadabilityCtor } | null> {
   if (_jsdomCache) return _jsdomCache
@@ -52,6 +63,7 @@ export function isPrivateIp(ip: string): boolean {
 
   if (ip.includes(':')) {
     const lower = ip.toLowerCase()
+    if (PRIVATE_IPV4_BLOCKS.check(lower, 'ipv6')) return true
     if (lower === '::1' || lower === '::') return true
     if (/^fc[0-9a-f]{2}:/.test(lower) || /^fd[0-9a-f]{2}:/.test(lower)) return true
     if (/^fe[89ab][0-9a-f]:/.test(lower)) return true

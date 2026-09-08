@@ -3,7 +3,11 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 
 import { CodexAppServerClient } from '../src/codex-app-server.ts'
-import { normalizeAppServerNotification, parseCodexEvents } from '../src/codex-chat.ts'
+import {
+  compactionLifecycleEvent,
+  normalizeAppServerNotification,
+  parseCodexEvents,
+} from '../src/codex-chat.ts'
 
 test('sends guarded turn steering and resolves the matching response', async () => {
   const toServer = new PassThrough()
@@ -63,6 +67,35 @@ test('preserves final-answer phase and per-turn token usage from app-server even
     output_tokens: 3,
     reasoning_output_tokens: 2,
   })
+})
+
+test('preserves native context-compaction boundaries for the Discord live UI', () => {
+  const started = normalizeAppServerNotification({
+    method: 'item/started',
+    params: { item: { type: 'contextCompaction', id: 'compact-1' } },
+  })
+  const completed = normalizeAppServerNotification({
+    method: 'item/completed',
+    params: { item: { type: 'contextCompaction', id: 'compact-1' } },
+  })
+  const legacyCompleted = normalizeAppServerNotification({
+    method: 'thread/compacted',
+    params: { threadId: 'thread-1', turnId: 'turn-1' },
+  })
+
+  assert.deepEqual(started, {
+    type: 'item.started',
+    item: { type: 'context_compaction', id: 'compact-1' },
+  })
+  assert.deepEqual(completed, {
+    type: 'item.completed',
+    item: { type: 'context_compaction', id: 'compact-1' },
+  })
+  assert.deepEqual(legacyCompleted, { type: 'thread.compacted' })
+  assert.deepEqual(compactionLifecycleEvent(started), { type: 'compaction', active: true })
+  assert.deepEqual(compactionLifecycleEvent(completed), { type: 'compaction', active: false })
+  assert.deepEqual(compactionLifecycleEvent(legacyCompleted), { type: 'compaction', active: false })
+  assert.equal(compactionLifecycleEvent({ type: 'turn.started' }), null)
 })
 
 test('aggregates every app-server roundtrip into completed-turn usage', () => {

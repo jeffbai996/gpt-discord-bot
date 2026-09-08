@@ -5,6 +5,7 @@ import type { ActionContext } from './actions.ts'
 
 export interface HandlerDeps {
   client: Client
+  retryFailure?: (message: Message, reactor: User) => Promise<boolean>
   buildContext: (message: Message, reactor: User) => ActionContext
   access: { canReact: (userId: string, channelId: string, parentChannelId?: string | null) => boolean }
 }
@@ -39,6 +40,7 @@ export async function handleReaction(
   const ctx = deps.buildContext(message as Message, user as User)
 
   try {
+    if (action === 'regenerate' && await deps.retryFailure?.(message as Message, user as User)) return
     switch (action) {
       case 'regenerate': await actions.regenerate(ctx); break
       case 'expand': await actions.expand(ctx); break

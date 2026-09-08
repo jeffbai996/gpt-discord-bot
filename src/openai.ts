@@ -7,10 +7,14 @@ export interface ParsedResponse {
   reply: string          // text to post (may be empty if react-only)
 }
 
-export function maxToolLoops(raw = process.env.GPT_MAX_TOOL_LOOPS): number {
-  if (raw === undefined || raw.trim() === '') return 256
+export function maxToolLoops(raw?: string): number {
+  const defaultLoops = 16
+  const hardMaxLoops = 32
+  if (raw === undefined || raw.trim() === '') return defaultLoops
   const parsed = Number(raw)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 256
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? Math.min(parsed, hardMaxLoops)
+    : defaultLoops
 }
 
 // A single dispatched tool call, captured for the post-hoc trace card.
@@ -32,6 +36,7 @@ export type LifecycleEvent =
   | { type: 'progress', reply: string }  // Codex commentary during a long turn
   | { type: 'reasoning_progress', text: string } // explicit Codex reasoning summary (never hidden CoT)
   | { type: 'heartbeat', elapsedMs: number, idleMs: number } // supervisor pulse even when model is silent
+  | { type: 'compaction', active: boolean } // native Codex or gpt session rollover boundary
   | { type: 'agents', agents: CodexAgentSnapshot[] } // live Codex subagent workflow state
   | { type: 'status', label: string }  // live activity status (codex tool events)
   | { type: 'tool_start', name: string, args?: string }
@@ -303,10 +308,9 @@ export class OpenAIClient {
     // runs onto the end of the prior line ("…web search!**Discussing details**").
     let lastSummaryIndex = -1
     const toolCalls: ToolCall[] = []
-    // Tool-loop cap. Repo work regularly needs more than eight round-trips
-    // once inspection, edits, tests, and deployment are all involved. Keep a
-    // finite fuse, but leave enough room for a normal implementation turn.
-    const MAX_LOOPS = maxToolLoops()
+    // API turns are an explicitly bounded fallback path. Long repository work
+    // belongs on the supervised Codex engine, not an open-ended API tool loop.
+    const MAX_LOOPS = maxToolLoops(process.env.GPT_MAX_TOOL_LOOPS)
 
     try {
       for (let iter = 0; iter < MAX_LOOPS; iter++) {
