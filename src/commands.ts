@@ -8,6 +8,7 @@ import { globalSnapshot } from './cache-stats.ts'
 import { readLatestRateLimits, readSessionStats, type RateLimits, type RateWindow } from './codex-chat.ts'
 import { INTERRUPTED_MARKER } from './interruption-label.ts'
 import { DEFAULT_CODEX_MODEL, DEFAULT_OPENAI_MODEL } from './models.ts'
+import { generateImage } from './image-generation.ts'
 import {
   appendRuntimeChecks,
   type DoctorCheck,
@@ -162,6 +163,25 @@ export const gptCommand = new SlashCommandBuilder()
   .setName('gpt')
   .setDescription('Admin controls for the gpt bot')
   .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+  .addSubcommand(s => s
+    .setName('image')
+    .setDescription('Generate an image (billed to the OpenAI API)')
+    .addStringOption(o => o.setName('prompt').setDescription('Describe the image').setRequired(true).setMaxLength(4000))
+    .addStringOption(o => o.setName('model').setDescription('Default: GPT Image 2').addChoices(
+      { name: 'GPT Image 2', value: 'gpt-image-2' },
+      { name: 'GPT Image 1.5', value: 'gpt-image-1.5' },
+      { name: 'GPT Image 1 Mini (budget)', value: 'gpt-image-1-mini' },
+    ))
+    .addStringOption(o => o.setName('size').setDescription('Default: square').addChoices(
+      { name: 'Square', value: '1024x1024' },
+      { name: 'Landscape', value: '1536x1024' },
+      { name: 'Portrait', value: '1024x1536' },
+      { name: 'Automatic', value: 'auto' },
+    ))
+    .addStringOption(o => o.setName('quality').setDescription('Default: medium').addChoices(
+      { name: 'Low', value: 'low' }, { name: 'Medium', value: 'medium' }, { name: 'High', value: 'high' },
+    ))
+  )
   .addSubcommand(s => s
     .setName('allow')
     .setDescription('Allow a user to interact with the bot')
@@ -361,6 +381,22 @@ export async function executeGptCommand(
   const subcommand = interaction.options.getSubcommand()
 
   try {
+    if (subcommand === 'image') {
+      await interaction.deferReply()
+      try {
+        const model = interaction.options.getString('model') ?? 'gpt-image-2'
+        const image = await generateImage(process.env.OPENAI_API_KEY ?? '', {
+          prompt: interaction.options.getString('prompt', true), model,
+          size: interaction.options.getString('size') ?? undefined,
+          quality: interaction.options.getString('quality') ?? undefined,
+        })
+        return await interaction.editReply({ content: `🎨 ${model}`, files: [image], allowedMentions: { parse: [] } })
+      } catch (error) {
+        const message = error instanceof Error && /^(Image API|Generated image|OPENAI_API_KEY|Unsupported|Prompt must)/.test(error.message)
+          ? error.message : 'Image generation or upload failed. Try again; a timed-out request may still be billed.'
+        return await interaction.editReply({ content: `❌ ${message}` })
+      }
+    }
     if (subcommand === 'allow') {
       const targetUser = interaction.options.getUser('user', true)
       await access.allowUser(targetUser.id)
