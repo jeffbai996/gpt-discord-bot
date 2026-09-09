@@ -3,6 +3,8 @@ export interface ImageOptions {
   model?: string
   size?: string
   quality?: string
+  images?: Array<{ data: Uint8Array, mimeType: string }>
+  signal?: AbortSignal
 }
 
 /** Direct Images API: no automatic retries of potentially billable generation. */
@@ -15,11 +17,20 @@ export async function generateImage(apiKey: string, options: ImageOptions, reque
   if (!['1024x1024', '1536x1024', '1024x1536', 'auto'].includes(size)) throw new Error('Unsupported image size.')
   if (!['low', 'medium', 'high', 'auto'].includes(quality)) throw new Error('Unsupported image quality.')
   if (!options.prompt.trim() || options.prompt.length > 4000) throw new Error('Prompt must be 1–4000 characters.')
-  const response = await request('https://api.openai.com/v1/images/generations', {
+  const fields = { model, prompt: options.prompt, size, quality, n: 1, output_format: 'png' }
+  const images = options.images ?? []
+  if (images.length > 4 || images.some(image => image.data.length > 10 * 1024 * 1024
+    || !['image/png', 'image/jpeg', 'image/webp'].includes(image.mimeType))) throw new Error('Unsupported reference image.')
+  const form = new FormData()
+  if (images.length) {
+    for (const [key, value] of Object.entries(fields)) form.set(key, String(value))
+    for (const [i, image] of images.entries()) form.append('image[]', new Blob([new Uint8Array(image.data)], { type: image.mimeType }), `reference-${i}.${image.mimeType.split('/')[1]}`)
+  }
+  const response = await request(`https://api.openai.com/v1/images/${images.length ? 'edits' : 'generations'}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, prompt: options.prompt, size, quality, n: 1, output_format: 'png' }),
-    signal: AbortSignal.timeout(300_000),
+    headers: { Authorization: `Bearer ${apiKey}`, ...(!images.length ? { 'Content-Type': 'application/json' } : {}) },
+    body: images.length ? form : JSON.stringify(fields),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(300_000)]) : AbortSignal.timeout(300_000),
   })
   if (!response.ok) {
     const hint = response.status === 403 ? 'Check model access and organization verification.'

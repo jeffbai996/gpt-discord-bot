@@ -2,6 +2,27 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateImage } from '../src/image-generation.ts'
 import { executeGptCommand, gptCommand } from '../src/commands.ts'
+import { parseStructuredReply } from '../src/openai.ts'
+import { parseImageRequest } from '../src/image-conversation.ts'
+
+test('conversation parser preserves image actions through API envelopes', () => {
+  const action = JSON.stringify({ image_request: { prompt: 'A blue cube', use_reference: true } })
+  assert.equal(parseImageRequest(parseStructuredReply(action).reply)?.useReference, true)
+  assert.equal(parseImageRequest(parseStructuredReply(JSON.stringify({ reply: action })).reply)?.prompt, 'A blue cube')
+})
+
+test('reference image uses edits multipart and preserves cancellation', async () => {
+  const controller = new AbortController()
+  await generateImage('key', { prompt: 'Give the cat a crown', images: [{ data: Buffer.from('source'), mimeType: 'image/png' }], signal: controller.signal }, async (url, init) => {
+    assert.match(String(url), /\/images\/edits$/)
+    assert.ok(init?.body instanceof FormData)
+    assert.equal(init.body.get('prompt'), 'Give the cat a crown')
+    assert.equal(await (init.body.get('image[]') as Blob).text(), 'source')
+    controller.abort()
+    assert.equal(init.signal?.aborted, true)
+    return Response.json({ data: [{ b64_json: 'aW1hZ2U=' }] })
+  })
+})
 
 test('image slash schema is valid and the handler defers then attaches', async () => {
   assert.ok(gptCommand.toJSON().options?.some(x => x.name === 'image'))

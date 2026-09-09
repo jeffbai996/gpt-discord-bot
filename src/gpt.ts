@@ -1,4 +1,6 @@
 import { PresenceOwner } from './presence-owner.ts'
+import { imageConversationInstruction, parseImageRequest, selectImageReference } from './image-conversation.ts'
+import { generateImage } from './image-generation.ts'
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, Client, GatewayIntentBits, Partials, ActivityType, REST, Routes, type Message, type TextChannel, type DMChannel, type ThreadChannel } from 'discord.js'
 import path from 'path'
 import os from 'os'
@@ -823,7 +825,7 @@ async function handleUserMessage(
   // matches gemma's API model. The per-channel `model` override was removed
   // 2026-06-29 (it had no slash setter — orphaned). /gpt model sets codexModel.
   const model = DEFAULT_MODEL
-  const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId)
+  const systemPrompt = persona.buildSystemPrompt(channelId, message.guildId) + imageConversationInstruction
   const selfId = client.user?.id ?? ''
   const stopController = new AbortController()
   const steeringInbox = flags.engine !== 'api' && process.env.GPT_CODEX_CHAT !== '0'
@@ -904,8 +906,11 @@ async function handleUserMessage(
   const repliedAttachments = uploadedAttachments.length === 0
     ? replyContext?.attachments ?? pinContext?.message?.attachments ?? threadContext?.source?.attachments ?? []
     : []
+  const conversationReference = selectImageReference([...rawHistory].reverse().map(m => ({
+    ...m, attachments: m.attachments.map(a => ({ ...a, contentType: a.mimeType })),
+  })), userId, selfId, userText)
   const carriedImages = uploadedAttachments.length === 0 && repliedAttachments.length === 0
-    ? selectPriorImages(rawHistory, userId, message.reference?.messageId, userText)
+    ? conversationReference ? [conversationReference] : selectPriorImages(rawHistory, userId, message.reference?.messageId, userText)
     : []
   const attachments = uploadedAttachments.length > 0
     ? uploadedAttachments
@@ -1750,6 +1755,27 @@ async function handleUserMessage(
     } else {
       throwIfStopped()
       result = await apiRespond()
+    }
+
+    // Let the conversation model resolve references before the image-only backend runs.
+    const imageRequest = codexFailureLifecycle ? null : parseImageRequest(result.reply)
+    if (imageRequest) {
+      throwIfStopped()
+      if (workMessage) await workMessage.edit('🎨 **Generating image…**').catch(() => {})
+      const references = imageRequest.useReference ? imageParts.flatMap(part => {
+        const url = part.type === 'image_url' ? part.image_url.url : ''
+        const match = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/.exec(url)
+        return match ? [{ data: Buffer.from(match[2], 'base64'), mimeType: match[1] }] : []
+      }) : []
+      if (imageRequest.useReference && !references.length) throw new Error('Reference image unavailable. Reply to the image or attach it again.')
+      const image = await generateImage(OPENAI_KEY, { prompt: imageRequest.prompt, images: references, signal: stopController.signal })
+      throwIfStopped()
+      const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'gpt-conversation-image-'))
+      const file = path.join(dir, image.name)
+      await fs.promises.writeFile(file, image.attachment, { mode: 0o600 })
+      result.files = [...(result.files ?? []), file]
+      result.temporaryFiles = [...(result.temporaryFiles ?? []), file]
+      result.reply = '🎨 Image attached.'
     }
 
     // Result is in hand — stop all "still working" indicators before rendering.

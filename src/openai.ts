@@ -674,6 +674,7 @@ export function parseStructuredReply(raw: string): ParsedResponse {
     const candidate = text.slice(firstBrace, lastBrace + 1)
     try {
       const obj = JSON.parse(candidate) as Partial<ParsedResponse>
+      if (Object.hasOwn(obj, 'image_request')) return { react: null, reply: candidate }
       const react = typeof obj.react === 'string' && obj.react.trim() ? obj.react.trim() : null
       const reply = typeof obj.reply === 'string' ? obj.reply : ''
       return { react, reply }
