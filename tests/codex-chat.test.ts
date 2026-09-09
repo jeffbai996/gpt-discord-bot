@@ -1,9 +1,22 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { formatUnifiedDiffTrace, renderTraceCards } from '../src/tool-trace.ts'
 import { buildCodexArgs, codexTimeoutMs, codexWatchdogPolicy, commentaryProgress, isInFlightStatusPing, isIntentionalCodexSilence, isMeaningfulCodexActivity, liveEvent, mapEffort, reasoningProgress, toolCallsFromCompletedItem } from '../src/codex-chat.ts'
 
 test('codex effort: max passes through to the CLI', () => {
   assert.equal(mapEffort('max'), 'max')
+})
+
+test('completed edit payload keeps its diff for the live numbered preview', () => {
+  const diff = '@@ -2,2 +2,2 @@\n context\n-old\n+new'
+  const [call] = toolCallsFromCompletedItem({ type: 'file_change', changes: [{ path: 'example.ts', kind: 'update', diff }] })
+  assert.equal(call.diff, diff)
+  const formatted = formatUnifiedDiffTrace(call.diff!)
+  const card = renderTraceCards(['+ ● Edit(example.ts)', ' ⎿ ' + formatted.badge, ...formatted.body], 'live')[0]
+  assert.match(card, /\[\+1, -1\]/)
+  assert.match(card, /-  3 old/)
+  assert.match(card, /\+  3 new/)
+  assert.doesNotMatch(card, /@@/)
 })
 
 test('codex effort: ultra passes through to app-server unchanged', () => {

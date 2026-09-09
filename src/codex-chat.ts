@@ -275,6 +275,8 @@ export function toolCallsFromCompletedItem(it: any): ToolCall[] {
         name: 'edit',
         args: { file_path: String(ch.path ?? '') },
         durationMs: 0,
+        ...(typeof ch.diff === 'string' && ch.diff ? { diff: ch.diff }
+          : typeof ch.unified_diff === 'string' && ch.unified_diff ? { diff: ch.unified_diff } : {}),
         resultPreview: String(ch.kind ?? 'update'),
         failed: false,
       }))

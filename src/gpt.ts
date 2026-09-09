@@ -280,7 +280,8 @@ function buildTraceLines(toolCalls: ToolCall[]): string[] {
     const prefix = call.failed ? '- ● ' : '+ ● '
     const tail = call.failed ? ' FAILED' : ''
     const ms = call.durationMs > 0 ? ` [${call.durationMs}ms]` : ''
-    const nm = shortToolName(call.name)
+    const rawName = shortToolName(call.name)
+    const nm = rawName === 'shell' ? 'Bash' : rawName === 'edit' ? 'Edit' : rawName
     // Keep the whole row within ROW_W so it never wraps in Discord's code block.
     const overhead = prefix.length + nm.length + 2 + tail.length + ms.length
     const dig = argDigest(call.args, Math.max(20, ROW_W - overhead))
